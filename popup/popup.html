@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <title>MangoAuto</title>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>MangoAuto</h1>
+      <span id="authBadge" class="badge badge-off">Not Connected</span>
+    </div>
+
+    <!-- Unsupported Page Notice -->
+    <div id="unsupportedNotice" class="unsupported-notice hidden">
+      <div class="unsupported-icon">&#9888;</div>
+      <div class="unsupported-title">지원하는 페이지가 아닙니다</div>
+      <div class="unsupported-desc">아래 페이지 중 하나로 이동하세요:</div>
+      <div class="unsupported-links">
+        <a href="#" class="unsupported-link" data-url="https://grok.com/">Grok Imagine</a>
+        <a href="#" class="unsupported-link" data-url="https://labs.google/fx/tools/flow">Google Flow</a>
+        <a href="#" class="unsupported-link" data-url="https://labs.google/fx/tools/image-fx">Google Whisk</a>
+      </div>
+    </div>
+
+    <!-- Main Content (hidden when unsupported) -->
+    <div id="mainContent">
+
+    <!-- Platform Tabs -->
+    <div class="platform-tabs">
+      <button class="ptab active" data-platform="grok">Grok</button>
+      <button class="ptab" data-platform="veo">Veo3</button>
+      <button class="ptab" data-platform="flow">Flow</button>
+      <button class="ptab" data-platform="whisk">Whisk</button>
+    </div>
+
+    <!-- Main Tabs -->
+    <div class="main-tabs">
+      <button class="mtab active" data-tab="workspace">작업공간</button>
+      <button class="mtab" data-tab="settings">설정</button>
+    </div>
+
+    <!-- ═══════ WORKSPACE TAB ═══════ -->
+    <div id="workspacePanel" class="tab-panel">
+
+      <!-- Source Toggle -->
+      <div class="source-tabs">
+        <button class="stab active" data-source="mangohub">MangoHub</button>
+        <button class="stab" data-source="standalone">Standalone</button>
+      </div>
+
+      <!-- Mode Buttons -->
+      <div class="mode-grid">
+        <button class="mode-btn active" data-mode="text-image">
+          <span class="mode-icon">T→🖼</span>
+          <span>텍스트→이미지</span>
+        </button>
+        <button class="mode-btn" data-mode="text-video">
+          <span class="mode-icon">T→🎬</span>
+          <span>텍스트→영상</span>
+        </button>
+        <button class="mode-btn" data-mode="image-video">
+          <span class="mode-icon">🖼→🎬</span>
+          <span>프레임→영상</span>
+        </button>
+        <button class="mode-btn" data-mode="image-image">
+          <span class="mode-icon">🖼→🖼</span>
+          <span>이미지→이미지</span>
+        </button>
+      </div>
+
+      <!-- MangoHub Section -->
+      <div id="mangohubSection" class="section">
+        <div class="row gap-4">
+          <select id="projectSelect" class="select flex-1">
+            <option value="">프로젝트 선택...</option>
+          </select>
+          <button id="loadProjectBtn" class="btn btn-sm">불러오기</button>
+        </div>
+        <div id="projectInfo" class="project-info hidden">
+          <div class="info-row">
+            <span id="projectName" class="info-label"></span>
+            <span id="segmentCount" class="info-value"></span>
+          </div>
+          <div class="info-row">
+            <label class="check-label">
+              <input type="checkbox" id="useExistingImages" checked>
+              기존 이미지 활용 (영상 변환 시)
+            </label>
+          </div>
+          <div class="info-row">
+            <label class="check-label">
+              <input type="checkbox" id="skipCompleted" checked>
+              이미 생성된 항목 건너뛰기
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Standalone Section -->
+      <div id="standaloneSection" class="section hidden">
+        <!-- Image upload (image-to-video, image-to-image) -->
+        <div id="imageUploadSection" class="hidden">
+          <label class="label">이미지 첨부 (여러장 선택 가능)</label>
+          <div class="upload-area" id="uploadArea">
+            <input type="file" id="imagesInput" multiple accept="image/*" class="file-input">
+            <div class="upload-placeholder">
+              <span>클릭하여 이미지 선택 또는 드래그&드롭</span>
+            </div>
+          </div>
+          <div id="imagePreviewList" class="image-preview-list"></div>
+        </div>
+
+        <div class="row gap-4" style="margin-bottom:3px">
+          <label class="label" style="margin:0;flex:1">프롬프트 입력 (빈줄로 구분)</label>
+          <button id="resetBtn" class="btn btn-sm" title="프롬프트 및 이미지 초기화">리셋</button>
+          <label class="btn btn-sm import-btn" title="TXT 파일에서 가져오기">
+            가져오기
+            <input type="file" id="promptFileInput" accept=".txt,.csv" style="display:none">
+          </label>
+        </div>
+        <textarea id="promptsInput" class="textarea" rows="5" placeholder="프롬프트를 입력하세요...&#10;&#10;예시:&#10;첫 번째 긴 프롬프트.&#10;여러 줄에 걸쳐 작성 가능합니다.&#10;&#10;두 번째 프롬프트는 빈 줄 뒤에 시작됩니다.&#10;&#10;세 번째 프롬프트."></textarea>
+      </div>
+
+      <!-- Concurrent & Delay -->
+      <div class="section">
+        <div class="row gap-4">
+          <div class="flex-1">
+            <label class="label">동시 프롬프트</label>
+            <select id="concurrentCount" class="select">
+              <option value="1" selected>1개 (순차, 권장)</option>
+              <option value="2">2개 동시</option>
+              <option value="3">3개 동시</option>
+            </select>
+          </div>
+          <div class="flex-1">
+            <label class="label">전송 간격 (초)</label>
+            <input type="number" id="promptDelay" class="input" value="70" min="3" max="300">
+          </div>
+        </div>
+        <div class="setting-hint">순차: 영상 완료 자동감지 → 다운로드 → 대기(설정) → 다음 진행<br>전송 간격은 동시 처리 시에만 적용</div>
+      </div>
+
+      <!-- Queue List -->
+      <div id="queueSection" class="section">
+        <div class="queue-header">
+          <span class="label" style="margin:0">대기열</span>
+          <span id="queueCount" class="queue-count">0개</span>
+        </div>
+        <div id="queueList" class="queue-list"></div>
+      </div>
+
+      <!-- Progress -->
+      <div id="progressSection" class="section hidden">
+        <div class="progress-header">
+          <span id="progressLabel">0 / 0</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <div id="currentStatus" class="current-status"></div>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls">
+        <button id="startBtn" class="btn btn-primary flex-1">시작</button>
+        <button id="pauseBtn" class="btn btn-warn flex-1 hidden">일시정지</button>
+        <button id="resumeBtn" class="btn btn-primary flex-1 hidden">재개</button>
+        <button id="stopBtn" class="btn btn-danger hidden">중지</button>
+        <button id="retryFailedBtn" class="btn btn-warn hidden">실패만 재시도</button>
+        <button id="downloadAllBtn" class="btn btn-accent hidden">전체 다운로드</button>
+      </div>
+
+      <!-- Log -->
+      <div id="logSection" class="section hidden">
+        <div class="label">로그</div>
+        <div id="logContainer" class="log-container"></div>
+      </div>
+    </div>
+
+    <!-- ═══════ SETTINGS TAB ═══════ -->
+    <div id="settingsPanel" class="tab-panel hidden">
+
+      <!-- Grok Settings -->
+      <div class="settings-group">
+        <h3 class="settings-title">Grok 설정</h3>
+        <div class="setting-row">
+          <label>비디오 재생시간</label>
+          <select id="grokVideoDuration" class="select-sm">
+            <option value="5">5초</option>
+            <option value="10" selected>10초</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>비디오 해상도</label>
+          <select id="grokVideoResolution" class="select-sm">
+            <option value="720p" selected>720p</option>
+            <option value="1080p">1080p</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>종횡비</label>
+          <select id="grokAspectRatio" class="select-sm">
+            <option value="16:9" selected>가로 (16:9)</option>
+            <option value="9:16">세로 (9:16)</option>
+            <option value="1:1">정사각 (1:1)</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>생성 대기 타임아웃 (분)</label>
+          <input type="number" id="grokTimeout" class="input-sm" value="5" min="1" max="30">
+        </div>
+      </div>
+
+      <!-- Veo3/Flow Settings -->
+      <div class="settings-group">
+        <h3 class="settings-title veo-title">Veo3 / Flow 비디오 설정</h3>
+        <div class="setting-row">
+          <label>비디오 모델</label>
+          <select id="veoModel" class="select-sm">
+            <option value="veo-3">Veo 3</option>
+            <option value="veo-3.1-fast" selected>Veo 3.1 - Fast</option>
+            <option value="veo-3.1-quality">Veo 3.1 - Quality</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>비디오 화면비</label>
+          <select id="veoAspectRatio" class="select-sm">
+            <option value="16:9" selected>가로 (16:9)</option>
+            <option value="9:16">세로 (9:16)</option>
+            <option value="1:1">정사각 (1:1)</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>기본 비디오 프레임</label>
+          <select id="veoFrameDuration" class="select-sm">
+            <option value="8" selected>8초</option>
+            <option value="connect">연결</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>프롬프트당 출력 개수</label>
+          <select id="veoOutputCount" class="select-sm">
+            <option value="1" selected>1개</option>
+            <option value="2">2개</option>
+            <option value="4">4개</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Image Settings -->
+      <div class="settings-group">
+        <h3 class="settings-title img-title">이미지 설정</h3>
+        <div class="setting-row">
+          <label>이미지 모델</label>
+          <select id="imageModel" class="select-sm">
+            <option value="aurora" selected>Aurora</option>
+            <option value="grok-2">Grok 2</option>
+            <option value="nano-banana-pro">Nano Banana Pro</option>
+            <option value="imagen-3">Imagen 3</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>이미지 화면비</label>
+          <select id="imageAspectRatio" class="select-sm">
+            <option value="16:9" selected>가로 (16:9)</option>
+            <option value="9:16">세로 (9:16)</option>
+            <option value="1:1">정사각 (1:1)</option>
+            <option value="4:3">가로 (4:3)</option>
+            <option value="3:4">세로 (3:4)</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>프롬프트당 출력 개수</label>
+          <select id="imageOutputCount" class="select-sm">
+            <option value="1" selected>1장</option>
+            <option value="2">2장</option>
+            <option value="4">4장</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Download Settings -->
+      <div class="settings-group">
+        <h3 class="settings-title dl-title">다운로드 설정</h3>
+        <div class="setting-row">
+          <label>비디오 다운로드 품질</label>
+          <select id="downloadVideoQuality" class="select-sm">
+            <option value="720p" selected>720p</option>
+            <option value="1080p">1080p</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>이미지 다운로드 품질</label>
+          <select id="downloadImageQuality" class="select-sm">
+            <option value="1k" selected>1k</option>
+            <option value="2k">2k</option>
+            <option value="4k">4k</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>파일명 패턴</label>
+          <select id="downloadNaming" class="select-sm">
+            <option value="idx_model_date" selected>001_모델_날짜</option>
+            <option value="idx_date_model">001_날짜_모델</option>
+            <option value="idx_prompt_date">001_프롬프트_날짜</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>다운로드 간격 (초)</label>
+          <input type="number" id="downloadDelay" class="input-sm" value="30" min="1" max="600">
+        </div>
+        <div class="setting-hint">생성 완료 후 다운로드 사이 대기 시간 (순번 보장, 권장 30~300초)</div>
+        <div class="setting-row">
+          <label class="check-label">
+            <input type="checkbox" id="downloadPerProject" checked>
+            프로젝트별 폴더에 저장
+          </label>
+        </div>
+      </div>
+
+      <!-- General Settings -->
+      <div class="settings-group">
+        <h3 class="settings-title gen-title">일반 설정</h3>
+        <div class="setting-row">
+          <label>작업 간 대기 (초)</label>
+          <div class="range-inputs">
+            <input type="number" id="cooldownMin" class="input-sm" value="10" min="1" max="300">
+            <span>~</span>
+            <input type="number" id="cooldownMax" class="input-sm" value="15" min="1" max="300">
+          </div>
+        </div>
+        <div class="setting-hint">완료 후 다음 작업 시작까지 랜덤 대기</div>
+        <div class="setting-row">
+          <label class="check-label">
+            <input type="checkbox" id="retryOnFailure" checked>
+            실패 시 재시도
+          </label>
+        </div>
+        <div class="setting-row">
+          <label>최대 재시도 횟수</label>
+          <input type="number" id="maxRetries" class="input-sm" value="3" min="1" max="20">
+        </div>
+        <div class="setting-row">
+          <label>기본 모드</label>
+          <select id="defaultMode" class="select-sm">
+            <option value="text-image" selected>텍스트→이미지</option>
+            <option value="text-video">텍스트→영상</option>
+            <option value="image-video">프레임→영상</option>
+            <option value="image-image">이미지→이미지</option>
+          </select>
+        </div>
+      </div>
+
+      <button id="saveSettingsBtn" class="btn btn-primary" style="width:100%;margin-top:8px;">설정 저장</button>
+    </div>
+
+    </div><!-- /mainContent -->
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

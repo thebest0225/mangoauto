@@ -1,0 +1,859 @@
+/**
+ * MangoAuto - Popup Controller (Full Redesign)
+ */
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+let currentSource = 'mangohub';
+let currentPlatform = 'grok';
+let currentMode = 'text-image';  // text-image | text-video | image-video | image-image
+let currentProject = null;
+let uploadedImages = [];  // { file, dataUrl, name }
+let lastState = null;
+
+// ─── Supported URL patterns ───
+const SUPPORTED_PATTERNS = [
+  { pattern: /^https:\/\/grok\.com/,                   platform: 'grok' },
+  { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/video-fx/, platform: 'veo' },
+  { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/flow/,     platform: 'flow' },
+  { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/image-fx/, platform: 'whisk' }
+];
+
+function detectPlatform(url) {
+  if (!url) return null;
+  for (const s of SUPPORTED_PATTERNS) {
+    if (s.pattern.test(url)) return s.platform;
+  }
+  return null;
+}
+
+// ─── Init ───
+document.addEventListener('DOMContentLoaded', async () => {
+  await checkCurrentTab();
+  await loadSettings();
+  await checkAuth();
+  await refreshState();
+  bindEvents();
+});
+
+// ─── Check current tab and show unsupported notice if needed ───
+async function checkCurrentTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || '';
+    const detected = detectPlatform(url);
+
+    if (detected) {
+      // Supported page - auto-select platform tab
+      $('#unsupportedNotice').classList.add('hidden');
+      $('#mainContent').classList.remove('hidden');
+      currentPlatform = detected;
+      $$('.ptab').forEach(t => t.classList.toggle('active', t.dataset.platform === detected));
+      updateModeAvailability();
+    } else {
+      // Unsupported page - show notice
+      $('#unsupportedNotice').classList.remove('hidden');
+      $('#mainContent').classList.add('hidden');
+    }
+  } catch {
+    // Can't detect tab (e.g. chrome:// pages) - show notice
+    $('#unsupportedNotice').classList.remove('hidden');
+    $('#mainContent').classList.add('hidden');
+  }
+}
+
+// ─── Tab change listener (update when user switches tabs or navigates) ───
+chrome.tabs.onActivated.addListener(async () => {
+  await checkCurrentTab();
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.url) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab && activeTab.id === tabId) {
+      await checkCurrentTab();
+    }
+  }
+});
+
+// ─── Auth Check ───
+async function checkAuth() {
+  try {
+    const resp = await sendBg({ type: 'API_CHECK_AUTH' });
+    const badge = $('#authBadge');
+    if (resp.loggedIn) {
+      badge.textContent = 'Connected';
+      badge.className = 'badge badge-on';
+      loadProjects();
+    } else {
+      badge.textContent = 'Not Connected';
+      badge.className = 'badge badge-off';
+    }
+  } catch {
+    $('#authBadge').textContent = 'Error';
+    $('#authBadge').className = 'badge badge-off';
+  }
+}
+
+// ─── Load Projects ───
+async function loadProjects() {
+  try {
+    const projects = await sendBg({ type: 'API_LIST_PROJECTS' });
+    const select = $('#projectSelect');
+    select.innerHTML = '<option value="">프로젝트 선택...</option>';
+    if (Array.isArray(projects)) {
+      projects.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name || `Project ${p.id}`;
+        select.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    addLog('프로젝트 로드 실패: ' + err.message, 'error');
+  }
+}
+
+// ─── Bind All Events ───
+function bindEvents() {
+  // Unsupported page links - navigate current tab
+  $$('.unsupported-link').forEach(link => {
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const url = link.dataset.url;
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab) {
+        await chrome.tabs.update(tab.id, { url });
+      }
+    });
+  });
+
+  // Platform tabs
+  $$('.ptab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('.ptab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentPlatform = tab.dataset.platform;
+      updateModeAvailability();
+    });
+  });
+
+  // Main tabs (workspace / settings)
+  $$('.mtab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('.mtab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const isWorkspace = tab.dataset.tab === 'workspace';
+      $('#workspacePanel').classList.toggle('hidden', !isWorkspace);
+      $('#settingsPanel').classList.toggle('hidden', isWorkspace);
+    });
+  });
+
+  // Source tabs (mangohub / standalone)
+  $$('.stab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('.stab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentSource = tab.dataset.source;
+      $('#mangohubSection').classList.toggle('hidden', currentSource !== 'mangohub');
+      $('#standaloneSection').classList.toggle('hidden', currentSource !== 'standalone');
+    });
+  });
+
+  // Mode buttons
+  $$('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      $$('.mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentMode = btn.dataset.mode;
+      updateModeUI();
+    });
+  });
+
+  // Load project
+  $('#loadProjectBtn').addEventListener('click', loadProject);
+
+  // Image upload
+  const imagesInput = $('#imagesInput');
+  imagesInput.addEventListener('change', handleImageUpload);
+
+  // Drag and drop
+  const uploadArea = $('#uploadArea');
+  uploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadArea.classList.add('dragover');
+  });
+  uploadArea.addEventListener('dragleave', () => {
+    uploadArea.classList.remove('dragover');
+  });
+  uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+      // Create a synthetic event-like object for handleImageUpload
+      handleImageUpload({ target: { files: e.dataTransfer.files, value: '' } });
+    }
+  });
+
+  // Prompt file import
+  $('#promptFileInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    const current = $('#promptsInput').value;
+    $('#promptsInput').value = current ? current + '\n\n' + text : text;
+    updateQueuePreview();
+    addLog(`프롬프트 파일 가져옴: ${file.name}`, 'info');
+  });
+
+  // Reset button
+  $('#resetBtn').addEventListener('click', () => {
+    if (confirm('프롬프트와 이미지를 모두 초기화하시겠습니까?')) {
+      $('#promptsInput').value = '';
+      uploadedImages = [];
+      $('#imagePreviewList').innerHTML = '';
+      $('#imagesInput').value = '';
+      updateQueuePreview();
+      addLog('초기화 완료', 'info');
+    }
+  });
+
+  // Controls
+  $('#startBtn').addEventListener('click', startAutomation);
+  $('#pauseBtn').addEventListener('click', async () => {
+    await sendBg({ type: 'PAUSE_AUTOMATION' });
+    addLog('일시정지', 'info');
+  });
+  $('#resumeBtn').addEventListener('click', async () => {
+    await sendBg({ type: 'RESUME_AUTOMATION' });
+    addLog('재개', 'info');
+  });
+  $('#stopBtn').addEventListener('click', async () => {
+    if (confirm('자동화를 중지하시겠습니까?')) {
+      await sendBg({ type: 'STOP_AUTOMATION' });
+      addLog('중지됨', 'info');
+      // Immediately update UI
+      $('#startBtn').classList.remove('hidden');
+      $('#stopBtn').classList.add('hidden');
+      $('#pauseBtn').classList.add('hidden');
+      $('#resumeBtn').classList.add('hidden');
+    }
+  });
+  $('#downloadAllBtn').addEventListener('click', () => sendBg({ type: 'DOWNLOAD_ALL_RESULTS' }));
+  $('#retryFailedBtn').addEventListener('click', async () => {
+    const result = await sendBg({ type: 'RETRY_FAILED' });
+    if (result?.error) {
+      addLog(result.error, 'error');
+    } else if (result?.count > 0) {
+      addLog(`실패 ${result.count}개 항목 재시도 시작`, 'info');
+    } else {
+      addLog('재시도할 실패 항목이 없습니다', 'info');
+    }
+  });
+
+  // Save settings
+  $('#saveSettingsBtn').addEventListener('click', saveSettings);
+}
+
+// ─── Mode UI Update ───
+function updateModeUI() {
+  const needsImageUpload = currentMode === 'image-video' || currentMode === 'image-image';
+  const imageSection = $('#imageUploadSection');
+  if (currentSource === 'standalone') {
+    imageSection.classList.toggle('hidden', !needsImageUpload);
+  } else {
+    imageSection.classList.add('hidden');
+  }
+}
+
+function updateModeAvailability() {
+  const videoOnly = ['veo', 'flow'].includes(currentPlatform);
+  const imageOnly = currentPlatform === 'whisk';
+  const videoModes = ['text-video', 'image-video'];
+  const imageModes = ['text-image', 'image-image'];
+
+  $$('.mode-btn').forEach(btn => {
+    const mode = btn.dataset.mode;
+    const isVideo = videoModes.includes(mode);
+    const isImage = imageModes.includes(mode);
+    if (videoOnly && isImage) {
+      btn.style.opacity = '0.3';
+      btn.style.pointerEvents = 'none';
+    } else if (imageOnly && isVideo) {
+      btn.style.opacity = '0.3';
+      btn.style.pointerEvents = 'none';
+    } else {
+      btn.style.opacity = '1';
+      btn.style.pointerEvents = 'auto';
+    }
+  });
+
+  // Auto-select appropriate mode
+  if (videoOnly && imageModes.includes(currentMode)) {
+    setMode('text-video');
+  } else if (imageOnly && videoModes.includes(currentMode)) {
+    setMode('text-image');
+  }
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  $$('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  updateModeUI();
+}
+
+// ─── Load Project ───
+async function loadProject() {
+  const projectId = $('#projectSelect').value;
+  if (!projectId) return;
+  try {
+    const project = await sendBg({ type: 'API_GET_PROJECT', projectId });
+    currentProject = project;
+    const segments = project.segments || [];
+
+    const withImagePrompt = segments.filter(s => s.prompt).length;
+    const withVideoPrompt = segments.filter(s => s.video_prompt).length;
+    const withImage = segments.filter(s => s.image_url).length;
+    const withVideo = segments.filter(s => s.video_url).length;
+
+    // 디버그: 각 세그먼트의 이미지/영상 URL 확인
+    console.log('[MangoAuto] 세그먼트 데이터:', segments.map(s => ({
+      index: s.index,
+      hasPrompt: !!s.prompt,
+      hasVideoPrompt: !!s.video_prompt,
+      image_url: s.image_url ? s.image_url.substring(0, 50) + '...' : null,
+      video_url: s.video_url ? s.video_url.substring(0, 50) + '...' : null
+    })));
+
+    $('#projectName').textContent = project.name || 'Unnamed';
+    $('#segmentCount').textContent =
+      `${segments.length}개 세그먼트 | 이미지프롬프트 ${withImagePrompt} | 영상프롬프트 ${withVideoPrompt} | 이미지 ${withImage}장 | 영상 ${withVideo}개`;
+    $('#projectInfo').classList.remove('hidden');
+
+    updateQueuePreview();
+    addLog(`불러옴: ${project.name}`, 'info');
+  } catch (err) {
+    addLog('프로젝트 로드 실패: ' + err.message, 'error');
+  }
+}
+
+// ─── Update Queue Preview ───
+function updateQueuePreview() {
+  const queueList = $('#queueList');
+  const queueCount = $('#queueCount');
+  queueList.innerHTML = '';
+
+  let items = [];
+
+  if (currentSource === 'mangohub' && currentProject) {
+    const segments = currentProject.segments || [];
+    const skipCompleted = $('#skipCompleted').checked;
+
+    for (const seg of segments) {
+      let prompt, hasExisting;
+      if (currentMode === 'text-image') {
+        prompt = seg.prompt;
+        hasExisting = !!seg.image_url;
+      } else {
+        prompt = seg.video_prompt;
+        hasExisting = !!seg.video_url;
+      }
+      if (!prompt) continue;
+      if (skipCompleted && hasExisting) continue;
+      items.push({
+        idx: seg.index,
+        text: prompt.substring(0, 60),
+        hasImage: !!seg.image_url,
+        imageUrl: seg.image_url || null,
+        imageName: seg.image_url ? `seg_${String(seg.index + 1).padStart(3, '0')}` : null
+      });
+    }
+  } else if (currentSource === 'standalone') {
+    const prompts = parsePrompts($('#promptsInput').value || '');
+    items = prompts.map((p, i) => ({ idx: i, text: p.substring(0, 60) }));
+  }
+
+  queueCount.textContent = `${items.length}개`;
+
+  for (const item of items.slice(0, 50)) {
+    const div = document.createElement('div');
+    div.className = 'queue-item';
+    let thumbHtml = '';
+    if (item.imageUrl) {
+      thumbHtml = `<img class="queue-thumb" src="${escapeHtml(item.imageUrl)}" title="${escapeHtml(item.imageName || '')}">`;
+    }
+    div.innerHTML = `
+      <span class="queue-idx">${String(item.idx + 1).padStart(3, '0')}</span>
+      ${thumbHtml}
+      <span class="queue-text">${escapeHtml(item.text)}</span>
+      <span class="queue-status qs-pending">대기</span>
+    `;
+    queueList.appendChild(div);
+  }
+  if (items.length > 50) {
+    const more = document.createElement('div');
+    more.className = 'queue-item';
+    more.innerHTML = `<span class="queue-text" style="color:#666">... 외 ${items.length - 50}개</span>`;
+    queueList.appendChild(more);
+  }
+}
+
+// ─── Image Upload Handler (append, sort, delete) ───
+async function handleImageUpload(e) {
+  const files = Array.from(e.target.files);
+  if (files.length === 0) return;
+
+  for (const file of files) {
+    // Skip duplicates by name
+    if (uploadedImages.some(img => img.name === file.name)) continue;
+    const dataUrl = await fileToDataUrl(file);
+    uploadedImages.push({ file, dataUrl, name: file.name });
+  }
+
+  // Sort by name (natural sort)
+  uploadedImages.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  // Clear file input so re-selecting same file triggers change event
+  e.target.value = '';
+
+  renderImagePreviews();
+  updateQueuePreview();
+}
+
+function renderImagePreviews() {
+  const previewList = $('#imagePreviewList');
+  previewList.innerHTML = '';
+
+  for (let i = 0; i < uploadedImages.length; i++) {
+    const imgData = uploadedImages[i];
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'image-preview-wrapper';
+    wrapper.draggable = true;
+    wrapper.dataset.idx = i;
+
+    // Order badge (top-left number)
+    const orderBadge = document.createElement('div');
+    orderBadge.className = 'image-order-badge';
+    orderBadge.textContent = i + 1;
+
+    const img = document.createElement('img');
+    img.src = imgData.dataUrl;
+    img.className = 'image-preview-item';
+    img.title = imgData.name;
+    img.draggable = false; // prevent img native drag
+
+    const nameLabel = document.createElement('div');
+    nameLabel.className = 'image-preview-name';
+    nameLabel.textContent = imgData.name;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'image-delete-btn';
+    deleteBtn.textContent = '\u00d7';
+    deleteBtn.title = '삭제';
+    deleteBtn.dataset.idx = i;
+    deleteBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const idx = parseInt(ev.currentTarget.dataset.idx);
+      uploadedImages.splice(idx, 1);
+      renderImagePreviews();
+      updateQueuePreview();
+    });
+
+    // ── Drag-and-drop reorder ──
+    wrapper.addEventListener('dragstart', (ev) => {
+      ev.dataTransfer.setData('text/plain', String(i));
+      ev.dataTransfer.effectAllowed = 'move';
+      requestAnimationFrame(() => wrapper.classList.add('dragging'));
+    });
+    wrapper.addEventListener('dragend', () => {
+      wrapper.classList.remove('dragging');
+      // Clean up all drag-over states
+      previewList.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    });
+    wrapper.addEventListener('dragover', (ev) => {
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'move';
+      wrapper.classList.add('drag-over');
+    });
+    wrapper.addEventListener('dragleave', () => {
+      wrapper.classList.remove('drag-over');
+    });
+    wrapper.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      wrapper.classList.remove('drag-over');
+      const fromIdx = parseInt(ev.dataTransfer.getData('text/plain'));
+      const toIdx = parseInt(wrapper.dataset.idx);
+      if (fromIdx !== toIdx && !isNaN(fromIdx) && !isNaN(toIdx)) {
+        const [moved] = uploadedImages.splice(fromIdx, 1);
+        uploadedImages.splice(toIdx, 0, moved);
+        renderImagePreviews();
+        updateQueuePreview();
+      }
+    });
+
+    wrapper.appendChild(orderBadge);
+    wrapper.appendChild(img);
+    wrapper.appendChild(nameLabel);
+    wrapper.appendChild(deleteBtn);
+    previewList.appendChild(wrapper);
+  }
+
+  if (uploadedImages.length > 0) {
+    const badge = document.createElement('div');
+    badge.className = 'image-count-badge';
+    badge.textContent = `${uploadedImages.length}장 선택됨`;
+    previewList.appendChild(badge);
+  }
+}
+
+// ─── Start Automation ───
+async function startAutomation() {
+  const settings = gatherSettings();
+
+  const config = {
+    source: currentSource,
+    platform: currentPlatform,
+    mode: currentMode,
+    settings
+  };
+
+  if (currentSource === 'mangohub') {
+    config.projectId = $('#projectSelect').value;
+    if (!config.projectId) {
+      addLog('프로젝트를 선택해주세요', 'error');
+      return;
+    }
+    config.useExistingImages = $('#useExistingImages').checked;
+    config.skipCompleted = $('#skipCompleted').checked;
+  } else {
+    // Standalone - 빈 줄로 구분된 프롬프트 파싱
+    const prompts = parsePrompts($('#promptsInput').value || '');
+    if (prompts.length === 0 && uploadedImages.length === 0) {
+      addLog('프롬프트 또는 이미지를 입력해주세요', 'error');
+      return;
+    }
+    config.prompts = prompts;
+
+    // For image-to-video, include uploaded images as dataUrls
+    if (currentMode === 'image-video' && uploadedImages.length > 0) {
+      config.images = uploadedImages.map(img => ({
+        dataUrl: img.dataUrl,
+        name: img.name
+      }));
+    }
+  }
+
+  try {
+    const result = await sendBg({ type: 'START_AUTOMATION', config });
+    if (result.error) {
+      addLog(result.error, 'error');
+    } else {
+      addLog(`시작: ${result.count}개 항목`, 'success');
+      $('#logSection').classList.remove('hidden');
+      $('#progressSection').classList.remove('hidden');
+      // Immediately update UI to show controls
+      $('#startBtn').classList.add('hidden');
+      $('#stopBtn').classList.remove('hidden');
+      $('#pauseBtn').classList.remove('hidden');
+    }
+  } catch (err) {
+    addLog('시작 실패: ' + err.message, 'error');
+  }
+
+  saveSettings();
+}
+
+// ─── Gather Settings ───
+function gatherSettings() {
+  return {
+    grok: {
+      videoDuration: $('#grokVideoDuration').value,
+      videoResolution: $('#grokVideoResolution').value,
+      aspectRatio: $('#grokAspectRatio').value,
+      timeout: parseInt($('#grokTimeout').value) || 5
+    },
+    veo: {
+      model: $('#veoModel').value,
+      aspectRatio: $('#veoAspectRatio').value,
+      frameDuration: $('#veoFrameDuration').value,
+      outputCount: parseInt($('#veoOutputCount').value) || 1
+    },
+    image: {
+      model: $('#imageModel').value,
+      aspectRatio: $('#imageAspectRatio').value,
+      outputCount: parseInt($('#imageOutputCount').value) || 1
+    },
+    download: {
+      videoQuality: $('#downloadVideoQuality').value,
+      imageQuality: $('#downloadImageQuality').value,
+      naming: $('#downloadNaming').value,
+      delay: parseInt($('#downloadDelay').value) || 30,
+      perProject: $('#downloadPerProject').checked
+    },
+    general: {
+      cooldownMin: parseInt($('#cooldownMin').value) || 10,
+      cooldownMax: parseInt($('#cooldownMax').value) || 15,
+      retryOnFailure: $('#retryOnFailure').checked,
+      maxRetries: parseInt($('#maxRetries').value) || 3,
+      defaultMode: $('#defaultMode').value,
+      concurrentCount: parseInt($('#concurrentCount').value) || 1,
+      promptDelay: parseInt($('#promptDelay').value) || 40
+    }
+  };
+}
+
+// ─── Update UI from State ───
+function updateUI(state) {
+  if (!state) return;
+  lastState = state;
+
+  const isRunning = !['IDLE', 'COMPLETED'].includes(state.state);
+  const isPaused = state.state === 'PAUSED';
+  const isCompleted = state.state === 'COMPLETED';
+
+  // Controls
+  $('#startBtn').classList.toggle('hidden', isRunning);
+  $('#pauseBtn').classList.toggle('hidden', !isRunning || isPaused);
+  $('#resumeBtn').classList.toggle('hidden', !isPaused);
+  $('#stopBtn').classList.toggle('hidden', !isRunning);
+  const hasFailed = isCompleted && state.failedCount > 0;
+  $('#retryFailedBtn').classList.toggle('hidden', !hasFailed);
+  $('#downloadAllBtn').classList.toggle('hidden', !isCompleted);
+
+  // Progress
+  const showProgress = isRunning || isCompleted;
+  $('#progressSection').classList.toggle('hidden', !showProgress);
+  $('#logSection').classList.toggle('hidden', !showProgress && !isCompleted);
+
+  if (showProgress) {
+    const total = state.totalCount || 1;
+    const done = state.completedCount + state.failedCount;
+    const pct = Math.round((done / total) * 100);
+
+    $('#progressLabel').textContent = `완료 ${done}/${total}`;
+    $('#progressPercent').textContent = `${pct}%`;
+    $('#progressFill').style.width = `${pct}%`;
+
+    if (state.currentItem) {
+      const stateLabels = {
+        PREPARING: '준비 중',
+        GENERATING: '생성 중',
+        WAITING: '대기 중',
+        DOWNLOADING: '다운로드 중',
+        UPLOADING: '업로드 중',
+        COOLDOWN: '쿨다운',
+        ERROR: '에러 (재시도)',
+        PAUSED: '일시정지'
+      };
+      const label = stateLabels[state.state] || state.state;
+      $('#currentStatus').textContent = `[${label}] ${state.currentItem.text || ''}`;
+    }
+
+    // Update queue list items
+    updateQueueListFromState(state);
+  }
+
+  if (isCompleted && state.totalCount > 0) {
+    addLog(`완료! 성공 ${state.completedCount}개, 실패 ${state.failedCount}개`, 'success');
+  }
+
+  if (state.authExpired) {
+    addLog('MangoHub 세션 만료. 다시 로그인 후 재개해주세요.', 'error');
+  }
+}
+
+function updateQueueListFromState(state) {
+  const items = $('#queueList').querySelectorAll('.queue-item');
+  if (!state.results) return;
+
+  items.forEach((item, i) => {
+    const statusEl = item.querySelector('.queue-status');
+    if (!statusEl) return;
+
+    if (i < state.currentIndex) {
+      const result = state.results.find(r => r.index === i);
+      if (result) {
+        statusEl.textContent = result.success ? '완료' : '실패';
+        statusEl.className = `queue-status ${result.success ? 'qs-done' : 'qs-fail'}`;
+      }
+    } else if (i === state.currentIndex) {
+      statusEl.textContent = '진행중';
+      statusEl.className = 'queue-status qs-running';
+    }
+  });
+}
+
+// ─── State polling (1초마다 background에서 상태 가져오기) ───
+let _pollTimer = null;
+
+function startStatePolling() {
+  if (_pollTimer) return;
+  _pollTimer = setInterval(async () => {
+    try {
+      const state = await sendBg({ type: 'GET_STATE' });
+      if (state && !state.error) updateUI(state);
+    } catch { /* background not ready */ }
+  }, 1000);
+}
+
+// LOG 메시지는 여전히 실시간으로 받기
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'LOG') {
+    addLog(msg.text, msg.level);
+  }
+  if (msg.type === 'STATE_UPDATE') {
+    updateUI(msg.data);
+  }
+});
+
+async function refreshState() {
+  try {
+    const state = await sendBg({ type: 'GET_STATE' });
+    if (state && !state.error) updateUI(state);
+  } catch {}
+  startStatePolling();
+}
+
+// ─── Log ───
+function addLog(text, type = 'info') {
+  const container = $('#logContainer');
+  if (!container) return;
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${type}`;
+  const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  entry.textContent = `${time} ${text}`;
+  container.appendChild(entry);
+  container.scrollTop = container.scrollHeight;
+  while (container.children.length > 100) {
+    container.removeChild(container.firstChild);
+  }
+  // Auto-show log section
+  $('#logSection').classList.remove('hidden');
+}
+
+// ─── Settings Persistence ───
+async function saveSettings() {
+  const settings = gatherSettings();
+  await chrome.storage.local.set({
+    'mangoauto_settings': {
+      ...settings,
+      _ui: {
+        source: currentSource,
+        platform: currentPlatform,
+        mode: currentMode,
+        projectId: $('#projectSelect').value
+      }
+    }
+  });
+  addLog('설정 저장됨', 'info');
+}
+
+async function loadSettings() {
+  const data = await chrome.storage.local.get('mangoauto_settings');
+  const s = data.mangoauto_settings;
+  if (!s) return;
+
+  // Grok
+  if (s.grok) {
+    if (s.grok.videoDuration) $('#grokVideoDuration').value = s.grok.videoDuration;
+    if (s.grok.videoResolution) $('#grokVideoResolution').value = s.grok.videoResolution;
+    if (s.grok.aspectRatio) $('#grokAspectRatio').value = s.grok.aspectRatio;
+    if (s.grok.timeout) $('#grokTimeout').value = s.grok.timeout;
+  }
+
+  // Veo
+  if (s.veo) {
+    if (s.veo.model) $('#veoModel').value = s.veo.model;
+    if (s.veo.aspectRatio) $('#veoAspectRatio').value = s.veo.aspectRatio;
+    if (s.veo.frameDuration) $('#veoFrameDuration').value = s.veo.frameDuration;
+    if (s.veo.outputCount) $('#veoOutputCount').value = s.veo.outputCount;
+  }
+
+  // Image
+  if (s.image) {
+    if (s.image.model) $('#imageModel').value = s.image.model;
+    if (s.image.aspectRatio) $('#imageAspectRatio').value = s.image.aspectRatio;
+    if (s.image.outputCount) $('#imageOutputCount').value = s.image.outputCount;
+  }
+
+  // Download
+  if (s.download) {
+    if (s.download.videoQuality) $('#downloadVideoQuality').value = s.download.videoQuality;
+    if (s.download.imageQuality) $('#downloadImageQuality').value = s.download.imageQuality;
+    if (s.download.naming) $('#downloadNaming').value = s.download.naming;
+    if (s.download.delay) $('#downloadDelay').value = s.download.delay;
+    if (s.download.perProject !== undefined) $('#downloadPerProject').checked = s.download.perProject;
+  }
+
+  // General
+  if (s.general) {
+    if (s.general.cooldownMin) $('#cooldownMin').value = s.general.cooldownMin;
+    if (s.general.cooldownMax) $('#cooldownMax').value = s.general.cooldownMax;
+    if (s.general.retryOnFailure !== undefined) $('#retryOnFailure').checked = s.general.retryOnFailure;
+    if (s.general.maxRetries) $('#maxRetries').value = s.general.maxRetries;
+    if (s.general.defaultMode) $('#defaultMode').value = s.general.defaultMode;
+    if (s.general.concurrentCount) $('#concurrentCount').value = s.general.concurrentCount;
+    if (s.general.promptDelay) $('#promptDelay').value = s.general.promptDelay;
+  }
+
+  // UI state
+  if (s._ui) {
+    if (s._ui.source) {
+      currentSource = s._ui.source;
+      $$('.stab').forEach(t => t.classList.toggle('active', t.dataset.source === currentSource));
+      $('#mangohubSection').classList.toggle('hidden', currentSource !== 'mangohub');
+      $('#standaloneSection').classList.toggle('hidden', currentSource !== 'standalone');
+    }
+    if (s._ui.platform) {
+      currentPlatform = s._ui.platform;
+      $$('.ptab').forEach(t => t.classList.toggle('active', t.dataset.platform === currentPlatform));
+    }
+    if (s._ui.mode) {
+      setMode(s._ui.mode);
+    }
+    if (s._ui.projectId) {
+      setTimeout(() => {
+        const opt = $(`#projectSelect option[value="${s._ui.projectId}"]`);
+        if (opt) $('#projectSelect').value = s._ui.projectId;
+      }, 1000);
+    }
+  }
+
+  updateModeAvailability();
+}
+
+// ─── Helpers ───
+function sendBg(msg) {
+  return chrome.runtime.sendMessage(msg);
+}
+
+function fileToDataUrl(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Parse prompts separated by blank lines (double newline)
+// Each "block" between blank lines is one prompt (can be multi-line)
+function parsePrompts(text) {
+  if (!text.trim()) return [];
+  return text.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+}
+
+// Listen for prompt input changes to update queue preview
+$('#promptsInput')?.addEventListener('input', () => {
+  clearTimeout(window._queuePreviewTimer);
+  window._queuePreviewTimer = setTimeout(updateQueuePreview, 500);
+});
+
+$('#skipCompleted')?.addEventListener('change', updateQueuePreview);

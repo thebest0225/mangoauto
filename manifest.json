@@ -1,0 +1,78 @@
+{
+  "manifest_version": 3,
+  "name": "MangoAuto",
+  "version": "1.3.0",
+  "description": "Automate image/video generation on Grok, Whisk, Veo with MangoHub integration",
+  "permissions": [
+    "cookies",
+    "downloads",
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms",
+    "activeTab",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://grok.com/*",
+    "https://*.grok.com/*",
+    "https://imagine-public.x.ai/*",
+    "https://labs.google/*",
+    "https://*.mangois.love/*"
+  ],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "side_panel": {
+    "default_path": "popup/popup.html"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://grok.com/*"],
+      "js": ["lib/utils.js", "content/shared-dom.js", "content/grok.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://labs.google/fx/tools/image-fx*",
+        "https://labs.google/fx/*/tools/image-fx*"
+      ],
+      "js": ["lib/utils.js", "content/shared-dom.js", "content/whisk.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://labs.google/fx/tools/video-fx*",
+        "https://labs.google/fx/*/tools/video-fx*"
+      ],
+      "js": ["lib/utils.js", "content/shared-dom.js", "content/flow.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://labs.google/fx/tools/flow*",
+        "https://labs.google/fx/*/tools/flow*"
+      ],
+      "js": ["lib/utils.js", "content/shared-dom.js", "content/flow.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/inject.js"],
+      "matches": ["https://labs.google/*"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

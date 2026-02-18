@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "셀팜 AI 컨트롤러",
+  "version": "1.2.4",
+  "description": "Google Veo3 & Grok Imagine 대량 비디오/이미지 생성 자동화",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "sidePanel",
+    "tabs",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://labs.google/*",
+    "https://grok.com/*",
+    "https://imagine-public.x.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://labs.google/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://grok.com/imagine*"
+      ],
+      "js": [
+        "grok-content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "셀팜 AI 컨트롤러 열기"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inject.js"
+      ],
+      "matches": [
+        "https://labs.google/*"
+      ]
+    }
+  ]
+}
