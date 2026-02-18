@@ -4,6 +4,7 @@
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+const MANGOHUB_BASE = 'https://mangois.love';
 
 let currentSource = 'mangohub';
 let currentPlatform = 'grok';
@@ -365,7 +366,7 @@ function updateQueuePreview() {
         idx: seg.index,
         text: prompt.substring(0, 60),
         hasImage: !!seg.image_url,
-        imageUrl: seg.image_url || null,
+        imageUrl: seg.image_url ? resolveMangoUrl(seg.image_url) : null,
         imageName: seg.image_url ? `seg_${String(seg.index + 1).padStart(3, '0')}` : null
       });
     }
@@ -841,6 +842,12 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function resolveMangoUrl(url) {
+  if (!url) return null;
+  if (url.startsWith('http')) return url;
+  return MANGOHUB_BASE + url;
 }
 
 // Parse prompts separated by blank lines (double newline)
