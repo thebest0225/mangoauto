@@ -626,9 +626,9 @@ async function sendToTab(tabId, msg) {
 
 // ─── Handle generation complete ───
 async function handleGenerationComplete(msg, sender) {
-  // 중지 후 도착한 완료 메시지 무시
-  if (sm.state === AutoState.IDLE) {
-    MangoUtils.log('info', 'Ignoring GENERATION_COMPLETE (automation stopped)');
+  // 중지/완료 후 도착한 완료 메시지 무시
+  if (sm.state === AutoState.IDLE || sm.state === AutoState.COMPLETED) {
+    MangoUtils.log('info', `Ignoring GENERATION_COMPLETE (state=${sm.state})`);
     return;
   }
 
@@ -646,9 +646,9 @@ async function handleGenerationComplete(msg, sender) {
 
 // ─── Handle generation error from content script ───
 async function handleGenerationError(msg, sender) {
-  // 중지 후 도착한 에러 메시지 무시
-  if (sm.state === AutoState.IDLE) {
-    MangoUtils.log('info', 'Ignoring GENERATION_ERROR (automation stopped)');
+  // 중지/완료 후 도착한 에러 메시지 무시
+  if (sm.state === AutoState.IDLE || sm.state === AutoState.COMPLETED) {
+    MangoUtils.log('info', `Ignoring GENERATION_ERROR (state=${sm.state})`);
     return;
   }
 
@@ -731,6 +731,22 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
         sm.markError(err);
         broadcastLog(`업로드 실패: ${err.message}`, 'error');
       }
+    }
+
+    // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
+    try {
+      const dlFilename = getDownloadPath(filename);
+      const downloadUrl = mediaUrl || mediaDataUrl;
+      if (downloadUrl) {
+        await chrome.downloads.download({
+          url: downloadUrl,
+          filename: dlFilename,
+          saveAs: false
+        });
+        broadcastLog(`로컬 다운로드: ${filename}`, 'info');
+      }
+    } catch (dlErr) {
+      broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
     }
   } else {
     // Standalone - download locally via chrome.downloads (브라우저 쿠키 자동 포함)
@@ -832,6 +848,22 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           broadcastLog(`업로드 실패: ${err.message}`, 'error');
           sm.results.push({ success: false, index: itemIndex, error: err.message });
         }
+      }
+
+      // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
+      try {
+        const dlFilename = getDownloadPath(filename);
+        const downloadUrl = mediaUrl || mediaDataUrl;
+        if (downloadUrl) {
+          await chrome.downloads.download({
+            url: downloadUrl,
+            filename: dlFilename,
+            saveAs: false
+          });
+          broadcastLog(`로컬 다운로드: ${filename}`, 'info');
+        }
+      } catch (dlErr) {
+        broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
       }
     } else {
       try {

@@ -274,10 +274,16 @@
         });
       }
 
-      // 다음 아이템을 위해 메인 페이지로 복귀
-      await delay(2000);
-      await goBack();
-      await waitForMainPage(15000);
+      // 다음 아이템을 위해 메인 페이지로 복귀 (실패해도 에러 전파 안 함)
+      try {
+        await delay(2000);
+        if (!shouldStop) {
+          await goBack();
+          await waitForMainPage(15000);
+        }
+      } catch (navErr) {
+        console.warn(LOG_PREFIX, 'Post-complete navigation failed (ignored):', navErr.message);
+      }
 
       return { ok: true };
     } catch (err) {
@@ -1153,11 +1159,11 @@
    * 버튼 리스트에서 레이블 매칭하여 클릭
    */
   function clickButtonInList(buttons, labels, settingName) {
-    // 1차: 정확 매칭
+    // 1차: 정확 매칭 (텍스트)
     for (const label of labels) {
       for (const btn of buttons) {
         const text = (btn.textContent || '').trim();
-        if (text === label) {
+        if (text && text === label) {
           MangoDom.simulateClick(btn);
           console.log(LOG_PREFIX, `Setting [${settingName}] clicked (exact): "${text}"`);
           return true;
@@ -1165,12 +1171,25 @@
       }
     }
 
-    // 2차: 부분 매칭 (짧은 텍스트만)
+    // 2차: aria-label 매칭 (종횡비 등 아이콘 버튼)
+    for (const label of labels) {
+      const labelLower = label.toLowerCase();
+      for (const btn of buttons) {
+        const ariaLabel = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
+        if (ariaLabel && (ariaLabel.includes(labelLower) || labelLower.includes(ariaLabel))) {
+          MangoDom.simulateClick(btn);
+          console.log(LOG_PREFIX, `Setting [${settingName}] clicked (aria-label): "${ariaLabel}" for "${label}"`);
+          return true;
+        }
+      }
+    }
+
+    // 3차: 부분 매칭 (짧은 텍스트만, 빈 문자열 무시)
     for (const label of labels) {
       const labelLower = label.toLowerCase();
       for (const btn of buttons) {
         const text = (btn.textContent || '').trim();
-        if (text.length > 15) continue;
+        if (!text || text.length > 15) continue;
         const textLower = text.toLowerCase();
         if (textLower.includes(labelLower) || labelLower.includes(textLower)) {
           MangoDom.simulateClick(btn);
