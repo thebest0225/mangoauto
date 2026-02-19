@@ -526,7 +526,11 @@ async function sendNextPipelineItem() {
   const item = sm.queue[itemIndex];
   pipelineNextIdx++;
 
-  activeTasks.set(freeTabId, { item, index: itemIndex, status: 'processing' });
+  // 재시도/재생성 시 원본 인덱스 사용
+  const resultIndex = (sm._useOriginalIndex && item?._originalIndex !== undefined)
+    ? item._originalIndex : itemIndex;
+
+  activeTasks.set(freeTabId, { item, index: resultIndex, queueIndex: itemIndex, status: 'processing' });
 
   const idx = itemIndex + 1;
   const total = sm.queue.length;
@@ -544,9 +548,9 @@ async function sendNextPipelineItem() {
     const timeoutMs = getGenerationTimeoutMs();
     const timeoutId = setTimeout(async () => {
       const task = activeTasks.get(freeTabId);
-      if (task && task.index === itemIndex) {
+      if (task && task.queueIndex === itemIndex) {
         broadcastLog(`타임아웃 [${itemIndex + 1}]: 응답 없음 (${Math.round(timeoutMs/60000)}분), 다음 진행`, 'error');
-        sm.results.push({ success: false, index: itemIndex, segmentIndex: item.segmentIndex, error: 'Timeout' });
+        sm.results.push({ success: false, index: resultIndex, segmentIndex: item.segmentIndex, error: 'Timeout' });
         activeTasks.delete(freeTabId);
         sm.currentIndex = sm.results.length;
         broadcastState(getExtendedSnapshot());
@@ -560,7 +564,7 @@ async function sendNextPipelineItem() {
   } catch (err) {
     broadcastLog(`전송 실패: ${err.message}`, 'error');
     activeTasks.delete(freeTabId);
-    sm.results.push({ success: false, index: itemIndex, segmentIndex: item.segmentIndex, error: err.message });
+    sm.results.push({ success: false, index: resultIndex, segmentIndex: item.segmentIndex, error: err.message });
     return false;
   }
 }
@@ -821,7 +825,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
         // 업로드 실패: 생성은 성공했으므로 실패 기록 후 다음으로 진행
         // markError 대신 직접 결과에 실패 기록 + COOLDOWN으로 전환
         broadcastLog(`업로드 실패: ${err.message} (다음 항목 진행)`, 'error');
-        sm.results.push({ success: false, index: sm.currentIndex, segmentIndex: item.segmentIndex, error: err.message });
+        sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message });
         sm.transition(AutoState.COOLDOWN);
       }
     }
@@ -856,14 +860,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
     } catch (err) {
       // 다운로드 실패: 기록 후 다음 진행
       broadcastLog(`다운로드 실패: ${err.message} (다음 항목 진행)`, 'error');
-      sm.results.push({ success: false, index: sm.currentIndex, error: err.message });
+      sm.results.push({ success: false, index: sm._resultIndex(), error: err.message });
       sm.transition(AutoState.COOLDOWN);
     }
   }
 
   // Store result
   allResults.push({
-    index: sm.currentIndex,
+    index: sm._resultIndex(),
     segmentIndex: item.segmentIndex,
     success: true,
     dataUrl: mediaDataUrl || mediaUrl,
@@ -1114,6 +1118,7 @@ async function retryFailed() {
   const prevMediaType = sm.mediaType;
   const prevMode = sm.mode;
   const prevProjectId = sm.projectId;
+  const originalTotalCount = sm._originalTotalCount || sm.queue.length;
 
   // Remove failed results (keep successful ones)
   const successResults = sm.results.filter(r => r.success);
@@ -1134,8 +1139,9 @@ async function retryFailed() {
   sm._cooldownMin = prevCooldownMin;
   sm._cooldownMax = prevCooldownMax;
   sm.results = successResults;
+  sm._originalTotalCount = originalTotalCount;
 
-  // Override filename generation to use original indices
+  // Override filename generation and result index to use original indices
   sm._useOriginalIndex = true;
 
   activeTasks.clear();
@@ -1178,6 +1184,7 @@ async function retrySelected(indices) {
   const prevMediaType = sm.mediaType;
   const prevMode = sm.mode;
   const prevProjectId = sm.projectId;
+  const originalTotalCount = sm._originalTotalCount || sm.queue.length;
 
   // Keep results for non-selected items, remove selected ones (they'll be regenerated)
   const selectedSet = new Set(indices);
@@ -1199,8 +1206,9 @@ async function retrySelected(indices) {
   sm._cooldownMin = prevCooldownMin;
   sm._cooldownMax = prevCooldownMax;
   sm.results = keptResults;
+  sm._originalTotalCount = originalTotalCount;
 
-  // Use original indices for filename generation
+  // Use original indices for filename generation and result tracking
   sm._useOriginalIndex = true;
 
   activeTasks.clear();
