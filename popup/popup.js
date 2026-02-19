@@ -189,6 +189,7 @@ function bindEvents() {
       tab.style.background = '#4f46e5';
       tab.style.color = '#fff';
       currentContentType = tab.dataset.ctype;
+      updateProjectInfo();
       updateQueuePreview();
     });
   });
@@ -364,47 +365,60 @@ async function loadProject() {
   try {
     const project = await sendBg({ type: 'API_GET_PROJECT', projectId });
     currentProject = project;
-    const segments = project.segments || [];
 
+    $('#projectName').textContent = project.name || 'Unnamed';
+    $('#projectInfo').classList.remove('hidden');
+
+    updateProjectInfo();
+    updateQueuePreview();
+
+    const thumbCount = (project.thumbnail_concepts?.concepts || []).filter(c => c.prompt).length;
+    addLog(`불러옴: ${project.name} (세그먼트 ${(project.segments || []).length}개, 썸네일 ${thumbCount}개)`, 'info');
+  } catch (err) {
+    addLog('프로젝트 로드 실패: ' + err.message, 'error');
+  }
+}
+
+// ─── Update Project Info based on content type ───
+function updateProjectInfo() {
+  if (!currentProject) return;
+
+  const segmentCount = $('#segmentCount');
+  const thumbInfo = $('#thumbnailInfo');
+  const thumbCount = $('#thumbnailCount');
+
+  if (currentContentType === 'thumbnail') {
+    // 썸네일 정보 표시
+    const concepts = currentProject.thumbnail_concepts?.concepts || [];
+    const thumbImages = currentProject.thumbnail_images || {};
+    const withPrompt = concepts.filter(c => c.prompt).length;
+    const withImage = Object.keys(thumbImages).length;
+
+    segmentCount.textContent =
+      `썸네일 ${concepts.length}개 | 프롬프트 ${withPrompt}개 | 생성완료 ${withImage}개`;
+    thumbInfo.classList.add('hidden');
+  } else {
+    // 세그먼트 정보 표시
+    const segments = currentProject.segments || [];
     const withImagePrompt = segments.filter(s => s.prompt).length;
     const withVideoPrompt = segments.filter(s => s.video_prompt).length;
     const withImage = segments.filter(s => s.image_url).length;
     const withVideo = segments.filter(s => s.video_url).length;
 
-    // 디버그: 각 세그먼트의 이미지/영상 URL 확인
-    console.log('[MangoAuto] 세그먼트 데이터:', segments.map(s => ({
-      index: s.index,
-      hasPrompt: !!s.prompt,
-      hasVideoPrompt: !!s.video_prompt,
-      image_url: s.image_url ? s.image_url.substring(0, 50) + '...' : null,
-      video_url: s.video_url ? s.video_url.substring(0, 50) + '...' : null
-    })));
-
-    // 썸네일 정보
-    const thumbConcepts = project.thumbnail_concepts?.concepts || [];
-    const thumbImages = project.thumbnail_images || {};
-    const thumbWithPrompt = thumbConcepts.filter(c => c.prompt).length;
-    const thumbWithImage = Object.keys(thumbImages).length;
-
-    $('#projectName').textContent = project.name || 'Unnamed';
-    $('#segmentCount').textContent =
+    segmentCount.textContent =
       `${segments.length}개 세그먼트 | 이미지프롬프트 ${withImagePrompt} | 영상프롬프트 ${withVideoPrompt} | 이미지 ${withImage}장 | 영상 ${withVideo}개`;
-    $('#projectInfo').classList.remove('hidden');
 
-    // 썸네일 정보 표시
-    const thumbInfo = $('#thumbnailInfo');
-    const thumbCount = $('#thumbnailCount');
+    // 썸네일 요약도 하단에 표시
+    const concepts = currentProject.thumbnail_concepts?.concepts || [];
+    const thumbImages = currentProject.thumbnail_images || {};
+    const thumbWithPrompt = concepts.filter(c => c.prompt).length;
+    const thumbWithImage = Object.keys(thumbImages).length;
     if (thumbWithPrompt > 0) {
       thumbCount.textContent = `썸네일 프롬프트 ${thumbWithPrompt}개 | 생성완료 ${thumbWithImage}개`;
       thumbInfo.classList.remove('hidden');
     } else {
       thumbInfo.classList.add('hidden');
     }
-
-    updateQueuePreview();
-    addLog(`불러옴: ${project.name} (썸네일 ${thumbWithPrompt}개)`, 'info');
-  } catch (err) {
-    addLog('프로젝트 로드 실패: ' + err.message, 'error');
   }
 }
 
