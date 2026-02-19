@@ -73,6 +73,11 @@
       sendResponse({ ok: true });
       return false;
     }
+    if (msg.type === 'RESET_SETTINGS') {
+      videoSettingsApplied = false;
+      sendResponse({ ok: true });
+      return false;
+    }
     if (msg.type === 'PING') {
       sendResponse({ ok: true, site: 'grok' });
       return false;

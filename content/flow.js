@@ -71,7 +71,12 @@
     }
     if (msg.type === 'STOP_GENERATION') {
       isProcessing = false;
-      imageSettingsApplied = false;  // 재시작 시 설정 다시 적용
+      imageSettingsApplied = false;
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg.type === 'RESET_SETTINGS') {
+      imageSettingsApplied = false;
       sendResponse({ ok: true });
       return;
     }

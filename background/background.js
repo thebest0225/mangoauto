@@ -362,6 +362,13 @@ async function startAutomation(config) {
   broadcastLog(`대상 탭 확인 중... (platform=${platform}, count=${concurrentCount})`, 'info');
   await ensureTargetTabs(platform, concurrentCount);
   broadcastLog(`활성 탭: [${activeTabIds.join(', ')}]`, 'info');
+
+  // Content script 설정 플래그 리셋 (새 자동화 시작 시 설정 재적용)
+  for (const tabId of activeTabIds) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'RESET_SETTINGS' });
+    } catch { /* content script not ready yet */ }
+  }
   await MangoUtils.sleep(2000);
 
   broadcastLog('자동화 루프 시작!', 'info');
