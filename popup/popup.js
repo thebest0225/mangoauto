@@ -17,7 +17,7 @@ let reviewItems = [];
 // ─── Supported URL patterns ───
 const SUPPORTED_PATTERNS = [
   { pattern: /^https:\/\/grok\.com/,                   platform: 'grok' },
-  { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/video-fx/, platform: 'veo' },
+  { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/video-fx/, platform: 'flow' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/flow/,     platform: 'flow' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/image-fx/, platform: 'whisk' }
 ];
@@ -305,7 +305,7 @@ function updateModeUI() {
 }
 
 function updateModeAvailability() {
-  const videoOnly = ['veo', 'flow'].includes(currentPlatform);
+  const videoOnly = false; // Flow는 모든 모드 지원
   const imageOnly = currentPlatform === 'whisk';
   const videoModes = ['text-video', 'image-video'];
   const imageModes = ['text-image', 'image-image'];

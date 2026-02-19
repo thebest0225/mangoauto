@@ -103,7 +103,7 @@
       await delay(1000);
 
       // Step 2: Upload source image (for frame-to-video mode)
-      if ((mode === 'image-video') && sourceImageDataUrl) {
+      if ((mode === 'image-video' || mode === 'image-image') && sourceImageDataUrl) {
         console.log(LOG_PREFIX, 'Uploading source image...');
         const uploaded = await uploadFrame(sourceImageDataUrl, 'first');
         if (uploaded) {
@@ -180,6 +180,12 @@
     await delay(500);
 
     // Step 2: Select the right mode from dropdown
+    // image-image: Images 탭 선택만으로 충분 (드롭다운 불필요 - 참고자료 방식)
+    if (mode === 'image-image') {
+      console.log(LOG_PREFIX, 'Image-to-image: Images tab selected, no dropdown needed');
+      return;
+    }
+
     const optionXPaths = {
       'text-video': SELECTORS.TEXT_TO_VIDEO_OPTION_XPATH,
       'image-video': SELECTORS.IMAGE_TO_VIDEO_OPTION_XPATH,
@@ -521,9 +527,18 @@
   }
 
   function checkForNewMedia() {
+    // 새 비디오 감지
     const videos = document.querySelectorAll('video[src]');
     for (const v of videos) {
       if (v.src && !existingVideos.has(v.src) && v.src.includes('storage.googleapis.com')) {
+        return true;
+      }
+    }
+    // 새 이미지 감지
+    const images = document.querySelectorAll('img[src]');
+    for (const img of images) {
+      if (img.src && !existingImages.has(img.src) &&
+          img.src.includes('storage.googleapis.com')) {
         return true;
       }
     }

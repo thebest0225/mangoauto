@@ -315,7 +315,6 @@ async function ensureTargetTabs(platform, count) {
   const urls = {
     grok: 'https://grok.com/imagine',
     whisk: 'https://labs.google/fx/tools/image-fx',
-    veo: 'https://labs.google/fx/tools/video-fx',
     flow: 'https://labs.google/fx/tools/flow'
   };
 
@@ -555,7 +554,6 @@ async function fetchSourceImage(item) {
 const CONTENT_SCRIPTS = {
   grok: ['lib/utils.js', 'content/shared-dom.js', 'content/grok.js'],
   whisk: ['lib/utils.js', 'content/shared-dom.js', 'content/whisk.js'],
-  veo: ['lib/utils.js', 'content/shared-dom.js', 'content/flow.js'],
   flow: ['lib/utils.js', 'content/shared-dom.js', 'content/flow.js']
 };
 
@@ -923,11 +921,18 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
 
 // ─── Generate filename ───
 function generateFilename(index, platform, mediaType) {
-  // Use original index if retrying failed items (preserve original numbering)
-  const itemOrigIdx = sm._useOriginalIndex && sm.queue[index]?._originalIndex !== undefined
-    ? sm.queue[index]._originalIndex
-    : index;
-  const idx = String(itemOrigIdx + 1).padStart(3, '0');
+  // MangoHub: segmentIndex (서버 기준 번호로 중단/재시작 시에도 일관됨)
+  // Retry: _originalIndex (원래 대기열 위치)
+  // Standalone: 배열 인덱스
+  let numericIndex;
+  if (sm.mode === 'mangohub' && sm.queue[index]?.segmentIndex !== undefined) {
+    numericIndex = sm.queue[index].segmentIndex;
+  } else if (sm._useOriginalIndex && sm.queue[index]?._originalIndex !== undefined) {
+    numericIndex = sm.queue[index]._originalIndex;
+  } else {
+    numericIndex = index;
+  }
+  const idx = String(numericIndex + 1).padStart(3, '0');
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const ext = mediaType === 'video' ? 'mp4' : 'png';
   const model = getModelName(platform) || platform || 'auto';
@@ -949,7 +954,6 @@ function generateFilename(index, platform, mediaType) {
 function getModelName(platform) {
   switch (platform) {
     case 'grok': return 'grok';
-    case 'veo': return automationSettings?.veo?.model || 'veo3';
     case 'flow': return automationSettings?.veo?.model || 'flow';
     case 'whisk': return automationSettings?.image?.model || 'whisk';
     default: return platform;
