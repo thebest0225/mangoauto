@@ -27,10 +27,10 @@
       "(//button[.//i[normalize-space(text())='arrow_forward']])",
 
     VIDEOS_TAB_XPATH:
-      "//button[@role='radio' and contains(., 'Videos')]",
+      "//button[@role='radio' and (contains(., 'Videos') or contains(., '동영상'))]",
 
     IMAGES_TAB_XPATH:
-      "//button[@role='radio' and contains(., 'Images')]",
+      "//button[@role='radio' and (contains(., 'Images') or contains(., '이미지'))]",
 
     MODE_DROPDOWN_XPATH:
       "//button[@role='combobox']",
@@ -297,13 +297,20 @@
       await delay(300);
     } else {
       // Fallback: find by text
+      const tabAliases = {
+        'Videos': ['Videos', '동영상'],
+        'Images': ['Images', '이미지']
+      };
+      const names = tabAliases[tabName] || [tabName];
       const buttons = document.querySelectorAll('button[role="radio"]');
       for (const btn of buttons) {
-        if (btn.textContent.includes(tabName)) {
-          MangoDom.simulateClick(btn);
-          console.log(LOG_PREFIX, `Clicked tab via text: ${tabName}`);
-          await delay(300);
-          return;
+        for (const name of names) {
+          if (btn.textContent.includes(name)) {
+            MangoDom.simulateClick(btn);
+            console.log(LOG_PREFIX, `Clicked tab via text: ${name}`);
+            await delay(300);
+            return;
+          }
         }
       }
       console.warn(LOG_PREFIX, `Tab not found: ${tabName}`);
@@ -555,9 +562,36 @@
     return count;
   }
 
+  // 화면에 남아있는 에러/경고 DOM 요소 강제 제거
+  function dismissVisibleErrors() {
+    const selectors = [
+      '[role="alert"]', '[class*="snackbar"]', '[class*="snack"]',
+      'mat-snack-bar', '[class*="toast"]'
+    ];
+    for (const sel of selectors) {
+      document.querySelectorAll(sel).forEach(el => {
+        const text = el.textContent.trim().toLowerCase();
+        for (const phrase of ERROR_PHRASES) {
+          if (text.includes(phrase.toLowerCase())) {
+            el.remove();
+            console.log(LOG_PREFIX, 'Removed lingering error DOM:', text.substring(0, 50));
+            return;
+          }
+        }
+      });
+    }
+    // MangoDialogDismisser로도 한번 시도
+    if (window.MangoDialogDismisser) {
+      window.MangoDialogDismisser.tryDismiss();
+    }
+  }
+
   async function waitForGenerationComplete(timeoutMin) {
     const timeout = (timeoutMin || 10) * 60 * 1000;
     console.log(LOG_PREFIX, `Waiting for generation (timeout: ${timeoutMin}min)...`);
+
+    // 이전 에러 DOM이 남아있으면 제거 (재시도 시 중요)
+    dismissVisibleErrors();
 
     const start = Date.now();
     const checkInterval = 5000;
@@ -566,11 +600,7 @@
     await delay(5000);
 
     while (Date.now() - start < timeout) {
-      // Check for errors
-      const err = checkForErrors();
-      if (err) throw new Error(`Generation error: ${err}`);
-
-      // Check if API result arrived (from inject.js)
+      // Check if API result arrived first (inject.js가 가장 신뢰할 수 있음)
       if (lastApiResult) {
         if (lastApiResult.ok && lastApiResult.hasMedia) {
           console.log(LOG_PREFIX, 'Generation complete (API result)');
@@ -580,6 +610,10 @@
           throw new Error(`API error: ${lastApiResult.error || 'Unknown'}`);
         }
       }
+
+      // Check for errors (API result보다 후순위)
+      const err = checkForErrors();
+      if (err) throw new Error(`Generation error: ${err}`);
 
       // Check progress indicators
       const generating = countGeneratingItems();
