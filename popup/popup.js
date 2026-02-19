@@ -782,19 +782,32 @@ function updateQueueListFromState(state) {
   const items = $('#queueList').querySelectorAll('.queue-item');
   if (!state.results) return;
 
+  // 결과 맵 빌드 (index → success)
+  const doneMap = new Map();
+  for (const r of state.results) {
+    doneMap.set(r.index, r.success);
+  }
+
+  // 파이프라인 모드: 현재 진행 중인 항목 인덱스
+  const activeSet = new Set(state.activeIndices || []);
+
   items.forEach((item, i) => {
     const statusEl = item.querySelector('.queue-status');
     if (!statusEl) return;
 
-    if (i < state.currentIndex) {
-      const result = state.results.find(r => r.index === i);
-      if (result) {
-        statusEl.textContent = result.success ? '완료' : '실패';
-        statusEl.className = `queue-status ${result.success ? 'qs-done' : 'qs-fail'}`;
-      }
-    } else if (i === state.currentIndex) {
+    if (doneMap.has(i)) {
+      // 완료 또는 실패
+      const success = doneMap.get(i);
+      statusEl.textContent = success ? '완료' : '실패';
+      statusEl.className = `queue-status ${success ? 'qs-done' : 'qs-fail'}`;
+    } else if (activeSet.size > 0 ? activeSet.has(i) : i === state.currentIndex) {
+      // 진행중 (파이프라인: activeIndices, 순차: currentIndex)
       statusEl.textContent = '진행중';
       statusEl.className = 'queue-status qs-running';
+    } else {
+      // 대기
+      statusEl.textContent = '대기';
+      statusEl.className = 'queue-status qs-pending';
     }
   });
 }

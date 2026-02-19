@@ -52,6 +52,26 @@ function broadcastLog(text, level = 'info') {
   } catch (e) { /* sidepanel not open */ }
 }
 
+// Extended snapshot: includes pipeline active indices
+function getExtendedSnapshot() {
+  const snapshot = sm.getSnapshot();
+  if (concurrentCount > 1 && activeTasks.size > 0) {
+    snapshot.activeIndices = [...activeTasks.values()].map(t => t.index);
+  }
+  return snapshot;
+}
+
+// Generation timeout (content script timeout + 2분 안전 버퍼)
+function getGenerationTimeoutMs() {
+  let base;
+  if (sm.platform === 'flow') {
+    base = (automationSettings?.flowTimeout || 3) * 60 * 1000;
+  } else {
+    base = (automationSettings?.grok?.timeout || 5) * 60 * 1000;
+  }
+  return base + 2 * 60 * 1000;
+}
+
 // ─── Message Router ───
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handleMessage(msg, sender).then(sendResponse).catch(err => {
@@ -103,6 +123,10 @@ async function handleMessage(msg, sender) {
     case 'STOP_AUTOMATION':
       sm.reset();
       allResults = [];
+      // 파이프라인 타임아웃 정리
+      for (const [, task] of activeTasks) {
+        if (task.timeoutId) clearTimeout(task.timeoutId);
+      }
       activeTasks.clear();
       pendingCompletions = 0;
       pipelineNextIdx = 0;
@@ -115,7 +139,7 @@ async function handleMessage(msg, sender) {
       return { ok: true };
 
     case 'GET_STATE':
-      return sm.getSnapshot();
+      return getExtendedSnapshot();
 
     case 'SKIP_CURRENT':
       sm.skipCurrent();
@@ -512,6 +536,23 @@ async function sendNextPipelineItem() {
     }
     const message = buildExecuteMessage(item);
     await sendToTab(freeTabId, message);
+
+    // 안전 타임아웃: 컨텐츠 스크립트가 응답 없을 때 슬롯 해제
+    const timeoutMs = getGenerationTimeoutMs();
+    const timeoutId = setTimeout(async () => {
+      const task = activeTasks.get(freeTabId);
+      if (task && task.index === itemIndex) {
+        broadcastLog(`타임아웃 [${itemIndex + 1}]: 응답 없음 (${Math.round(timeoutMs/60000)}분), 다음 진행`, 'error');
+        sm.results.push({ success: false, index: itemIndex, segmentIndex: item.segmentIndex, error: 'Timeout' });
+        activeTasks.delete(freeTabId);
+        sm.currentIndex = sm.results.length;
+        broadcastState(getExtendedSnapshot());
+        await sendNextPipelineItem();
+        checkPipelineCompletion();
+      }
+    }, timeoutMs);
+    activeTasks.get(freeTabId).timeoutId = timeoutId;
+
     return true;
   } catch (err) {
     broadcastLog(`전송 실패: ${err.message}`, 'error');
@@ -525,7 +566,7 @@ async function sendNextPipelineItem() {
 function checkPipelineCompletion() {
   if (activeTasks.size === 0 && pipelineNextIdx >= sm.queue.length) {
     sm.transition(AutoState.COMPLETED);
-    broadcastState(sm.getSnapshot());
+    broadcastState(getExtendedSnapshot());
     broadcastLog('모든 작업 완료!', 'success');
   }
 }
@@ -771,7 +812,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
       } catch (err) {
         if (err.message === 'AUTH_EXPIRED') {
           sm.pause();
-          broadcastState({ ...sm.getSnapshot(), authExpired: true });
+          broadcastState({ ...getExtendedSnapshot(), authExpired: true });
           return;
         }
         // 업로드 실패: 생성은 성공했으므로 실패 기록 후 다음으로 진행
@@ -847,6 +888,9 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     return;
   }
 
+  // 타임아웃 해제
+  if (task.timeoutId) clearTimeout(task.timeoutId);
+
   task.status = success ? 'completed' : 'failed';
   const item = task.item;
   const itemIndex = task.index;
@@ -900,7 +944,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
         } catch (err) {
           if (err.message === 'AUTH_EXPIRED') {
             sm.pause();
-            broadcastState({ ...sm.getSnapshot(), authExpired: true });
+            broadcastState({ ...getExtendedSnapshot(), authExpired: true });
             return;
           }
           broadcastLog(`업로드 실패: ${err.message}`, 'error');
@@ -956,7 +1000,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   // 슬롯 해제 및 진행 상황 업데이트
   activeTasks.delete(tabId);
   sm.currentIndex = sm.results.length;
-  broadcastState(sm.getSnapshot());
+  broadcastState(getExtendedSnapshot());
 
   // 빈 슬롯에 다음 항목 즉시 전송
   await sendNextPipelineItem();
