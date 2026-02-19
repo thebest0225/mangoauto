@@ -953,9 +953,8 @@
 
   /**
    * 메인 페이지에서 "모델 선택" 버튼을 통해 비디오 설정 적용 (참고자료 방식).
-   * 1. "모델 선택" 클릭 → "비디오" 선택 → 재오픈
-   * 2. [role="menu"] 내부의 버튼으로 재생시간/해상도/종횡비 설정
-   * 3. 메뉴 닫기
+   * Grok UI는 [role="menu"]를 사용하지 않을 수 있으므로
+   * 플로팅 팝오버/드롭다운을 다양한 셀렉터로 탐색.
    */
   async function applySettingsOnMainPage(settings) {
     const grok = settings?.grok || {};
@@ -965,58 +964,67 @@
       duration: videoDuration, resolution: videoResolution, aspectRatio
     });
 
-    // Step 1: "모델 선택" 버튼 찾기
+    // Step 1: "모델 선택" 버튼 찾기 (하단바의 모델 드롭다운 트리거)
     const modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
-                     findButtonByTextExact('모델 선택');
+                     findButtonByTextInArea('비디오') ||
+                     findButtonByTextInArea('이미지');
     if (!modelBtn) {
       showToast('모델 선택 버튼 없음, 설정 건너뜀', 'warn');
       return;
     }
+    showToast(`모델 버튼 찾음: "${(modelBtn.textContent || '').trim().substring(0, 20)}"`, 'info');
 
-    // Step 2: 메뉴 열기 → "비디오" 선택
+    // Step 2: 드롭다운 열기
     MangoDom.simulateClick(modelBtn);
-    await delay(500);
+    await delay(600);
 
-    const videoItem = findMenuItemInMenu('비디오');
+    // Step 3: "비디오" 모드 선택 (이미 "비디오"면 건너뜀)
+    const videoItem = findDropdownItem('비디오');
     if (videoItem) {
+      const itemText = (videoItem.textContent || '').trim();
+      // "비디오" 항목이 있으면 클릭 (이미 선택된 상태여도 클릭해도 무방)
       MangoDom.simulateClick(videoItem);
+      showToast(`"${itemText}" 선택`, 'info');
       await delay(300);
-    } else {
-      showToast('"비디오" 메뉴 항목 없음', 'warn');
     }
 
-    // Step 3: 메뉴 다시 열기 (설정 옵션 표시)
+    // Step 4: 드롭다운 다시 열기 (설정 옵션 표시)
     MangoDom.simulateClick(modelBtn);
-    await delay(500);
+    await delay(600);
 
-    // Step 4: 재생시간 설정
+    // Step 5: 드롭다운/팝오버 안의 버튼 목록 수집
+    const dropdownBtns = findDropdownButtons();
+    const btnTexts = dropdownBtns.map(b => (b.textContent || '').trim()).filter(t => t.length < 20);
+    showToast(`드롭다운 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
+
+    // Step 6: 재생시간 설정
     if (videoDuration) {
       const durationLabels = [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)];
-      if (!clickSettingButtonInMenu(durationLabels)) {
+      if (!clickButtonInList(dropdownBtns, durationLabels, 'duration')) {
         showToast(`duration 미적용: ${videoDuration}`, 'warn');
       }
       await delay(200);
     }
 
-    // Step 5: 해상도 설정
+    // Step 7: 해상도 설정
     if (videoResolution) {
       const resLabels = [videoResolution, videoResolution.replace('p', '')];
-      if (!clickSettingButtonInMenu(resLabels)) {
+      if (!clickButtonInList(dropdownBtns, resLabels, 'resolution')) {
         showToast(`resolution 미적용: ${videoResolution}`, 'warn');
       }
       await delay(200);
     }
 
-    // Step 6: 종횡비 설정
+    // Step 8: 종횡비 설정
     if (aspectRatio) {
       const arLabels = [aspectRatio];
-      if (!clickSettingButtonInMenu(arLabels)) {
+      if (!clickButtonInList(dropdownBtns, arLabels, 'aspectRatio')) {
         showToast(`aspect ratio 미적용: ${aspectRatio}`, 'warn');
       }
       await delay(200);
     }
 
-    // Step 7: 메뉴 닫기
+    // Step 9: 드롭다운 닫기
     document.body.click();
     await delay(300);
 
@@ -1025,47 +1033,133 @@
   }
 
   /**
-   * 텍스트가 정확히 일치하는 버튼 찾기
+   * 하단바 입력 영역 근처에서 텍스트로 버튼 찾기
    */
-  function findButtonByTextExact(text) {
+  function findButtonByTextInArea(text) {
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
-      if ((btn.textContent || '').trim().includes(text)) return btn;
+      const btnText = (btn.textContent || '').trim();
+      if (btnText.includes(text) && btnText.length < 30) {
+        // 하단바 버튼: 화면 하단 200px 이내
+        const rect = btn.getBoundingClientRect();
+        if (rect.top > window.innerHeight - 200) {
+          return btn;
+        }
+      }
     }
     return null;
   }
 
   /**
-   * [role="menuitem"] 중에서 텍스트 포함 매칭
+   * 현재 열린 드롭다운/팝오버에서 항목 찾기.
+   * [role="menu"], [role="menuitem"] 뿐만 아니라
+   * 다양한 팝오버 컨테이너 검색.
    */
-  function findMenuItemInMenu(text) {
-    const items = document.querySelectorAll('[role="menuitem"]');
-    for (const item of items) {
+  function findDropdownItem(text) {
+    // 1. [role="menuitem"] (참고자료 방식)
+    const menuItems = document.querySelectorAll('[role="menuitem"]');
+    for (const item of menuItems) {
       if ((item.textContent || '').trim().includes(text)) return item;
     }
+
+    // 2. 팝오버/드롭다운 내부의 클릭 가능 요소
+    const container = findFloatingContainer();
+    if (container) {
+      const elements = container.querySelectorAll('button, div[role], span[role], a, li, [tabindex]');
+      for (const el of elements) {
+        const elText = (el.textContent || '').trim();
+        if (elText.includes(text) && elText.length < 30) return el;
+      }
+    }
+
+    // 3. 전체 페이지에서 짧은 텍스트의 클릭 요소
+    const allClickable = document.querySelectorAll('button, [role="option"], [role="radio"]');
+    for (const el of allClickable) {
+      const elText = (el.textContent || '').trim();
+      if (elText === text || (elText.includes(text) && elText.length < 20)) return el;
+    }
+
     return null;
   }
 
   /**
-   * 현재 열린 [role="menu"] 내부에서 버튼 텍스트 매칭하여 클릭.
-   * 참고자료의 findSettingButton 방식: 정확 매칭 → 부분 매칭 fallback
+   * 현재 열린 플로팅 컨테이너(팝오버/드롭다운/메뉴) 찾기
    */
-  function clickSettingButtonInMenu(labels) {
-    const menu = document.querySelector('[role="menu"]');
-    if (!menu) {
-      console.warn(LOG_PREFIX, '[role="menu"] 없음');
-      return false;
+  function findFloatingContainer() {
+    const selectors = [
+      '[role="menu"]',
+      '[role="dialog"]:not([class*="settings"])',
+      '[role="listbox"]',
+      '[data-radix-popper-content-wrapper]',
+      '[data-floating-ui-portal]',
+      '[class*="popover" i]',
+      '[class*="dropdown" i]',
+      '[class*="floating" i]',
+      '[class*="overlay" i]',
+      '[class*="popup" i]'
+    ];
+
+    for (const sel of selectors) {
+      const els = document.querySelectorAll(sel);
+      for (const el of els) {
+        // 보이는 요소만
+        if (el.offsetParent !== null || el.style.display !== 'none') {
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 50 && rect.height > 50) {
+            console.log(LOG_PREFIX, `Floating container found: ${sel}`);
+            return el;
+          }
+        }
+      }
     }
 
-    const buttons = menu.querySelectorAll('button');
+    return null;
+  }
 
+  /**
+   * 드롭다운 내부의 모든 버튼 수집
+   */
+  function findDropdownButtons() {
+    const buttons = new Set();
+
+    // 1. 특정 컨테이너 내부 버튼
+    const container = findFloatingContainer();
+    if (container) {
+      container.querySelectorAll('button').forEach(b => buttons.add(b));
+    }
+
+    // 2. [role="menu"] 내부 버튼
+    const menu = document.querySelector('[role="menu"]');
+    if (menu) {
+      menu.querySelectorAll('button').forEach(b => buttons.add(b));
+    }
+
+    // 3. 컨테이너를 못 찾으면 페이지 전체에서 짧은 텍스트 버튼 수집
+    if (buttons.size === 0) {
+      console.log(LOG_PREFIX, '드롭다운 컨테이너 못 찾음, 페이지 전체 검색');
+      document.querySelectorAll('button').forEach(b => {
+        const text = (b.textContent || '').trim();
+        // 짧은 텍스트 (설정 버튼: "6s", "10s", "480p", "720p", "16:9" 등)
+        if (text.length > 0 && text.length <= 10 && b.offsetParent !== null) {
+          buttons.add(b);
+        }
+      });
+    }
+
+    return [...buttons];
+  }
+
+  /**
+   * 버튼 리스트에서 레이블 매칭하여 클릭
+   */
+  function clickButtonInList(buttons, labels, settingName) {
     // 1차: 정확 매칭
     for (const label of labels) {
       for (const btn of buttons) {
         const text = (btn.textContent || '').trim();
         if (text === label) {
           MangoDom.simulateClick(btn);
-          console.log(LOG_PREFIX, `Setting clicked (exact): "${text}"`);
+          console.log(LOG_PREFIX, `Setting [${settingName}] clicked (exact): "${text}"`);
           return true;
         }
       }
@@ -1076,17 +1170,17 @@
       const labelLower = label.toLowerCase();
       for (const btn of buttons) {
         const text = (btn.textContent || '').trim();
-        if (text.length > 20) continue;
+        if (text.length > 15) continue;
         const textLower = text.toLowerCase();
         if (textLower.includes(labelLower) || labelLower.includes(textLower)) {
           MangoDom.simulateClick(btn);
-          console.log(LOG_PREFIX, `Setting clicked (partial): "${text}" for "${label}"`);
+          console.log(LOG_PREFIX, `Setting [${settingName}] clicked (partial): "${text}" for "${label}"`);
           return true;
         }
       }
     }
 
-    console.warn(LOG_PREFIX, `Menu button not found for: ${labels.join(', ')}`);
+    console.warn(LOG_PREFIX, `Setting [${settingName}] not found for: ${labels.join(', ')}`);
     return false;
   }
 

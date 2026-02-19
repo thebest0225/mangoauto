@@ -677,6 +677,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   sm.markDownloading();
 
   const filename = generateFilename(sm.currentIndex, sm.platform, sm.mediaType);
+  broadcastLog(`handleSequentialComplete: mode=${sm.mode}, mediaType=${sm.mediaType}, hasUrl=${!!mediaUrl}, hasDataUrl=${!!mediaDataUrl}`, 'info');
 
   if (sm.mode === 'mangohub' && sm.projectId) {
     if (reviewModeEnabled) {
