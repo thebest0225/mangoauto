@@ -399,16 +399,17 @@ function updateQueuePreview() {
       if (!prompt) continue;
       if (skipCompleted && hasExisting) continue;
       items.push({
-        idx: seg.index,
+        idx: seg.index,  // MangoHub seg.index는 1-based
+        _isMangoHub: true,
         text: prompt.substring(0, 60),
         hasImage: !!seg.image_url,
         imageUrl: seg.image_url ? resolveMangoUrl(seg.image_url) : null,
-        imageName: seg.image_url ? `seg_${String(seg.index + 1).padStart(3, '0')}` : null
+        imageName: seg.image_url ? `seg_${String(seg.index).padStart(3, '0')}` : null
       });
     }
   } else if (currentSource === 'standalone') {
     const prompts = parsePrompts($('#promptsInput').value || '');
-    items = prompts.map((p, i) => ({ idx: i, text: p.substring(0, 60) }));
+    items = prompts.map((p, i) => ({ idx: i, _isMangoHub: false, text: p.substring(0, 60) }));
   }
 
   queueCount.textContent = `${items.length}개`;
@@ -421,7 +422,7 @@ function updateQueuePreview() {
       thumbHtml = `<img class="queue-thumb" src="${escapeHtml(item.imageUrl)}" title="${escapeHtml(item.imageName || '')}">`;
     }
     div.innerHTML = `
-      <span class="queue-idx">${String(item.idx + 1).padStart(3, '0')}</span>
+      <span class="queue-idx">${String(item._isMangoHub ? item.idx : item.idx + 1).padStart(3, '0')}</span>
       ${thumbHtml}
       <span class="queue-text">${escapeHtml(item.text)}</span>
       <span class="queue-status qs-pending">대기</span>
@@ -1007,7 +1008,7 @@ function renderReviewList() {
 
     div.innerHTML = `
       <div class="review-item-header">
-        <span class="review-idx">#${String((item.segmentIndex || 0) + 1).padStart(3, '0')}</span>
+        <span class="review-idx">#${String(item.segmentIndex || 1).padStart(3, '0')}</span>
         <span class="review-prompt">${escapeHtml(item.text || item.prompt || '')}</span>
         <span class="review-status-badge rs-${item.status}">${statusLabels[item.status] || item.status}</span>
       </div>

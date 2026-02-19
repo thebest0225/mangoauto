@@ -935,15 +935,16 @@ function generateFilename(index, platform, mediaType) {
   // MangoHub: segmentIndex (서버 기준 번호로 중단/재시작 시에도 일관됨)
   // Retry: _originalIndex (원래 대기열 위치)
   // Standalone: 배열 인덱스
-  let numericIndex;
+  let displayIndex;
   if (sm.mode === 'mangohub' && sm.queue[index]?.segmentIndex !== undefined) {
-    numericIndex = sm.queue[index].segmentIndex;
+    // MangoHub segmentIndex는 서버에서 1-based로 제공 → 그대로 사용
+    displayIndex = sm.queue[index].segmentIndex;
   } else if (sm._useOriginalIndex && sm.queue[index]?._originalIndex !== undefined) {
-    numericIndex = sm.queue[index]._originalIndex;
+    displayIndex = sm.queue[index]._originalIndex + 1; // 0-based → 1-based
   } else {
-    numericIndex = index;
+    displayIndex = index + 1; // 0-based → 1-based
   }
-  const idx = String(numericIndex + 1).padStart(3, '0');
+  const idx = String(displayIndex).padStart(3, '0');
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const ext = mediaType === 'video' ? 'mp4' : 'png';
   const model = getModelName(platform) || platform || 'auto';
