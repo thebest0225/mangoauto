@@ -321,12 +321,23 @@ async function ensureTargetTabs(platform, count) {
   const targetUrl = urls[platform];
   if (!targetUrl) throw new Error('Unknown platform: ' + platform);
 
-  // Find existing tabs (including locale variants)
+  // Find existing tabs (including locale variants and project pages)
   let tabs = await chrome.tabs.query({ url: targetUrl + '*' });
 
   if (platform !== 'grok' && tabs.length === 0) {
     const toolName = targetUrl.split('/tools/')[1];
     tabs = await chrome.tabs.query({ url: `https://labs.google/fx/*/tools/${toolName}*` });
+  }
+
+  // Flow: video-fx 탭도 검색 (Veo3 → Flow 통합)
+  if (platform === 'flow' && tabs.length === 0) {
+    const vfxTabs = await chrome.tabs.query({ url: 'https://labs.google/fx/*/tools/video-fx*' });
+    if (vfxTabs.length === 0) {
+      const vfxTabs2 = await chrome.tabs.query({ url: 'https://labs.google/fx/tools/video-fx*' });
+      tabs = vfxTabs2;
+    } else {
+      tabs = vfxTabs;
+    }
   }
 
   activeTabIds = tabs.map(t => t.id).slice(0, count);

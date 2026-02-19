@@ -98,11 +98,18 @@
       const mode = settings?._mode || 'image-video';
       console.log(LOG_PREFIX, 'Mode:', mode, '| Prompt:', prompt.substring(0, 60));
 
-      // Step 1: Switch to correct mode
+      // Step 1: Switch to correct mode (이미지 만들기 / 텍스트 동영상 변환 / 프레임 동영상 변환)
       await switchMode(mode);
       await delay(1000);
 
-      // Step 2: Upload source image (for frame-to-video mode)
+      // Step 2: Apply settings via tune button (이미지 모드일 때)
+      if (mode.includes('image') && !imageSettingsApplied) {
+        await applyImageSettings(settings);
+        imageSettingsApplied = true;
+        await delay(500);
+      }
+
+      // Step 3: Upload source image (for frame-to-video or image-to-image mode)
       if ((mode === 'image-video' || mode === 'image-image') && sourceImageDataUrl) {
         console.log(LOG_PREFIX, 'Uploading source image...');
         const uploaded = await uploadFrame(sourceImageDataUrl, 'first');
@@ -114,47 +121,54 @@
         }
       }
 
-      // Step 3: Fill prompt
+      // Step 4: Snapshot existing media (생성 전 기존 미디어 기록)
+      snapshotExistingMedia();
+
+      // Step 5: Fill prompt
       await typePrompt(prompt);
       await delay(600 + Math.random() * 400);
 
-      // Step 4: Click generate
+      // Step 6: Click generate
       await clickGenerate();
 
-      // Step 5: Wait for generation complete
-      const timeoutMin = settings?.grok?.timeout || 10;
+      // Step 7: Wait for generation complete
+      const isImageMode = mode.includes('image');
+      const timeoutMin = isImageMode ? (settings?.grok?.timeout || 3) : (settings?.grok?.timeout || 10);
       await waitForGenerationComplete(timeoutMin);
 
-      // Step 6: Extract result
-      let mediaDataUrl;
-
+      // Step 8: Extract result
       if (mediaType === 'video' || mode.includes('video')) {
-        // Try API result first (most reliable)
+        // 비디오: URL 직접 전달 (dataUrl 변환 시 50MB+ 메모리 이슈 방지)
+        let videoUrl;
         if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
-          console.log(LOG_PREFIX, 'Using API-intercepted URL');
-          mediaDataUrl = await MangoDom.fetchAsDataUrl(lastApiResult.mediaUrls[0]);
+          console.log(LOG_PREFIX, 'Using API-intercepted video URL');
+          videoUrl = lastApiResult.mediaUrls[0];
         } else {
-          // Fallback: find video element
-          const videoUrl = await getVideoUrl();
+          videoUrl = await getVideoUrl();
           if (!videoUrl) throw new Error('Cannot find video URL');
-          mediaDataUrl = await MangoDom.fetchAsDataUrl(videoUrl);
         }
+        chrome.runtime.sendMessage({
+          type: 'GENERATION_COMPLETE',
+          mediaUrl: videoUrl,
+          mediaType: 'video'
+        });
       } else {
-        // Image mode
+        // 이미지: dataUrl로 변환
+        let mediaDataUrl;
         if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
+          console.log(LOG_PREFIX, 'Using API-intercepted image URL');
           mediaDataUrl = await MangoDom.fetchAsDataUrl(lastApiResult.mediaUrls[0]);
         } else {
           const imgUrl = await getGeneratedImageUrl();
           if (!imgUrl) throw new Error('Cannot find generated image');
           mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
         }
+        chrome.runtime.sendMessage({
+          type: 'GENERATION_COMPLETE',
+          mediaDataUrl,
+          mediaType: 'image'
+        });
       }
-
-      chrome.runtime.sendMessage({
-        type: 'GENERATION_COMPLETE',
-        mediaDataUrl,
-        mediaType: mode.includes('video') ? 'video' : 'image'
-      });
 
       return { ok: true };
     } catch (err) {
@@ -591,6 +605,145 @@
     }
 
     return null;
+  }
+
+  // ─── Image Settings Application (tune button) ───
+  let imageSettingsApplied = false;
+
+  async function applyImageSettings(settings) {
+    const imageSettings = settings?.image;
+    if (!imageSettings) {
+      console.log(LOG_PREFIX, 'No image settings to apply');
+      return;
+    }
+
+    console.log(LOG_PREFIX, 'Applying image settings:', imageSettings);
+
+    // Open settings panel via tune button
+    const settingsBtn = getByXPath(SELECTORS.SETTINGS_BUTTON_XPATH);
+    if (!settingsBtn) {
+      console.warn(LOG_PREFIX, 'Settings (tune) button not found');
+      return;
+    }
+
+    MangoDom.simulateClick(settingsBtn);
+    await delay(500);
+
+    // Set image model
+    if (imageSettings.model) {
+      await setImageModel(imageSettings.model);
+    }
+
+    // Set aspect ratio
+    if (imageSettings.aspectRatio) {
+      await setComboboxByLabel(
+        ['가로세로', '비율', 'aspect', 'ratio'],
+        imageSettings.aspectRatio,
+        '화면비'
+      );
+    }
+
+    // Set output count
+    if (imageSettings.outputCount) {
+      await setComboboxByLabel(
+        ['출력', 'output', /^\s*\d+\s*$/],
+        String(imageSettings.outputCount),
+        '출력 개수'
+      );
+    }
+
+    // Close settings panel
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await delay(300);
+    console.log(LOG_PREFIX, 'Image settings applied');
+  }
+
+  async function setImageModel(model) {
+    // 모델명 매칭 정의 (참고자료 방식)
+    const modelDefs = {
+      'imagen4':          { match: ['Imagen 4', 'imagen4', 'Imagen4'] },
+      'nano-banana-pro':  { match: ['Nano Banana Pro', 'nano-banana-pro'] },
+      'nano-banana':      { match: ['Nano Banana', 'nano-banana'], exclude: ['Pro'] }
+    };
+    const def = modelDefs[model] || { match: [model] };
+
+    const matchesModel = (text) => {
+      const lower = text.toLowerCase();
+      const hasMatch = def.match.some(name => lower.includes(name.toLowerCase()));
+      if (!hasMatch) return false;
+      if (def.exclude) {
+        return !def.exclude.some(ex => lower.includes(ex.toLowerCase()));
+      }
+      return true;
+    };
+
+    const comboboxes = document.querySelectorAll('[role="combobox"]');
+    for (const combobox of comboboxes) {
+      const text = combobox.textContent || '';
+      if (text.includes('Imagen') || text.includes('Nano') || text.includes('Banana') ||
+          text.includes('모델') || text.includes('Model')) {
+        if (matchesModel(text)) {
+          console.log(LOG_PREFIX, `Image model already set: ${model}`);
+          return;
+        }
+        combobox.click();
+        await delay(300);
+        const options = document.querySelectorAll('[role="option"]');
+        for (const option of options) {
+          if (matchesModel(option.textContent || '')) {
+            console.log(LOG_PREFIX, `Image model selected: ${option.textContent.trim()}`);
+            option.click();
+            await delay(300);
+            return;
+          }
+        }
+        // 못 찾으면 드롭다운 닫기
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await delay(200);
+        break;
+      }
+    }
+    console.warn(LOG_PREFIX, `Image model not found: ${model}`);
+  }
+
+  async function setComboboxByLabel(labelPatterns, targetValue, settingName) {
+    const comboboxes = document.querySelectorAll('[role="combobox"]');
+    for (const combobox of comboboxes) {
+      const text = (combobox.textContent || '').trim();
+
+      // 라벨 패턴 매칭
+      const isMatch = labelPatterns.some(p => {
+        if (p instanceof RegExp) return p.test(text);
+        return text.toLowerCase().includes(p.toLowerCase());
+      });
+      if (!isMatch) continue;
+
+      // 이미 선택된 값인지 확인
+      if (text.includes(targetValue)) {
+        console.log(LOG_PREFIX, `${settingName} already set: ${targetValue}`);
+        return;
+      }
+
+      combobox.click();
+      await delay(300);
+
+      const options = document.querySelectorAll('[role="option"]');
+      for (const option of options) {
+        const optText = (option.textContent || '').trim();
+        if (optText.includes(targetValue) || optText === targetValue) {
+          console.log(LOG_PREFIX, `${settingName} selected: ${optText}`);
+          option.click();
+          await delay(300);
+          return;
+        }
+      }
+
+      // 못 찾으면 닫기
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await delay(200);
+      break;
+    }
+    console.warn(LOG_PREFIX, `${settingName} combobox not found for: ${targetValue}`);
   }
 
   // ─── Error Detection ───
