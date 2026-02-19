@@ -25,6 +25,9 @@ let promptDelay = 40;       // seconds between prompts in concurrent mode
 let activeTasks = new Map(); // tabId → { item, index, status }
 let pendingCompletions = 0;
 
+// Pipeline mode state
+let pipelineNextIdx = 0;
+
 // ─── Side Panel: open on icon click ───
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -102,6 +105,7 @@ async function handleMessage(msg, sender) {
       allResults = [];
       activeTasks.clear();
       pendingCompletions = 0;
+      pipelineNextIdx = 0;
       // Content script에 중지 신호 전송 (진행 중인 작업 취소)
       for (const tabId of activeTabIds) {
         try {
@@ -194,10 +198,12 @@ async function startAutomation(config) {
   allResults = [];
   activeTasks.clear();
   pendingCompletions = 0;
+  pipelineNextIdx = 0;
 
   // Concurrent settings
-  concurrentCount = settings?.general?.concurrentCount || 1;
-  promptDelay = (settings?.general?.promptDelay || 40) * 1000;
+  concurrentCount = parseInt(settings?.general?.concurrentCount) || 1;
+  promptDelay = (parseInt(settings?.general?.promptDelay) || 40) * 1000;
+  broadcastLog(`동시처리: ${concurrentCount}개, 전송간격: ${promptDelay/1000}초`, 'info');
 
   // Max retries
   sm.maxRetries = settings?.general?.maxRetries || 3;
@@ -325,8 +331,8 @@ async function startAutomation(config) {
 
   sm.start();
 
-  // Ensure target tab(s) for concurrent processing
-  broadcastLog(`대상 탭 확인 중... (platform=${platform})`, 'info');
+  // Ensure target tabs
+  broadcastLog(`대상 탭 확인 중... (platform=${platform}, count=${concurrentCount})`, 'info');
   await ensureTargetTabs(platform, concurrentCount);
   broadcastLog(`활성 탭: [${activeTabIds.join(', ')}]`, 'info');
   await MangoUtils.sleep(2000);
@@ -402,16 +408,13 @@ async function waitForTabLoad(tabId) {
   });
 }
 
-// ─── Main Automation Loop (supports concurrent) ───
+// ─── Main Automation Loop ───
 async function runLoop() {
   if (sm.state !== AutoState.PREPARING) return;
-
-  if (concurrentCount <= 1) {
-    // Sequential mode (original behavior)
-    await runSequentialLoop();
+  if (concurrentCount > 1) {
+    await runPipelineMode();
   } else {
-    // Concurrent mode
-    await runConcurrentBatch();
+    await runSequentialLoop();
   }
 }
 
@@ -460,71 +463,71 @@ async function runSequentialLoop() {
   }
 }
 
-// ─── Concurrent batch processing ───
-async function runConcurrentBatch() {
-  if (sm.state !== AutoState.PREPARING) return;
-
-  const remaining = sm.queue.length - sm.currentIndex;
-  const batchSize = Math.min(concurrentCount, remaining, activeTabIds.length);
-
-  if (batchSize === 0) {
-    sm.transition(AutoState.COMPLETED);
-    return;
-  }
-
+// ─── Pipeline mode (sliding window) ───
+// 슬롯 N개를 항상 채우면서 진행. 하나 끝나면 즉시 다음 채움.
+async function runPipelineMode() {
   sm.markGenerating();
-  activeTasks.clear();
-  pendingCompletions = batchSize;
+  broadcastLog(`파이프라인 모드: 동시 ${concurrentCount}개, 전송간격 ${promptDelay/1000}초`, 'info');
 
-  broadcastLog(`동시 처리 시작: ${batchSize}개 프롬프트`, 'info');
+  // Initial fill: 슬롯을 순차적으로 채움 (전송 간격 적용)
+  for (let i = 0; i < concurrentCount && pipelineNextIdx < sm.queue.length; i++) {
+    if (sm.state !== AutoState.GENERATING) break;
 
-  for (let i = 0; i < batchSize; i++) {
-    const itemIndex = sm.currentIndex + i;
-    if (itemIndex >= sm.queue.length) break;
+    const sent = await sendNextPipelineItem();
+    if (!sent) continue; // 전송 실패 시 다음 시도
 
-    const item = sm.queue[itemIndex];
-    const tabId = activeTabIds[i];
-
-    activeTasks.set(tabId, { item, index: itemIndex, status: 'sending' });
-
-    const idx = itemIndex + 1;
-    const total = sm.queue.length;
-    broadcastLog(`[${idx}/${total}] ${item.text}`, 'info');
-
-    try {
-      const message = buildExecuteMessage(item);
-      await sendToTab(tabId, message);
-      activeTasks.get(tabId).status = 'processing';
-    } catch (err) {
-      MangoUtils.log('warn', `Tab ${tabId} send failed:`, err.message);
-      activeTasks.get(tabId).status = 'failed';
-      activeTasks.get(tabId).error = err.message;
-      pendingCompletions--;
-    }
-
-    // Delay between sending concurrent prompts (minimum 3 seconds)
-    if (i < batchSize - 1) {
+    // 다음 슬롯 채우기 전 전송 간격 대기
+    if (i < concurrentCount - 1 && pipelineNextIdx < sm.queue.length) {
       const delay = Math.max(3000, promptDelay);
+      broadcastLog(`다음 전송까지 ${Math.round(delay/1000)}초 대기...`, 'info');
       await MangoUtils.sleep(delay);
     }
   }
 
-  // If all failed immediately, move to next batch
-  if (pendingCompletions <= 0) {
-    broadcastLog('동시 처리 모두 실패', 'error');
-    // Mark results for failed items
-    for (const [, task] of activeTasks) {
-      sm.results.push({ success: false, index: task.index, error: task.error || 'Send failed' });
+  checkPipelineCompletion();
+}
+
+// 다음 대기 항목을 빈 슬롯(탭)에 전송
+async function sendNextPipelineItem() {
+  if (pipelineNextIdx >= sm.queue.length) return false;
+  if (sm.state === AutoState.IDLE || sm.state === AutoState.COMPLETED || sm.state === AutoState.PAUSED) return false;
+
+  const freeTabId = activeTabIds.find(id => !activeTasks.has(id));
+  if (!freeTabId) return false;
+
+  const itemIndex = pipelineNextIdx;
+  const item = sm.queue[itemIndex];
+  pipelineNextIdx++;
+
+  activeTasks.set(freeTabId, { item, index: itemIndex, status: 'processing' });
+
+  const idx = itemIndex + 1;
+  const total = sm.queue.length;
+  broadcastLog(`[${idx}/${total}] ${item.text}`, 'info');
+
+  try {
+    if (item.sourceImageUrl && !item.sourceImageDataUrl) {
+      broadcastLog('소스 이미지 다운로드 중...', 'info');
+      await fetchSourceImage(item);
     }
-    sm.currentIndex += batchSize;
-    if (sm.currentIndex >= sm.queue.length) {
-      sm.transition(AutoState.COMPLETED);
-    } else {
-      sm.currentItem = sm.queue[sm.currentIndex];
-      await handleCooldownAndNext();
-    }
+    const message = buildExecuteMessage(item);
+    await sendToTab(freeTabId, message);
+    return true;
+  } catch (err) {
+    broadcastLog(`전송 실패: ${err.message}`, 'error');
+    activeTasks.delete(freeTabId);
+    sm.results.push({ success: false, index: itemIndex, segmentIndex: item.segmentIndex, error: err.message });
+    return false;
   }
-  // Otherwise, wait for GENERATION_COMPLETE messages from content scripts
+}
+
+// 모든 작업 완료 여부 확인
+function checkPipelineCompletion() {
+  if (activeTasks.size === 0 && pipelineNextIdx >= sm.queue.length) {
+    sm.transition(AutoState.COMPLETED);
+    broadcastState(sm.getSnapshot());
+    broadcastLog('모든 작업 완료!', 'success');
+  }
 }
 
 // ─── Build execute message for content script ───
@@ -771,8 +774,11 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
           broadcastState({ ...sm.getSnapshot(), authExpired: true });
           return;
         }
-        sm.markError(err);
-        broadcastLog(`업로드 실패: ${err.message}`, 'error');
+        // 업로드 실패: 생성은 성공했으므로 실패 기록 후 다음으로 진행
+        // markError 대신 직접 결과에 실패 기록 + COOLDOWN으로 전환
+        broadcastLog(`업로드 실패: ${err.message} (다음 항목 진행)`, 'error');
+        sm.results.push({ success: false, index: sm.currentIndex, segmentIndex: item.segmentIndex, error: err.message });
+        sm.transition(AutoState.COOLDOWN);
       }
     }
 
@@ -804,8 +810,10 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
       sm.markSuccess({ downloaded: filename });
       broadcastLog(`다운로드: ${filename}`, 'success');
     } catch (err) {
-      sm.markError(err);
-      broadcastLog(`다운로드 실패: ${err.message}`, 'error');
+      // 다운로드 실패: 기록 후 다음 진행
+      broadcastLog(`다운로드 실패: ${err.message} (다음 항목 진행)`, 'error');
+      sm.results.push({ success: false, index: sm.currentIndex, error: err.message });
+      sm.transition(AutoState.COOLDOWN);
     }
   }
 
@@ -818,11 +826,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
     filename
   });
 
-  // Download delay (순번 보장을 위한 다운로드 간격)
-  const downloadDelay = (automationSettings?.download?.delay || 2) * 1000;
-  if (downloadDelay > 0) {
-    broadcastLog(`다운로드 대기 ${Math.round(downloadDelay / 1000)}초...`, 'info');
-    await MangoUtils.sleep(downloadDelay);
+  // Download delay: 순차 모드에서는 스킵, 동시 모드일 때만 적용
+  // Flow 이미지는 항상 스킵 (빠른 처리)
+  if (concurrentCount > 1) {
+    const downloadDelay = (automationSettings?.download?.delay || 2) * 1000;
+    if (downloadDelay > 0) {
+      broadcastLog(`다운로드 대기 ${Math.round(downloadDelay / 1000)}초...`, 'info');
+      await MangoUtils.sleep(downloadDelay);
+    }
   }
 
   await handleCooldownAndNext();
@@ -937,35 +948,19 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       filename
     });
 
-    // Download delay between concurrent completions
-    const downloadDelay = (automationSettings?.download?.delay || 2) * 1000;
-    if (downloadDelay > 0 && pendingCompletions > 0) {
-      await MangoUtils.sleep(downloadDelay);
-    }
   } else {
     broadcastLog(`실패 [${itemIndex + 1}]: ${errorMsg || 'Unknown error'}`, 'error');
     sm.results.push({ success: false, index: itemIndex, error: errorMsg || 'Failed' });
   }
 
-  pendingCompletions--;
+  // 슬롯 해제 및 진행 상황 업데이트
+  activeTasks.delete(tabId);
+  sm.currentIndex = sm.results.length;
+  broadcastState(sm.getSnapshot());
 
-  // Check if all concurrent tasks are done
-  if (pendingCompletions <= 0) {
-    broadcastLog('동시 처리 배치 완료', 'info');
-
-    // Advance the index past all items in this batch
-    const batchSize = activeTasks.size;
-    sm.currentIndex += batchSize;
-    activeTasks.clear();
-
-    if (sm.currentIndex >= sm.queue.length) {
-      sm.transition(AutoState.COMPLETED);
-    } else {
-      sm.currentItem = sm.queue[sm.currentIndex];
-      sm.transition(AutoState.COOLDOWN);
-      await handleCooldownAndNext();
-    }
-  }
+  // 빈 슬롯에 다음 항목 즉시 전송
+  await sendNextPipelineItem();
+  checkPipelineCompletion();
 }
 
 // ─── Generate filename ───

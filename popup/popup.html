@@ -134,23 +134,21 @@
         <textarea id="promptsInput" class="textarea" rows="5" placeholder="프롬프트를 입력하세요...&#10;&#10;예시:&#10;첫 번째 긴 프롬프트.&#10;여러 줄에 걸쳐 작성 가능합니다.&#10;&#10;두 번째 프롬프트는 빈 줄 뒤에 시작됩니다.&#10;&#10;세 번째 프롬프트."></textarea>
       </div>
 
-      <!-- Concurrent & Delay -->
+      <!-- Processing Settings -->
       <div class="section">
-        <div class="row gap-4">
-          <div class="flex-1">
-            <label class="label">동시 프롬프트</label>
-            <select id="concurrentCount" class="select">
-              <option value="1" selected>1개 (순차, 권장)</option>
-              <option value="2">2개 동시</option>
-              <option value="3">3개 동시</option>
-            </select>
-          </div>
-          <div class="flex-1">
-            <label class="label">전송 간격 (초)</label>
-            <input type="number" id="promptDelay" class="input" value="70" min="3" max="300">
-          </div>
+        <div class="setting-row" style="margin-bottom:4px;">
+          <label>동시 처리 수</label>
+          <select id="concurrentCount" class="select-sm">
+            <option value="1" selected>1개 (순차)</option>
+            <option value="2">2개</option>
+            <option value="3">3개</option>
+          </select>
         </div>
-        <div class="setting-hint">순차: 영상 완료 자동감지 → 다운로드 → 대기(설정) → 다음 진행<br>전송 간격은 동시 처리 시에만 적용</div>
+        <div class="setting-row">
+          <label>전송 간격 (초)</label>
+          <input type="number" id="promptDelay" class="input-sm" value="10" min="3" max="120">
+        </div>
+        <div class="setting-hint">동시 2개 이상: 각 탭에 전송 간격을 두고 프롬프트 전달</div>
       </div>
 
       <!-- Queue List -->

@@ -69,6 +69,12 @@
       sendResponse({ ok: true, site: 'flow' });
       return;
     }
+    if (msg.type === 'STOP_GENERATION') {
+      isProcessing = false;
+      imageSettingsApplied = false;  // 재시작 시 설정 다시 적용
+      sendResponse({ ok: true });
+      return;
+    }
   });
 
   // ─── Listen for API results from inject.js ───
@@ -97,6 +103,9 @@
       const { prompt, mediaType, sourceImageDataUrl, settings } = msg;
       const mode = settings?._mode || 'image-video';
       console.log(LOG_PREFIX, 'Mode:', mode, '| Prompt:', prompt.substring(0, 60));
+
+      // Step 0: 메인 페이지면 새 프로젝트로 이동
+      await ensureProjectPage();
 
       // Step 1: Switch to correct mode (이미지 만들기 / 텍스트 동영상 변환 / 프레임 동영상 변환)
       await switchMode(mode);
@@ -181,6 +190,66 @@
     } finally {
       isProcessing = false;
     }
+  }
+
+  // ─── Ensure we're on a project page (not the main/landing page) ───
+  async function ensureProjectPage() {
+    const url = window.location.href;
+    // 프로젝트 페이지: /flow/project/ 포함
+    if (url.includes('/project/')) {
+      console.log(LOG_PREFIX, 'Already on project page');
+      return;
+    }
+
+    console.log(LOG_PREFIX, 'On main page, clicking "새 프로젝트"...');
+
+    // "새 프로젝트" 또는 "+ 새 프로젝트" 버튼 찾기
+    const buttons = document.querySelectorAll('button');
+    let newProjectBtn = null;
+    for (const btn of buttons) {
+      const text = btn.textContent?.trim() || '';
+      if (text.includes('새 프로젝트') || text.includes('New project') ||
+          text.includes('add') && text.includes('프로젝트')) {
+        newProjectBtn = btn;
+        break;
+      }
+    }
+
+    // 아이콘 기반 fallback: add 아이콘 + "프로젝트" 텍스트
+    if (!newProjectBtn) {
+      const links = document.querySelectorAll('a[href*="project"]');
+      if (links.length > 0) {
+        newProjectBtn = links[0];
+      }
+    }
+
+    if (!newProjectBtn) {
+      console.warn(LOG_PREFIX, 'Cannot find "새 프로젝트" button, trying direct navigation');
+      // URL 기반 이동
+      window.location.href = url.replace(/\/flow\/?$/, '/flow/project/new');
+      await delay(3000);
+      // 페이지 로드 대기
+      await waitForElement(() => document.getElementById('PINHOLE_TEXT_AREA_ELEMENT_ID'), 15000);
+      return;
+    }
+
+    MangoDom.simulateClick(newProjectBtn);
+    console.log(LOG_PREFIX, 'Clicked "새 프로젝트" button');
+
+    // 프로젝트 페이지 로드 대기 (프롬프트 입력창이 나타날 때까지)
+    await waitForElement(() => document.getElementById('PINHOLE_TEXT_AREA_ELEMENT_ID'), 15000);
+    await delay(1000);
+    console.log(LOG_PREFIX, 'Project page loaded');
+  }
+
+  async function waitForElement(finder, timeoutMs = 10000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const el = finder();
+      if (el) return el;
+      await delay(500);
+    }
+    return null;
   }
 
   // ─── Mode Switching ───
