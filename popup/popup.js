@@ -665,6 +665,10 @@ async function startAutomation() {
       $('#startBtn').classList.add('hidden');
       $('#stopBtn').classList.remove('hidden');
       $('#pauseBtn').classList.remove('hidden');
+      // Reset completion flags and restart polling
+      _completionLogged = false;
+      _authExpiredLogged = false;
+      startStatePolling();
     }
   } catch (err) {
     addLog('시작 실패: ' + err.message, 'error');
@@ -769,12 +773,21 @@ function updateUI(state) {
     updateQueueListFromState(state);
   }
 
-  if (isCompleted && state.totalCount > 0) {
+  if (isCompleted && state.totalCount > 0 && !_completionLogged) {
+    _completionLogged = true;
     addLog(`완료! 성공 ${state.completedCount}개, 실패 ${state.failedCount}개`, 'success');
+    stopStatePolling();
   }
 
-  if (state.authExpired) {
+  if (state.authExpired && !_authExpiredLogged) {
+    _authExpiredLogged = true;
     addLog('MangoHub 세션 만료. 다시 로그인 후 재개해주세요.', 'error');
+  }
+
+  // 작업 시작되면 플래그 리셋
+  if (isRunning && !isPaused) {
+    _completionLogged = false;
+    _authExpiredLogged = false;
   }
 }
 
@@ -814,6 +827,8 @@ function updateQueueListFromState(state) {
 
 // ─── State polling (1초마다 background에서 상태 가져오기) ───
 let _pollTimer = null;
+let _completionLogged = false;
+let _authExpiredLogged = false;
 
 function startStatePolling() {
   if (_pollTimer) return;
@@ -823,6 +838,13 @@ function startStatePolling() {
       if (state && !state.error) updateUI(state);
     } catch { /* background not ready */ }
   }, 1000);
+}
+
+function stopStatePolling() {
+  if (_pollTimer) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
 }
 
 // LOG 메시지는 여전히 실시간으로 받기
