@@ -275,6 +275,25 @@ function bindEvents() {
       addLog('재시도할 실패 항목이 없습니다', 'info');
     }
   });
+  $('#retrySelectedBtn').addEventListener('click', async () => {
+    const checks = $$('.queue-check:checked');
+    const indices = [...checks].map(cb => parseInt(cb.dataset.index));
+    if (indices.length === 0) {
+      addLog('재생성할 항목을 선택해주세요', 'error');
+      return;
+    }
+    // 체크박스 제거
+    $$('.queue-check').forEach(cb => cb.remove());
+    _completionLogged = false;
+    _authExpiredLogged = false;
+    startStatePolling();
+    const result = await sendBg({ type: 'RETRY_SELECTED', indices });
+    if (result?.error) {
+      addLog(result.error, 'error');
+    } else if (result?.count > 0) {
+      addLog(`선택 ${result.count}개 항목 재생성 시작`, 'success');
+    }
+  });
 
   // Save settings
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
@@ -739,6 +758,7 @@ function updateUI(state) {
   $('#stopBtn').classList.toggle('hidden', !isRunning);
   const hasFailed = isCompleted && state.failedCount > 0;
   $('#retryFailedBtn').classList.toggle('hidden', !hasFailed);
+  $('#retrySelectedBtn').classList.toggle('hidden', !isCompleted || state.totalCount === 0);
   $('#downloadAllBtn').classList.toggle('hidden', !isCompleted);
 
   // Progress
@@ -796,6 +816,8 @@ function updateQueueListFromState(state) {
   const items = $('#queueList').querySelectorAll('.queue-item');
   if (!state.results) return;
 
+  const isCompleted = state.state === 'COMPLETED';
+
   // 결과 맵 빌드 (index → success)
   const doneMap = new Map();
   for (const r of state.results) {
@@ -822,6 +844,15 @@ function updateQueueListFromState(state) {
       // 대기
       statusEl.textContent = '대기';
       statusEl.className = 'queue-status qs-pending';
+    }
+
+    // 완료 상태에서 체크박스 표시
+    if (isCompleted && !item.querySelector('.queue-check')) {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'queue-check';
+      cb.dataset.index = i;
+      item.insertBefore(cb, item.firstChild);
     }
   });
 }

@@ -151,6 +151,9 @@ async function handleMessage(msg, sender) {
     case 'RETRY_FAILED':
       return await retryFailed();
 
+    case 'RETRY_SELECTED':
+      return await retrySelected(msg.indices);
+
     // ── File Injection (MAIN world) ──
     case 'INJECT_GROK_FILE':
       return await injectFileToGrok(msg, sender);
@@ -1150,6 +1153,71 @@ async function retryFailed() {
   runLoop();
 
   return { ok: true, count: failedItems.length };
+}
+
+// ─── Retry selected items (user-picked indices) ───
+async function retrySelected(indices) {
+  if (!Array.isArray(indices) || indices.length === 0) return { error: '선택된 항목이 없습니다' };
+
+  // Map indices back to original queue items
+  const selectedItems = [];
+  for (const idx of indices) {
+    const originalItem = sm.queue[idx];
+    if (originalItem) {
+      selectedItems.push({ ...originalItem, _originalIndex: idx });
+    }
+  }
+
+  if (selectedItems.length === 0) return { error: '유효한 항목이 없습니다' };
+
+  // Store previous config
+  const prevConfig = sm._config;
+  const prevCooldownMin = sm._cooldownMin;
+  const prevCooldownMax = sm._cooldownMax;
+  const prevPlatform = sm.platform;
+  const prevMediaType = sm.mediaType;
+  const prevMode = sm.mode;
+  const prevProjectId = sm.projectId;
+
+  // Keep results for non-selected items, remove selected ones (they'll be regenerated)
+  const selectedSet = new Set(indices);
+  const keptResults = sm.results.filter(r => !selectedSet.has(r.index));
+
+  // Re-init state machine with selected items
+  const avgCooldown = Math.round((prevCooldownMin + prevCooldownMax) / 2);
+  sm.init({
+    queue: selectedItems,
+    mode: prevMode,
+    platform: prevPlatform,
+    mediaType: prevMediaType,
+    projectId: prevProjectId,
+    cooldownMs: avgCooldown
+  });
+
+  // Restore config and kept results
+  sm._config = prevConfig;
+  sm._cooldownMin = prevCooldownMin;
+  sm._cooldownMax = prevCooldownMax;
+  sm.results = keptResults;
+
+  // Use original indices for filename generation
+  sm._useOriginalIndex = true;
+
+  activeTasks.clear();
+  pendingCompletions = 0;
+  concurrentCount = automationSettings?.general?.concurrentCount || 1;
+  promptDelay = (automationSettings?.general?.promptDelay || 40) * 1000;
+  sm.maxRetries = automationSettings?.general?.maxRetries || 3;
+
+  sm.start();
+
+  await ensureTargetTabs(prevPlatform, concurrentCount);
+  await MangoUtils.sleep(2000);
+
+  broadcastLog(`선택 ${selectedItems.length}개 항목 재생성 시작`, 'info');
+  runLoop();
+
+  return { ok: true, count: selectedItems.length };
 }
 
 // ─── Download all results ───

@@ -441,6 +441,14 @@ input[type="checkbox"] {
 
 .queue-item:last-child { border-bottom: none; }
 
+.queue-check {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #f39c12;
+}
+
 .queue-idx {
   color: #666;
   min-width: 28px;
