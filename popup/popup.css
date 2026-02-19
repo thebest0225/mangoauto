@@ -669,6 +669,109 @@ select option {
   opacity: 0.85;
 }
 
+/* ─── Review Tab ─── */
+.review-badge {
+  background: #e74c3c;
+  color: #fff;
+  font-size: 8px;
+  padding: 1px 4px;
+  border-radius: 8px;
+  margin-left: 3px;
+  min-width: 14px;
+  text-align: center;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.review-controls {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.review-summary {
+  font-size: 10px;
+  color: #888;
+  padding: 4px 0;
+}
+
+.review-list {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+
+.review-item {
+  background: #16213e;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 6px;
+  border: 1px solid #2a2a4a;
+}
+
+.review-item[data-status="approved"] { border-left: 3px solid #27ae60; }
+.review-item[data-status="rejected"] { border-left: 3px solid #e74c3c; opacity: 0.6; }
+.review-item[data-status="uploaded"] { border-left: 3px solid #3498db; opacity: 0.5; }
+.review-item[data-status="uploading"] { border-left: 3px solid #f39c12; }
+.review-item[data-status="error"] { border-left: 3px solid #e74c3c; }
+
+.review-item-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  font-size: 10px;
+}
+
+.review-idx { color: #666; font-weight: 700; min-width: 30px; }
+.review-prompt { flex: 1; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.review-status-badge { font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.rs-pending { background: #555; color: #ddd; }
+.rs-approved { background: #27ae60; color: #fff; }
+.rs-rejected { background: #e74c3c; color: #fff; }
+.rs-uploading { background: #f39c12; color: #1a1a2e; }
+.rs-uploaded { background: #3498db; color: #fff; }
+.rs-error { background: #e74c3c; color: #fff; }
+
+.review-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.review-col { text-align: center; }
+.review-col-label { font-size: 9px; color: #666; margin-bottom: 2px; }
+.review-media {
+  width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #0f0f23;
+}
+
+.review-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.review-error {
+  font-size: 9px;
+  color: #e74c3c;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-expired {
+  color: #e74c3c;
+  font-size: 9px;
+  padding: 8px;
+  text-align: center;
+}
+
 /* ─── Scrollbar ─── */
 ::-webkit-scrollbar {
   width: 4px;

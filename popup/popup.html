@@ -39,6 +39,7 @@
     <!-- Main Tabs -->
     <div class="main-tabs">
       <button class="mtab active" data-tab="workspace">작업공간</button>
+      <button class="mtab" data-tab="review">검토 <span id="reviewBadge" class="review-badge hidden">0</span></button>
       <button class="mtab" data-tab="settings">설정</button>
     </div>
 
@@ -179,6 +180,37 @@
         <div class="label">로그</div>
         <div id="logContainer" class="log-container"></div>
       </div>
+    </div>
+
+    <!-- ═══════ REVIEW TAB ═══════ -->
+    <div id="reviewPanel" class="tab-panel hidden">
+
+      <!-- Review Mode Toggle -->
+      <div class="section">
+        <div class="setting-row">
+          <label class="check-label">
+            <input type="checkbox" id="reviewModeToggle">
+            검토 모드 (업로드 전 검토)
+          </label>
+        </div>
+        <div class="setting-hint">활성화하면 생성된 미디어를 즉시 업로드하지 않고 검토 후 승인합니다</div>
+      </div>
+
+      <!-- Batch Controls -->
+      <div class="review-controls section">
+        <button id="approveAllBtn" class="btn btn-sm btn-primary">전체 승인</button>
+        <button id="rejectAllBtn" class="btn btn-sm btn-danger">전체 거부</button>
+        <button id="uploadApprovedBtn" class="btn btn-sm btn-accent">승인 항목 업로드</button>
+        <button id="clearCompletedBtn" class="btn btn-sm">완료 항목 정리</button>
+      </div>
+
+      <!-- Review Summary -->
+      <div class="review-summary section">
+        <span id="reviewSummary">대기 0 | 승인 0 | 거부 0 | 업로드 0</span>
+      </div>
+
+      <!-- Review Items List -->
+      <div id="reviewList" class="review-list"></div>
     </div>
 
     <!-- ═══════ SETTINGS TAB ═══════ -->

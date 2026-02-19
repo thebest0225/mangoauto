@@ -12,6 +12,7 @@ let currentMode = 'text-image';  // text-image | text-video | image-video | imag
 let currentProject = null;
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
+let reviewItems = [];
 
 // ─── Supported URL patterns ───
 const SUPPORTED_PATTERNS = [
@@ -35,6 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   await checkAuth();
   await refreshState();
+  await loadReviewMode();
   bindEvents();
 });
 
@@ -140,14 +142,16 @@ function bindEvents() {
     });
   });
 
-  // Main tabs (workspace / settings)
+  // Main tabs (workspace / review / settings)
   $$('.mtab').forEach(tab => {
     tab.addEventListener('click', () => {
       $$('.mtab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
-      const isWorkspace = tab.dataset.tab === 'workspace';
-      $('#workspacePanel').classList.toggle('hidden', !isWorkspace);
-      $('#settingsPanel').classList.toggle('hidden', isWorkspace);
+      const target = tab.dataset.tab;
+      $('#workspacePanel').classList.toggle('hidden', target !== 'workspace');
+      $('#reviewPanel').classList.toggle('hidden', target !== 'review');
+      $('#settingsPanel').classList.toggle('hidden', target !== 'settings');
+      if (target === 'review') loadReviewQueue();
     });
   });
 
@@ -255,6 +259,38 @@ function bindEvents() {
 
   // Save settings
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
+
+  // ── Review tab events ──
+  $('#reviewModeToggle').addEventListener('change', async (e) => {
+    await sendBg({ type: 'SET_REVIEW_MODE', enabled: e.target.checked });
+    addLog(e.target.checked ? '검토 모드 활성화' : '검토 모드 비활성화', 'info');
+  });
+
+  $('#approveAllBtn').addEventListener('click', async () => {
+    const result = await sendBg({ type: 'REVIEW_APPROVE_ALL' });
+    if (result?.count > 0) addLog(`${result.count}개 전체 승인`, 'success');
+    await loadReviewQueue();
+  });
+
+  $('#rejectAllBtn').addEventListener('click', async () => {
+    if (!confirm('모든 대기 항목을 거부하시겠습니까?')) return;
+    const result = await sendBg({ type: 'REVIEW_REJECT_ALL' });
+    if (result?.count > 0) addLog(`${result.count}개 전체 거부`, 'info');
+    await loadReviewQueue();
+  });
+
+  $('#uploadApprovedBtn').addEventListener('click', async () => {
+    const result = await sendBg({ type: 'REVIEW_UPLOAD_APPROVED' });
+    addLog(`승인 항목 업로드 시작 (${result?.count || 0}개)`, 'info');
+    // Reload after a short delay to show uploading status
+    setTimeout(() => loadReviewQueue(), 1000);
+  });
+
+  $('#clearCompletedBtn').addEventListener('click', async () => {
+    await sendBg({ type: 'REVIEW_CLEAR_COMPLETED' });
+    await loadReviewQueue();
+    addLog('완료 항목 정리됨', 'info');
+  });
 }
 
 // ─── Mode UI Update ───
@@ -707,6 +743,19 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'STATE_UPDATE') {
     updateUI(msg.data);
   }
+  // 검토 실시간 업데이트
+  if (msg.type === 'REVIEW_ITEM_ADDED') {
+    reviewItems.push(msg.item);
+    renderReviewList();
+  }
+  if (msg.type === 'REVIEW_ITEM_UPDATED') {
+    const item = reviewItems.find(i => i.id === msg.id);
+    if (item) {
+      item.status = msg.status;
+      if (msg.error) item.error = msg.error;
+      renderReviewList();
+    }
+  }
 });
 
 async function refreshState() {
@@ -864,3 +913,128 @@ $('#promptsInput')?.addEventListener('input', () => {
 });
 
 $('#skipCompleted')?.addEventListener('change', updateQueuePreview);
+
+// ─── Review Functions ───
+async function loadReviewMode() {
+  try {
+    const result = await sendBg({ type: 'GET_REVIEW_MODE' });
+    if (result?.enabled) {
+      $('#reviewModeToggle').checked = true;
+    }
+  } catch {}
+}
+
+async function loadReviewQueue() {
+  try {
+    reviewItems = await sendBg({ type: 'GET_REVIEW_QUEUE' }) || [];
+  } catch {
+    reviewItems = [];
+  }
+  renderReviewList();
+}
+
+function renderReviewList() {
+  const list = $('#reviewList');
+  list.innerHTML = '';
+
+  // Update badge
+  const pendingCount = reviewItems.filter(i => i.status === 'pending').length;
+  const badge = $('#reviewBadge');
+  if (pendingCount > 0) {
+    badge.textContent = pendingCount;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+
+  // Update summary
+  const counts = { pending: 0, approved: 0, rejected: 0, uploaded: 0, uploading: 0, error: 0 };
+  reviewItems.forEach(i => { counts[i.status] = (counts[i.status] || 0) + 1; });
+  $('#reviewSummary').textContent =
+    `대기 ${counts.pending} | 승인 ${counts.approved} | 거부 ${counts.rejected} | 업로드 ${counts.uploaded}` +
+    (counts.error > 0 ? ` | 오류 ${counts.error}` : '');
+
+  if (reviewItems.length === 0) {
+    list.innerHTML = '<div style="text-align:center;color:#555;padding:20px;font-size:11px;">검토 항목이 없습니다</div>';
+    return;
+  }
+
+  // Render items (newest first)
+  const sorted = [...reviewItems].reverse();
+  for (const item of sorted) {
+    const div = document.createElement('div');
+    div.className = 'review-item';
+    div.dataset.id = item.id;
+    div.dataset.status = item.status;
+
+    const statusLabels = {
+      pending: '대기', approved: '승인', rejected: '거부',
+      uploading: '업로드중', uploaded: '완료', error: '오류'
+    };
+
+    // Original image column
+    let originalHtml = '';
+    if (item.originalImageUrl) {
+      const resolvedUrl = item.originalImageUrl.startsWith('http')
+        ? item.originalImageUrl
+        : MANGOHUB_BASE + item.originalImageUrl;
+      originalHtml = `<div class="review-col">
+        <div class="review-col-label">원본</div>
+        <img class="review-media" src="${escapeHtml(resolvedUrl)}" onerror="this.style.display='none'">
+      </div>`;
+    }
+
+    // Generated media column
+    const mediaSrc = item.mediaUrl || item.mediaDataUrl || '';
+    let mediaHtml;
+    if (item.mediaType === 'video') {
+      mediaHtml = `<video class="review-media" src="${escapeHtml(mediaSrc)}" controls muted preload="metadata"
+        onerror="this.outerHTML='<div class=\\'review-expired\\'>미디어 만료됨</div>'"></video>`;
+    } else {
+      mediaHtml = `<img class="review-media" src="${escapeHtml(mediaSrc)}"
+        onerror="this.outerHTML='<div class=\\'review-expired\\'>미디어 만료됨</div>'">`;
+    }
+
+    // Actions
+    let actionsHtml = '';
+    if (item.status === 'pending') {
+      actionsHtml = `<button class="btn btn-sm btn-primary review-approve-btn" data-id="${item.id}">승인</button>
+         <button class="btn btn-sm btn-danger review-reject-btn" data-id="${item.id}">거부</button>`;
+    } else if (item.status === 'error') {
+      actionsHtml = `<button class="btn btn-sm btn-primary review-approve-btn" data-id="${item.id}">재시도</button>
+         <span class="review-error">${escapeHtml(item.error || '')}</span>`;
+    }
+
+    div.innerHTML = `
+      <div class="review-item-header">
+        <span class="review-idx">#${String((item.segmentIndex || 0) + 1).padStart(3, '0')}</span>
+        <span class="review-prompt">${escapeHtml(item.text || item.prompt || '')}</span>
+        <span class="review-status-badge rs-${item.status}">${statusLabels[item.status] || item.status}</span>
+      </div>
+      <div class="review-comparison" ${!originalHtml ? 'style="grid-template-columns:1fr"' : ''}>
+        ${originalHtml}
+        <div class="review-col">
+          <div class="review-col-label">생성결과</div>
+          ${mediaHtml}
+        </div>
+      </div>
+      ${actionsHtml ? `<div class="review-actions">${actionsHtml}</div>` : ''}
+    `;
+
+    list.appendChild(div);
+  }
+
+  // Bind per-item buttons
+  list.querySelectorAll('.review-approve-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await sendBg({ type: 'REVIEW_APPROVE', id: btn.dataset.id });
+      await loadReviewQueue();
+    });
+  });
+  list.querySelectorAll('.review-reject-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await sendBg({ type: 'REVIEW_REJECT', id: btn.dataset.id });
+      await loadReviewQueue();
+    });
+  });
+}

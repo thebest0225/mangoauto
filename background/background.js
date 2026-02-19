@@ -9,6 +9,12 @@ const sm = new AutomationStateMachine();
 let activeTabIds = [];      // Multiple tabs for concurrent processing
 let automationSettings = {};
 let allResults = [];        // { index, success, dataUrl?, filename? }
+let reviewModeEnabled = false;
+
+// Restore review mode on startup
+chrome.storage.local.get('mangoauto_review_mode').then(data => {
+  reviewModeEnabled = data.mangoauto_review_mode || false;
+});
 
 // Clear any old corrupted storage data (prevents QuotaExceededError)
 chrome.storage.local.remove('mangoauto_state').catch(() => {});
@@ -127,6 +133,39 @@ async function handleMessage(msg, sender) {
     case 'GENERATION_ERROR':
       await handleGenerationError(msg, sender);
       return { ok: true };
+
+    // ── Review Queue ──
+    case 'SET_REVIEW_MODE':
+      reviewModeEnabled = msg.enabled;
+      await chrome.storage.local.set({ mangoauto_review_mode: msg.enabled });
+      return { ok: true };
+
+    case 'GET_REVIEW_MODE': {
+      const stored = await chrome.storage.local.get('mangoauto_review_mode');
+      reviewModeEnabled = stored.mangoauto_review_mode || false;
+      return { enabled: reviewModeEnabled };
+    }
+
+    case 'GET_REVIEW_QUEUE':
+      return await getReviewQueue();
+
+    case 'REVIEW_APPROVE':
+      return await updateReviewItemStatus(msg.id, 'approved');
+
+    case 'REVIEW_REJECT':
+      return await updateReviewItemStatus(msg.id, 'rejected');
+
+    case 'REVIEW_APPROVE_ALL':
+      return await bulkUpdateReviewStatus('pending', 'approved');
+
+    case 'REVIEW_REJECT_ALL':
+      return await bulkUpdateReviewStatus('pending', 'rejected');
+
+    case 'REVIEW_UPLOAD_APPROVED':
+      return await uploadApprovedItems();
+
+    case 'REVIEW_CLEAR_COMPLETED':
+      return await clearCompletedReviewItems();
 
     default:
       return { error: 'Unknown message type: ' + msg.type };
@@ -622,33 +661,57 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   const filename = generateFilename(sm.currentIndex, sm.platform, sm.mediaType);
 
   if (sm.mode === 'mangohub' && sm.projectId) {
-    sm.markUploading();
-    try {
-      let blob;
-      if (mediaDataUrl) {
-        // 기존 방식: data URL → blob
-        blob = await fetch(mediaDataUrl).then(r => r.blob());
-      } else if (mediaUrl) {
-        // 새 방식: HTTP URL → cookie 포함 fetch → blob
-        blob = await fetchMediaWithCookies(mediaUrl);
-      } else {
-        throw new Error('No media data available');
+    if (reviewModeEnabled) {
+      // 검토 모드: 즉시 업로드하지 않고 검토 큐에 추가
+      const reviewItem = {
+        id: MangoUtils.generateId(),
+        segmentIndex: item.segmentIndex,
+        projectId: sm.projectId,
+        projectName: sm._config?.projectName || sm._config?.projectId || sm.projectId,
+        platform: sm.platform,
+        mediaType: sm.mediaType,
+        prompt: item.prompt,
+        text: item.text,
+        mediaUrl: mediaUrl || null,
+        mediaDataUrl: (sm.mediaType === 'image' && mediaDataUrl) ? mediaDataUrl : null,
+        originalImageUrl: item.sourceImageUrl || null,
+        status: 'pending',
+        error: null,
+        createdAt: Date.now(),
+        reviewedAt: null,
+        uploadedAt: null
+      };
+      await addReviewItem(reviewItem);
+      sm.markSuccess({ segmentIndex: item.segmentIndex, review: true });
+      broadcastLog(`검토 대기열 추가: ${filename}`, 'info');
+    } else {
+      // 기존 동작: 즉시 업로드
+      sm.markUploading();
+      try {
+        let blob;
+        if (mediaDataUrl) {
+          blob = await fetch(mediaDataUrl).then(r => r.blob());
+        } else if (mediaUrl) {
+          blob = await fetchMediaWithCookies(mediaUrl);
+        } else {
+          throw new Error('No media data available');
+        }
+        if (sm.mediaType === 'video') {
+          await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
+        } else {
+          await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
+        }
+        sm.markSuccess({ segmentIndex: item.segmentIndex });
+        broadcastLog(`업로드 완료: ${filename}`, 'success');
+      } catch (err) {
+        if (err.message === 'AUTH_EXPIRED') {
+          sm.pause();
+          broadcastState({ ...sm.getSnapshot(), authExpired: true });
+          return;
+        }
+        sm.markError(err);
+        broadcastLog(`업로드 실패: ${err.message}`, 'error');
       }
-      if (sm.mediaType === 'video') {
-        await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
-      } else {
-        await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
-      }
-      sm.markSuccess({ segmentIndex: item.segmentIndex });
-      broadcastLog(`업로드 완료: ${filename}`, 'success');
-    } catch (err) {
-      if (err.message === 'AUTH_EXPIRED') {
-        sm.pause();
-        broadcastState({ ...sm.getSnapshot(), authExpired: true });
-        return;
-      }
-      sm.markError(err);
-      broadcastLog(`업로드 실패: ${err.message}`, 'error');
     }
   } else {
     // Standalone - download locally via chrome.downloads (브라우저 쿠키 자동 포함)
@@ -702,28 +765,54 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
 
   if (success && (mediaDataUrl || mediaUrl)) {
     if (sm.mode === 'mangohub' && sm.projectId) {
-      try {
-        let blob;
-        if (mediaDataUrl) {
-          blob = await fetch(mediaDataUrl).then(r => r.blob());
-        } else if (mediaUrl) {
-          blob = await fetchMediaWithCookies(mediaUrl);
+      if (reviewModeEnabled) {
+        // 검토 모드: 즉시 업로드하지 않고 검토 큐에 추가
+        const reviewItem = {
+          id: MangoUtils.generateId(),
+          segmentIndex: item.segmentIndex,
+          projectId: sm.projectId,
+          projectName: sm._config?.projectName || sm._config?.projectId || sm.projectId,
+          platform: sm.platform,
+          mediaType: sm.mediaType,
+          prompt: item.prompt,
+          text: item.text,
+          mediaUrl: mediaUrl || null,
+          mediaDataUrl: (sm.mediaType === 'image' && mediaDataUrl) ? mediaDataUrl : null,
+          originalImageUrl: item.sourceImageUrl || null,
+          status: 'pending',
+          error: null,
+          createdAt: Date.now(),
+          reviewedAt: null,
+          uploadedAt: null
+        };
+        await addReviewItem(reviewItem);
+        broadcastLog(`검토 대기열 추가: ${filename}`, 'info');
+        sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex, review: true });
+      } else {
+        // 기존 동작: 즉시 업로드
+        try {
+          let blob;
+          if (mediaDataUrl) {
+            blob = await fetch(mediaDataUrl).then(r => r.blob());
+          } else if (mediaUrl) {
+            blob = await fetchMediaWithCookies(mediaUrl);
+          }
+          if (sm.mediaType === 'video') {
+            await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
+          } else {
+            await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
+          }
+          broadcastLog(`업로드 완료: ${filename}`, 'success');
+          sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex });
+        } catch (err) {
+          if (err.message === 'AUTH_EXPIRED') {
+            sm.pause();
+            broadcastState({ ...sm.getSnapshot(), authExpired: true });
+            return;
+          }
+          broadcastLog(`업로드 실패: ${err.message}`, 'error');
+          sm.results.push({ success: false, index: itemIndex, error: err.message });
         }
-        if (sm.mediaType === 'video') {
-          await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
-        } else {
-          await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
-        }
-        broadcastLog(`업로드 완료: ${filename}`, 'success');
-        sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex });
-      } catch (err) {
-        if (err.message === 'AUTH_EXPIRED') {
-          sm.pause();
-          broadcastState({ ...sm.getSnapshot(), authExpired: true });
-          return;
-        }
-        broadcastLog(`업로드 실패: ${err.message}`, 'error');
-        sm.results.push({ success: false, index: itemIndex, error: err.message });
       }
     } else {
       try {
@@ -1141,6 +1230,113 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     });
   }
 });
+
+// ─── Review Queue Management ───
+
+async function getReviewQueue() {
+  const data = await chrome.storage.local.get('mangoauto_review_queue');
+  return data.mangoauto_review_queue || [];
+}
+
+async function addReviewItem(item) {
+  const queue = await getReviewQueue();
+  queue.push(item);
+  await chrome.storage.local.set({ mangoauto_review_queue: queue });
+  try {
+    chrome.runtime.sendMessage({ type: 'REVIEW_ITEM_ADDED', item }).catch(() => {});
+  } catch (e) { /* popup not open */ }
+}
+
+async function updateReviewItemStatus(id, status, error = null) {
+  const queue = await getReviewQueue();
+  const item = queue.find(i => i.id === id);
+  if (!item) return { error: 'Item not found' };
+  item.status = status;
+  item.reviewedAt = Date.now();
+  if (error) item.error = error;
+  await chrome.storage.local.set({ mangoauto_review_queue: queue });
+  try {
+    chrome.runtime.sendMessage({ type: 'REVIEW_ITEM_UPDATED', id, status, error }).catch(() => {});
+  } catch (e) {}
+  return { ok: true };
+}
+
+async function bulkUpdateReviewStatus(fromStatus, toStatus) {
+  const queue = await getReviewQueue();
+  let count = 0;
+  for (const item of queue) {
+    if (item.status === fromStatus) {
+      item.status = toStatus;
+      item.reviewedAt = Date.now();
+      count++;
+    }
+  }
+  await chrome.storage.local.set({ mangoauto_review_queue: queue });
+  return { ok: true, count };
+}
+
+async function uploadApprovedItems() {
+  const queue = await getReviewQueue();
+  const approved = queue.filter(i => i.status === 'approved');
+  if (approved.length === 0) return { ok: true, count: 0 };
+
+  let uploaded = 0;
+  for (const item of approved) {
+    item.status = 'uploading';
+    await chrome.storage.local.set({ mangoauto_review_queue: queue });
+    try {
+      chrome.runtime.sendMessage({ type: 'REVIEW_ITEM_UPDATED', id: item.id, status: 'uploading' }).catch(() => {});
+    } catch (e) {}
+
+    try {
+      let blob;
+      if (item.mediaDataUrl) {
+        blob = await fetch(item.mediaDataUrl).then(r => r.blob());
+      } else if (item.mediaUrl) {
+        blob = await fetchMediaWithCookies(item.mediaUrl);
+      } else {
+        throw new Error('미디어 데이터 없음');
+      }
+
+      const filename = `${String(item.segmentIndex + 1).padStart(3, '0')}_review_${Date.now()}.${item.mediaType === 'video' ? 'mp4' : 'png'}`;
+      if (item.mediaType === 'video') {
+        await MangoHubAPI.uploadVideo(item.projectId, item.segmentIndex, blob, filename);
+      } else {
+        await MangoHubAPI.uploadImage(item.projectId, item.segmentIndex, blob, filename);
+      }
+
+      item.status = 'uploaded';
+      item.uploadedAt = Date.now();
+      uploaded++;
+      broadcastLog(`검토 업로드 완료: 세그먼트 ${item.segmentIndex + 1}`, 'success');
+    } catch (err) {
+      if (err.message === 'AUTH_EXPIRED') {
+        item.status = 'error';
+        item.error = '세션 만료. 다시 로그인 후 재시도하세요.';
+        await chrome.storage.local.set({ mangoauto_review_queue: queue });
+        broadcastLog('MangoHub 세션 만료', 'error');
+        break;
+      }
+      item.status = 'error';
+      item.error = err.message;
+      broadcastLog(`검토 업로드 실패 [${item.segmentIndex + 1}]: ${err.message}`, 'error');
+    }
+
+    await chrome.storage.local.set({ mangoauto_review_queue: queue });
+    try {
+      chrome.runtime.sendMessage({ type: 'REVIEW_ITEM_UPDATED', id: item.id, status: item.status, error: item.error }).catch(() => {});
+    } catch (e) {}
+  }
+
+  return { ok: true, count: uploaded };
+}
+
+async function clearCompletedReviewItems() {
+  const queue = await getReviewQueue();
+  const remaining = queue.filter(i => !['uploaded', 'rejected'].includes(i.status));
+  await chrome.storage.local.set({ mangoauto_review_queue: remaining });
+  return { ok: true };
+}
 
 // ─── Service worker initialized ───
 console.log('[MangoAuto] Background service worker started');
