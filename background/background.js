@@ -97,6 +97,12 @@ async function handleMessage(msg, sender) {
       allResults = [];
       activeTasks.clear();
       pendingCompletions = 0;
+      // Content script에 중지 신호 전송 (진행 중인 작업 취소)
+      for (const tabId of activeTabIds) {
+        try {
+          chrome.tabs.sendMessage(tabId, { type: 'STOP_GENERATION' }).catch(() => {});
+        } catch (e) { /* tab may not exist */ }
+      }
       return { ok: true };
 
     case 'GET_STATE':
@@ -620,6 +626,12 @@ async function sendToTab(tabId, msg) {
 
 // ─── Handle generation complete ───
 async function handleGenerationComplete(msg, sender) {
+  // 중지 후 도착한 완료 메시지 무시
+  if (sm.state === AutoState.IDLE) {
+    MangoUtils.log('info', 'Ignoring GENERATION_COMPLETE (automation stopped)');
+    return;
+  }
+
   const { mediaDataUrl, mediaUrl } = msg;
   const senderTabId = sender?.tab?.id;
 
@@ -634,6 +646,12 @@ async function handleGenerationComplete(msg, sender) {
 
 // ─── Handle generation error from content script ───
 async function handleGenerationError(msg, sender) {
+  // 중지 후 도착한 에러 메시지 무시
+  if (sm.state === AutoState.IDLE) {
+    MangoUtils.log('info', 'Ignoring GENERATION_ERROR (automation stopped)');
+    return;
+  }
+
   const senderTabId = sender?.tab?.id;
 
   if (concurrentCount > 1 && activeTasks.size > 0) {

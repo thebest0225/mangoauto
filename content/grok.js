@@ -19,6 +19,8 @@
 (() => {
   const LOG_PREFIX = '[MangoAuto:Grok]';
   let isProcessing = false;
+  let shouldStop = false;
+  let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
   // ─── Visual Debug Toast (화면에 직접 보이는 디버그) ───
   function showToast(message, type = 'info') {
@@ -63,6 +65,14 @@
 
       return false; // Already sent response synchronously
     }
+    if (msg.type === 'STOP_GENERATION') {
+      shouldStop = true;
+      isProcessing = false;
+      videoSettingsApplied = false;
+      showToast('중지 명령 수신', 'warn');
+      sendResponse({ ok: true });
+      return false;
+    }
     if (msg.type === 'PING') {
       sendResponse({ ok: true, site: 'grok' });
       return false;
@@ -84,6 +94,7 @@
       }
     }
     isProcessing = true;
+    shouldStop = false; // 새 작업 시작 시 중지 플래그 리셋
     showToast('handleExecutePrompt 시작', 'info');
 
     try {
@@ -105,25 +116,32 @@
         // Step 1: 메인 페이지 확인
         showToast('Step 1: 메인 페이지 확인...', 'info');
         await ensureMainPage();
+        checkStopped();
 
-        // Step 2: 이미지 첨부 (드래그 → 자동으로 결과 페이지로 이동)
-        showToast('Step 2: 이미지 첨부 중...', 'info');
+        // Step 2: 비디오 설정 적용 (메인 페이지에서 - 참고자료 방식)
+        if (!videoSettingsApplied) {
+          showToast('Step 2: 비디오 설정 적용 (메인 페이지)...', 'info');
+          await applySettingsOnMainPage(settings);
+          videoSettingsApplied = true;
+          await delay(500);
+          checkStopped();
+        }
+
+        // Step 3: 이미지 첨부 (드래그 → 자동으로 결과 페이지로 이동)
+        showToast('Step 3: 이미지 첨부 중...', 'info');
         const attached = await attachImage(sourceImageDataUrl);
         if (!attached) throw new Error('이미지 첨부 실패');
         showToast('이미지 첨부 완료!', 'success');
+        checkStopped();
 
-        // Step 3: 결과 페이지로 자동 이동 대기
-        showToast('Step 3: 결과 페이지 대기...', 'info');
+        // Step 4: 결과 페이지로 자동 이동 대기
+        showToast('Step 4: 결과 페이지 대기...', 'info');
         await waitForResultPage(timeoutMs);
         await delay(3000);
+        checkStopped();
 
-        // Step 4: 검열 확인
+        // Step 5: 검열 확인
         if (isModerated()) throw new ModerationError();
-
-        // Step 5: 비디오 설정 적용 (재생시간, 해상도, 프리셋)
-        showToast('Step 5: 비디오 설정 적용...', 'info');
-        await applyVideoSettings(settings);
-        await delay(500);
 
         // Step 6: 결과 페이지 텍스트필드에 비디오 프롬프트 입력
         if (prompt?.trim()) {
@@ -136,11 +154,13 @@
             showToast('결과 페이지 텍스트필드 없음!', 'warn');
           }
         }
+        checkStopped();
 
         // Step 7: "동영상 만들기" 클릭
         showToast('Step 7: 동영상 만들기 클릭...', 'info');
         const videoCreated = await clickCreateVideo();
         if (!videoCreated) throw new Error('"동영상 만들기" 버튼 클릭 실패');
+        checkStopped();
 
         // Step 8: 비디오 생성 대기
         const videoResult = await waitForVideoReady(timeoutMs);
@@ -152,7 +172,6 @@
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
         showToast(`비디오 URL: ${videoUrl.substring(0, 60)}`, 'success');
-        // 참고자료 방식: URL을 background에 전달 → chrome.downloads.download() 사용
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
           mediaUrl: videoUrl,
@@ -169,6 +188,17 @@
         showToast('=== 텍스트→영상 모드 시작 ===', 'info');
 
         await ensureMainPage();
+        checkStopped();
+
+        // 비디오 설정 적용 (메인 페이지에서 - 참고자료 방식)
+        if (!videoSettingsApplied) {
+          showToast('비디오 설정 적용 (메인 페이지)...', 'info');
+          await applySettingsOnMainPage(settings);
+          videoSettingsApplied = true;
+          await delay(500);
+          checkStopped();
+        }
+
         showToast('프롬프트 입력 중...', 'info');
         await typePrompt(prompt || '');
         await delay(800 + Math.random() * 500);
@@ -178,11 +208,9 @@
 
         await waitForResultPage(timeoutMs);
         await delay(3000);
+        checkStopped();
 
         if (isModerated()) throw new ModerationError();
-
-        await applyVideoSettings(settings);
-        await delay(500);
 
         // 결과 페이지에서 비디오 프롬프트 (필요시)
         const resultTextarea = findResultPageTextarea();
@@ -193,6 +221,7 @@
 
         const videoCreated = await clickCreateVideo();
         if (!videoCreated) throw new Error('"동영상 만들기" 버튼 클릭 실패');
+        checkStopped();
 
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
@@ -253,10 +282,15 @@
       return { ok: true };
     } catch (err) {
       console.error(LOG_PREFIX, 'Error:', err);
-      chrome.runtime.sendMessage({
-        type: 'GENERATION_ERROR',
-        error: err.message
-      });
+      // 사용자 중지 시에는 에러 메시지를 보내지 않음 (무한 루프 방지)
+      if (shouldStop) {
+        showToast('사용자 중지로 인해 작업 종료', 'warn');
+      } else {
+        chrome.runtime.sendMessage({
+          type: 'GENERATION_ERROR',
+          error: err.message
+        });
+      }
 
       // 메인 페이지로 복구 시도
       try {
@@ -281,6 +315,10 @@
 
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function checkStopped() {
+    if (shouldStop) throw new Error('사용자에 의해 중지됨');
   }
 
   // ─── DOM Selectors ───
@@ -402,17 +440,37 @@
     return document.querySelector('textarea');
   }
 
-  // Create video button
+  // Create video button (참고자료 방식: aria-label 우선, text 매칭 fallback)
   function findCreateVideoButton() {
+    // 1. aria-label 기반 (참고자료 방식)
+    let btn = document.querySelector('button[aria-label="동영상 만들기"]');
+    if (btn) return btn;
+
+    // 2. 정확한 텍스트 매칭
     const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      const text = (btn.textContent || '').trim();
+    for (const b of buttons) {
+      const text = (b.textContent || '').trim();
+      if (text === '동영상 만들기' || text === 'Create video') return b;
+    }
+
+    // 3. 부분 매칭 (설정 적용 후 버튼 텍스트가 변경되는 경우 대비)
+    for (const b of buttons) {
+      const text = (b.textContent || '').trim();
       if (text.includes('동영상 만들기') || text.includes('Create video') ||
           text.includes('비디오 만들기') || text.includes('Generate video') ||
           text.includes('영상 만들기') || text.includes('Make video')) {
-        return btn;
+        return b;
       }
     }
+
+    // 4. "동영상"/"video" 키워드와 액션 키워드 조합 매칭
+    for (const b of buttons) {
+      const text = (b.textContent || '').trim().toLowerCase();
+      const hasVideo = text.includes('동영상') || text.includes('비디오') || text.includes('영상') || text.includes('video');
+      const hasAction = text.includes('만들기') || text.includes('생성') || text.includes('create') || text.includes('generate') || text.includes('make');
+      if (hasVideo && hasAction) return b;
+    }
+
     return null;
   }
 
@@ -890,305 +948,145 @@
   }
 
   // ═══════════════════════════════════════════════════
-  // ─── Video Settings (Grok dropdown reopen pattern) ───
+  // ─── Video Settings (메인 페이지 "모델 선택" 방식 - 참고자료) ───
   // ═══════════════════════════════════════════════════
 
   /**
-   * Apply video settings via Grok's video options panel.
-   * Grok shows a single settings panel with all options (duration, resolution, preset).
-   * We open it once, click each desired option, then close.
+   * 메인 페이지에서 "모델 선택" 버튼을 통해 비디오 설정 적용 (참고자료 방식).
+   * 1. "모델 선택" 클릭 → "비디오" 선택 → 재오픈
+   * 2. [role="menu"] 내부의 버튼으로 재생시간/해상도/종횡비 설정
+   * 3. 메뉴 닫기
    */
-  async function applyVideoSettings(settings) {
+  async function applySettingsOnMainPage(settings) {
     const grok = settings?.grok || {};
     const { videoDuration, videoResolution, aspectRatio } = grok;
 
-    if (!videoDuration && !videoResolution && !aspectRatio) {
-      console.log(LOG_PREFIX, 'No video settings to apply');
-      return;
-    }
-
-    console.log(LOG_PREFIX, 'Applying video settings:', {
+    console.log(LOG_PREFIX, 'Applying video settings on main page:', {
       duration: videoDuration, resolution: videoResolution, aspectRatio
     });
 
-    // 설정 패널 열기
-    const opened = await openVideoOptionsDropdown();
-    if (!opened) {
-      showToast('비디오 설정 패널 열기 실패', 'warn');
+    // Step 1: "모델 선택" 버튼 찾기
+    const modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
+                     findButtonByTextExact('모델 선택');
+    if (!modelBtn) {
+      showToast('모델 선택 버튼 없음, 설정 건너뜀', 'warn');
       return;
     }
+
+    // Step 2: 메뉴 열기 → "비디오" 선택
+    MangoDom.simulateClick(modelBtn);
     await delay(500);
 
-    // 패널 내에서 개별 옵션 버튼 클릭
-    // Grok의 설정 패널은 라디오 버튼 스타일의 개별 버튼들로 구성
+    const videoItem = findMenuItemInMenu('비디오');
+    if (videoItem) {
+      MangoDom.simulateClick(videoItem);
+      await delay(300);
+    } else {
+      showToast('"비디오" 메뉴 항목 없음', 'warn');
+    }
+
+    // Step 3: 메뉴 다시 열기 (설정 옵션 표시)
+    MangoDom.simulateClick(modelBtn);
+    await delay(500);
+
+    // Step 4: 재생시간 설정
     if (videoDuration) {
       const durationLabels = [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)];
-      await clickOptionInPanel(durationLabels, 'duration');
-      await delay(300);
+      if (!clickSettingButtonInMenu(durationLabels)) {
+        showToast(`duration 미적용: ${videoDuration}`, 'warn');
+      }
+      await delay(200);
     }
 
+    // Step 5: 해상도 설정
     if (videoResolution) {
       const resLabels = [videoResolution, videoResolution.replace('p', '')];
-      await clickOptionInPanel(resLabels, 'resolution');
-      await delay(300);
+      if (!clickSettingButtonInMenu(resLabels)) {
+        showToast(`resolution 미적용: ${videoResolution}`, 'warn');
+      }
+      await delay(200);
     }
 
+    // Step 6: 종횡비 설정
     if (aspectRatio) {
-      const arLabels = [aspectRatio, '가로', 'Landscape', 'Wide', '세로', 'Portrait', '정사각', 'Square']
-        .filter(l => {
-          if (aspectRatio === '16:9') return ['16:9', '가로', 'Landscape', 'Wide'].includes(l);
-          if (aspectRatio === '9:16') return ['9:16', '세로', 'Portrait'].includes(l);
-          if (aspectRatio === '1:1') return ['1:1', '정사각', 'Square'].includes(l);
-          return l === aspectRatio;
-        });
-      await clickOptionInPanel(arLabels, 'aspect ratio');
-      await delay(300);
-    }
-
-    // 패널 닫기
-    document.body.click();
-    await delay(500);
-  }
-
-  /**
-   * 현재 열린 설정 패널 안에서 옵션 버튼을 찾아 클릭.
-   * 다양한 텍스트 형식에 대응 (예: "720p", "720", "16:9", "가로" 등)
-   */
-  async function clickOptionInPanel(labels, settingName) {
-    // 모든 가능한 클릭 요소
-    const allClickable = document.querySelectorAll(
-      'button, [role="radio"], [role="option"], [role="menuitemradio"], [data-state], ' +
-      '[role="tab"], label, [class*="option"], [class*="chip"], [class*="toggle"], ' +
-      'div[tabindex], span[tabindex]'
-    );
-
-    // 디버그: 패널 내 모든 클릭 가능 요소 텍스트 로그
-    const debugTexts = [];
-    for (const el of allClickable) {
-      const t = (el.textContent || '').trim();
-      if (t && t.length < 30 && t.length > 0) {
-        debugTexts.push(t);
+      const arLabels = [aspectRatio];
+      if (!clickSettingButtonInMenu(arLabels)) {
+        showToast(`aspect ratio 미적용: ${aspectRatio}`, 'warn');
       }
-    }
-    console.log(LOG_PREFIX, `[${settingName}] 클릭 가능 요소: [${debugTexts.join(', ')}]`);
-
-    for (const label of labels) {
-      const labelLower = label.toLowerCase();
-      for (const el of allClickable) {
-        const fullText = (el.textContent || '').trim();
-        if (!fullText || fullText.length > 30) continue;
-
-        const fullLower = fullText.toLowerCase();
-        const directText = getDirectText(el).trim();
-        const directLower = directText.toLowerCase();
-
-        // 1. 정확한 매칭
-        if (fullLower === labelLower || directLower === labelLower) {
-          MangoDom.simulateClick(el);
-          console.log(LOG_PREFIX, `Set ${settingName}: "${label}" (exact: "${fullText}")`);
-          return true;
-        }
-
-        // 2. 짧은 텍스트에서 포함 매칭 (부모 컨테이너 제외, 최대 20자)
-        if (fullText.length <= 20) {
-          if (fullLower.includes(labelLower) || labelLower.includes(fullLower)) {
-            MangoDom.simulateClick(el);
-            console.log(LOG_PREFIX, `Set ${settingName}: "${label}" (partial: "${fullText}")`);
-            return true;
-          }
-        }
-      }
+      await delay(200);
     }
 
-    // 3. aria-label 기반 매칭
-    for (const label of labels) {
-      const labelLower = label.toLowerCase();
-      for (const el of allClickable) {
-        const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
-        if (ariaLabel && (ariaLabel.includes(labelLower) || labelLower.includes(ariaLabel))) {
-          MangoDom.simulateClick(el);
-          console.log(LOG_PREFIX, `Set ${settingName}: "${label}" (aria: "${ariaLabel}")`);
-          return true;
-        }
-      }
-    }
-
-    showToast(`${settingName} 옵션 못찾음: ${labels.join(', ')}`, 'warn');
-    console.warn(LOG_PREFIX, `${settingName} option not found: ${labels.join(', ')}`);
-    return false;
-  }
-
-  /**
-   * 요소의 직접 텍스트 노드만 반환 (자식 요소 텍스트 제외)
-   */
-  function getDirectText(el) {
-    let text = '';
-    for (const node of el.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent;
-      }
-    }
-    return text;
-  }
-
-  /**
-   * Find and click the video options dropdown trigger button.
-   * Grok result page has icon buttons above the image (duration, resolution, etc.)
-   */
-  async function openVideoOptionsDropdown() {
-    // Strategy 1: aria-label based
-    const ariaSelectors = [
-      'button[aria-label*="비디오" i]',
-      'button[aria-label*="video" i]',
-      'button[aria-label*="옵션" i]',
-      'button[aria-label*="option" i]',
-      'button[aria-label*="설정" i]',
-      'button[aria-label*="customize" i]',
-      'button[aria-label*="tune" i]',
-    ];
-    for (const sel of ariaSelectors) {
-      const btn = document.querySelector(sel);
-      if (btn && !btn.disabled && btn.offsetParent !== null) {
-        console.log(LOG_PREFIX, 'Video options via aria:', sel);
-        MangoDom.simulateClick(btn);
-        await delay(600);
-        return true;
-      }
-    }
-
-    // Strategy 2: "..." or more button (near result area, not top nav)
-    const allButtons = document.querySelectorAll('button');
-    for (const btn of allButtons) {
-      const text = (btn.textContent || '').trim();
-      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (text === '...' || text === '···' || text === '\u22EE' || text === '\u22EF' ||
-          text === 'more_vert' || text === 'more_horiz' ||
-          label.includes('more') || label.includes('더보기')) {
-        const rect = btn.getBoundingClientRect();
-        if (rect.top > 100) {
-          console.log(LOG_PREFIX, 'Video options via more button');
-          MangoDom.simulateClick(btn);
-          await delay(600);
-          return true;
-        }
-      }
-    }
-
-    // Strategy 3: Button showing current resolution/duration (e.g., "720", "720p", "10초")
-    for (const btn of allButtons) {
-      const text = (btn.textContent || '').trim();
-      if (/^\d{3,4}p?$/.test(text) || /^\d+초$/.test(text) || /^\d+s$/.test(text)) {
-        console.log(LOG_PREFIX, 'Video options via display button:', text);
-        MangoDom.simulateClick(btn);
-        await delay(600);
-        return true;
-      }
-    }
-
-    // Strategy 4: Icon buttons near a generated image
-    const resultImgs = document.querySelectorAll('img');
-    let resultImg = null;
-    for (const img of resultImgs) {
-      if (img.naturalWidth >= 300 && img.alt !== 'pfp') {
-        resultImg = img;
-        break;
-      }
-    }
-    if (resultImg) {
-      const imgRect = resultImg.getBoundingClientRect();
-      for (const btn of allButtons) {
-        if (!btn.querySelector('svg')) continue;
-        const btnRect = btn.getBoundingClientRect();
-        // Button should be above or overlapping the image top area
-        if (btnRect.bottom >= imgRect.top - 60 && btnRect.top <= imgRect.top + 60) {
-          const submitBtn = findSubmitButton();
-          const createBtn = findCreateVideoButton();
-          if (btn !== submitBtn && btn !== createBtn) {
-            console.log(LOG_PREFIX, 'Video options via nearby icon button');
-            MangoDom.simulateClick(btn);
-            await delay(600);
-            return true;
-          }
-        }
-      }
-    }
-
-    console.warn(LOG_PREFIX, 'Could not find video options trigger');
-    return false;
-  }
-
-  /**
-   * Select an option from the currently open dropdown/popover/menu.
-   * Searches through all visible popup elements for matching text.
-   */
-  async function selectDropdownOption(labels, settingName) {
-    // Collect all clickable elements from visible popovers and overlays
-    const popoverSelectors = [
-      '[role="menu"]', '[role="listbox"]', '[role="dialog"]:not([class*="settings"])',
-      '[class*="popover"]', '[class*="dropdown"]', '[class*="menu"]',
-      '[class*="overlay"]', '[class*="popup"]', '[class*="panel"]'
-    ];
-
-    const candidates = new Set();
-
-    // Items from popovers
-    for (const sel of popoverSelectors) {
-      for (const container of document.querySelectorAll(sel)) {
-        if (container.offsetParent === null && !container.style.display) continue;
-        container.querySelectorAll('button, div, span, li, a, [role="menuitem"], [role="option"], [role="menuitemradio"]')
-          .forEach(el => candidates.add(el));
-      }
-    }
-
-    // Also try generic role-based items anywhere
-    document.querySelectorAll('[role="menuitem"], [role="option"], [role="menuitemradio"], [role="radio"]')
-      .forEach(el => candidates.add(el));
-
-    for (const label of labels) {
-      for (const el of candidates) {
-        const elText = (el.textContent || '').trim();
-        if (!elText || elText.length > 50) continue;
-
-        const isMatch = elText === label ||
-          elText.includes(label) ||
-          (label.length >= 2 && elText.toLowerCase().includes(label.toLowerCase()));
-
-        if (isMatch) {
-          if (isElementSelected(el)) {
-            console.log(LOG_PREFIX, `${settingName} already set: ${label}`);
-            // 드롭다운 닫기
-            document.body.click();
-            await delay(300);
-            return true;
-          }
-          MangoDom.simulateClick(el);
-          console.log(LOG_PREFIX, `Set ${settingName}: "${label}" (element: "${elText}")`);
-          await delay(500);
-          // 드롭다운이 자동으로 안 닫힐 수 있으니 명시적으로 닫기
-          document.body.click();
-          await delay(300);
-          return true;
-        }
-      }
-    }
-
-    console.warn(LOG_PREFIX, `${settingName} option not found: ${labels.join(', ')}`);
-    // Close dropdown by clicking body
+    // Step 7: 메뉴 닫기
     document.body.click();
     await delay(300);
-    return false;
+
+    showToast('비디오 설정 적용 완료!', 'success');
+    console.log(LOG_PREFIX, `설정 적용 완료: ${videoDuration}, ${videoResolution}, ${aspectRatio}`);
   }
 
-  function isElementSelected(el) {
-    if (el.classList.contains('active') || el.classList.contains('selected') || el.classList.contains('checked')) return true;
-    if (el.getAttribute('aria-checked') === 'true') return true;
-    if (el.getAttribute('aria-selected') === 'true') return true;
-    if (el.getAttribute('aria-pressed') === 'true') return true;
-    if (el.getAttribute('data-state') === 'active') return true;
-    for (const cls of el.classList) {
-      const lc = cls.toLowerCase();
-      if (lc.includes('active') || lc.includes('selected') || lc.includes('current') || lc.includes('checked')) return true;
+  /**
+   * 텍스트가 정확히 일치하는 버튼 찾기
+   */
+  function findButtonByTextExact(text) {
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      if ((btn.textContent || '').trim().includes(text)) return btn;
     }
+    return null;
+  }
+
+  /**
+   * [role="menuitem"] 중에서 텍스트 포함 매칭
+   */
+  function findMenuItemInMenu(text) {
+    const items = document.querySelectorAll('[role="menuitem"]');
+    for (const item of items) {
+      if ((item.textContent || '').trim().includes(text)) return item;
+    }
+    return null;
+  }
+
+  /**
+   * 현재 열린 [role="menu"] 내부에서 버튼 텍스트 매칭하여 클릭.
+   * 참고자료의 findSettingButton 방식: 정확 매칭 → 부분 매칭 fallback
+   */
+  function clickSettingButtonInMenu(labels) {
+    const menu = document.querySelector('[role="menu"]');
+    if (!menu) {
+      console.warn(LOG_PREFIX, '[role="menu"] 없음');
+      return false;
+    }
+
+    const buttons = menu.querySelectorAll('button');
+
+    // 1차: 정확 매칭
+    for (const label of labels) {
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim();
+        if (text === label) {
+          MangoDom.simulateClick(btn);
+          console.log(LOG_PREFIX, `Setting clicked (exact): "${text}"`);
+          return true;
+        }
+      }
+    }
+
+    // 2차: 부분 매칭 (짧은 텍스트만)
+    for (const label of labels) {
+      const labelLower = label.toLowerCase();
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim();
+        if (text.length > 20) continue;
+        const textLower = text.toLowerCase();
+        if (textLower.includes(labelLower) || labelLower.includes(textLower)) {
+          MangoDom.simulateClick(btn);
+          console.log(LOG_PREFIX, `Setting clicked (partial): "${text}" for "${label}"`);
+          return true;
+        }
+      }
+    }
+
+    console.warn(LOG_PREFIX, `Menu button not found for: ${labels.join(', ')}`);
     return false;
   }
 
