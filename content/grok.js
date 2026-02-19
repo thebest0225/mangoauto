@@ -703,7 +703,7 @@
           fileInput.files = dt.files;
           fileInput.dispatchEvent(new Event('change', { bubbles: true }));
           fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-          await delay(2000);
+          await delay(3000);
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ DataTransfer로 첨부 성공');
             return true;
@@ -716,23 +716,30 @@
         console.warn(LOG_PREFIX, 'DataTransfer 실패:', e.message);
       }
 
+      // 이미 첨부됐으면 중단
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 1 이후 첨부 확인됨');
+        return true;
+      }
+
       // ── Strategy 2: MAIN world injection (React 이벤트 호환) ──
-      // MAIN world에서 file input click을 인터셉트하고, 업로드 버튼 클릭으로 트리거
-      // 주의: fi.click()은 "File chooser dialog" 에러 발생하므로 사용하지 않음
+      // file input 초기화 후 진행 (중복 방지)
       console.log(LOG_PREFIX, 'Strategy 2: MAIN world 파일 주입');
       try {
+        // 이전 strategy에서 설정된 files 클리어
+        const fi2 = findFileInput();
+        if (fi2) { fi2.value = ''; }
+
         const resp = await chrome.runtime.sendMessage({
           type: 'INJECT_GROK_FILE',
           imageDataUrl
         });
         if (resp?.success) {
-          // 업로드 버튼을 클릭하여 file input click을 트리거 (사용자 제스처 필요)
           const uploadBtn = findUploadButton();
           if (uploadBtn) {
             MangoDom.simulateClick(uploadBtn);
-            await delay(2000);
+            await delay(3000);
           } else {
-            // file input에 직접 DataTransfer 설정 (click 없이)
             const fi = findFileInput();
             if (fi) {
               const arr = imageDataUrl.split(',');
@@ -745,7 +752,7 @@
               dt.items.add(f);
               fi.files = dt.files;
               fi.dispatchEvent(new Event('change', { bubbles: true }));
-              await delay(2000);
+              await delay(3000);
             }
           }
           if (checkImageAttached() || !isOnMainPage()) {
@@ -757,8 +764,13 @@
         console.warn(LOG_PREFIX, 'MAIN world 주입 실패:', e.message);
       }
 
+      // 이미 첨부됐으면 중단
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 2 이후 첨부 확인됨');
+        return true;
+      }
+
       // ── Strategy 3: Drag-and-drop on editor / page area ──
-      // 사용자가 확인: 페이지 중심에 이미지 드래그하면 자동 첨부됨
       console.log(LOG_PREFIX, 'Strategy 3: Drag-and-drop');
       try {
         const dropTargets = [
@@ -771,9 +783,14 @@
         ].filter(Boolean);
 
         for (const target of dropTargets) {
+          // 매 타겟 시도 전 재확인
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ Drag-and-drop 중 첨부 확인됨');
+            return true;
+          }
           console.log(LOG_PREFIX, `드래그 대상: ${target.tagName}.${target.className?.substring?.(0, 30) || ''}`);
           await MangoDom.dropFileOnElement(target, file);
-          await delay(2000);
+          await delay(3000);
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ Drag-and-drop 첨부 성공');
             return true;
@@ -781,6 +798,12 @@
         }
       } catch (e) {
         console.warn(LOG_PREFIX, 'Drag-and-drop 실패:', e.message);
+      }
+
+      // 이미 첨부됐으면 중단
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 3 이후 첨부 확인됨');
+        return true;
       }
 
       // ── Strategy 4: Upload button click → file input ──
@@ -793,12 +816,13 @@
           await delay(800);
           const fi = findFileInput();
           if (fi) {
+            fi.value = '';
             const dt = new DataTransfer();
             dt.items.add(file);
             fi.files = dt.files;
             fi.dispatchEvent(new Event('change', { bubbles: true }));
             fi.dispatchEvent(new Event('input', { bubbles: true }));
-            await delay(2000);
+            await delay(3000);
             if (checkImageAttached() || !isOnMainPage()) {
               console.log(LOG_PREFIX, '✅ Upload 버튼 방식 첨부 성공');
               return true;
@@ -840,15 +864,27 @@
   }
 
   function checkImageAttached() {
-    // Check for delete/remove button (appears when image is attached)
+    // Check 1: file input already has files
+    const fileInput = findFileInput();
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+      console.log(LOG_PREFIX, 'checkImageAttached: file input has', fileInput.files.length, 'files');
+      return true;
+    }
+
+    // Check 2: delete/remove button (appears when image is attached)
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
       const text = (btn.textContent || '').trim();
       if (text === '삭제') return true;
     }
-    // Check for blob/data images (uploaded images show as blob URLs)
+
+    // Check 3: blob/data images (uploaded images show as blob URLs)
     const images = document.querySelectorAll('img[src^="blob:"], img[src^="data:"]');
     if (images.length > 0) return true;
+
+    // Check 4: thumbnail/preview images near the editor
+    const previewImgs = document.querySelectorAll('[class*="preview"] img, [class*="thumb"] img, [class*="attach"] img');
+    if (previewImgs.length > 0) return true;
 
     return false;
   }
