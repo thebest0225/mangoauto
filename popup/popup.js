@@ -618,6 +618,12 @@ function gatherSettings() {
       frameDuration: $('#veoFrameDuration').value,
       outputCount: parseInt($('#veoOutputCount').value) || 1
     },
+    flowImage: {
+      model: $('#flowImageModel').value,
+      aspectRatio: $('#flowImageAspectRatio').value,
+      outputCount: parseInt($('#flowImageOutputCount').value) || 1
+    },
+    flowTimeout: parseInt($('#flowTimeout').value) || 3,
     image: {
       model: $('#imageModel').value,
       aspectRatio: $('#imageAspectRatio').value,
@@ -822,12 +828,20 @@ async function loadSettings() {
     if (s.veo.outputCount) $('#veoOutputCount').value = s.veo.outputCount;
   }
 
-  // Image
+  // Image (Grok / Whisk)
   if (s.image) {
     if (s.image.model) $('#imageModel').value = s.image.model;
     if (s.image.aspectRatio) $('#imageAspectRatio').value = s.image.aspectRatio;
     if (s.image.outputCount) $('#imageOutputCount').value = s.image.outputCount;
   }
+
+  // Flow Image
+  if (s.flowImage) {
+    if (s.flowImage.model) $('#flowImageModel').value = s.flowImage.model;
+    if (s.flowImage.aspectRatio) $('#flowImageAspectRatio').value = s.flowImage.aspectRatio;
+    if (s.flowImage.outputCount) $('#flowImageOutputCount').value = s.flowImage.outputCount;
+  }
+  if (s.flowTimeout) $('#flowTimeout').value = s.flowTimeout;
 
   // Download
   if (s.download) {

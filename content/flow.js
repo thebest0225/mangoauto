@@ -133,7 +133,7 @@
 
       // Step 7: Wait for generation complete
       const isImageMode = mode.includes('image');
-      const timeoutMin = isImageMode ? (settings?.grok?.timeout || 3) : (settings?.grok?.timeout || 10);
+      const timeoutMin = isImageMode ? (settings?.flowTimeout || 3) : (settings?.veo?.frameDuration || 10);
       await waitForGenerationComplete(timeoutMin);
 
       // Step 8: Extract result
@@ -611,13 +611,13 @@
   let imageSettingsApplied = false;
 
   async function applyImageSettings(settings) {
-    const imageSettings = settings?.image;
+    const imageSettings = settings?.flowImage;
     if (!imageSettings) {
-      console.log(LOG_PREFIX, 'No image settings to apply');
+      console.log(LOG_PREFIX, 'No flowImage settings to apply');
       return;
     }
 
-    console.log(LOG_PREFIX, 'Applying image settings:', imageSettings);
+    console.log(LOG_PREFIX, 'Applying Flow image settings:', imageSettings);
 
     // Open settings panel via tune button
     const settingsBtn = getByXPath(SELECTORS.SETTINGS_BUTTON_XPATH);

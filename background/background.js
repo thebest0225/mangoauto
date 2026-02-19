@@ -989,8 +989,15 @@ function getDownloadPath(filename) {
 // ─── Cooldown with random range ───
 async function handleCooldownAndNext() {
   if (sm.state === AutoState.COOLDOWN) {
-    const min = sm._cooldownMin || 10000;
-    const max = sm._cooldownMax || 15000;
+    let min, max;
+    if (sm.platform === 'flow') {
+      // Flow는 동시 작업 가능 → 짧은 쿨다운
+      min = 1000;
+      max = 2000;
+    } else {
+      min = sm._cooldownMin || 10000;
+      max = sm._cooldownMax || 15000;
+    }
     const delay = min + Math.random() * (max - min);
     broadcastLog(`쿨다운 ${Math.round(delay / 1000)}초...`, 'info');
     await MangoUtils.sleep(delay);
