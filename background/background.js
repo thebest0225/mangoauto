@@ -79,6 +79,11 @@ async function handleMessage(msg, sender) {
       return await MangoHubAPI.uploadVideo(msg.projectId, msg.segmentIndex, blob, msg.filename);
     }
 
+    case 'API_UPLOAD_THUMBNAIL': {
+      const blob = await fetch(msg.dataUrl).then(r => r.blob());
+      return await MangoHubAPI.uploadThumbnailImage(msg.projectId, msg.conceptIndex, blob, msg.filename);
+    }
+
     // ── Automation Control ──
     case 'START_AUTOMATION':
       return await startAutomation(msg.config);
@@ -181,9 +186,9 @@ async function handleMessage(msg, sender) {
 // ─── Start Automation ───
 async function startAutomation(config) {
   const { source, platform, mode, settings, projectId, prompts, images,
-          useExistingImages, skipCompleted } = config;
+          useExistingImages, skipCompleted, contentType } = config;
 
-  broadcastLog(`자동화 시작: source=${source}, platform=${platform}, mode=${mode}`, 'info');
+  broadcastLog(`자동화 시작: source=${source}, platform=${platform}, mode=${mode}, contentType=${contentType || 'segments'}`, 'info');
 
   automationSettings = settings || {};
   allResults = [];
@@ -204,27 +209,51 @@ async function startAutomation(config) {
 
   if (source === 'mangohub' && projectId) {
     const project = await MangoHubAPI.getProject(projectId);
-    const segments = project.segments || [];
 
-    for (const seg of segments) {
-      const promptField = mediaType === 'video' ? 'video_prompt' : 'prompt';
-      const existingField = mediaType === 'video' ? 'video_url' : 'image_url';
+    if (contentType === 'thumbnail') {
+      // 썸네일 프롬프트 큐 빌드
+      const concepts = project.thumbnail_concepts?.concepts || [];
+      const thumbImages = project.thumbnail_images || {};
 
-      if (!seg[promptField]) continue;
-      if (skipCompleted && seg[existingField]) continue;
+      for (let i = 0; i < concepts.length; i++) {
+        const c = concepts[i];
+        if (!c.prompt) continue;
+        const hasExisting = !!thumbImages[String(i)];
+        if (skipCompleted && hasExisting) continue;
 
-      const item = {
-        segmentIndex: seg.index,
-        prompt: seg[promptField],
-        text: MangoUtils.truncate(seg.text || seg[promptField], 50)
-      };
-
-      // Image-to-video: include source image
-      if (mode === 'image-video' && useExistingImages && seg.image_url) {
-        item.sourceImageUrl = seg.image_url;
+        queue.push({
+          segmentIndex: i,  // concept index (0-based)
+          prompt: c.prompt,
+          text: MangoUtils.truncate(c.name || c.prompt, 50),
+          _isThumbnail: true,
+          _conceptGroup: c.group || 'A'
+        });
       }
+      broadcastLog(`썸네일 프롬프트 ${queue.length}개 로드 (전체 ${concepts.length}개)`, 'info');
+    } else {
+      // 세그먼트 프롬프트 큐 빌드 (기존)
+      const segments = project.segments || [];
 
-      queue.push(item);
+      for (const seg of segments) {
+        const promptField = mediaType === 'video' ? 'video_prompt' : 'prompt';
+        const existingField = mediaType === 'video' ? 'video_url' : 'image_url';
+
+        if (!seg[promptField]) continue;
+        if (skipCompleted && seg[existingField]) continue;
+
+        const item = {
+          segmentIndex: seg.index,
+          prompt: seg[promptField],
+          text: MangoUtils.truncate(seg.text || seg[promptField], 50)
+        };
+
+        // Image-to-video: include source image
+        if (mode === 'image-video' && useExistingImages && seg.image_url) {
+          item.sourceImageUrl = seg.image_url;
+        }
+
+        queue.push(item);
+      }
     }
   } else {
     // Standalone mode
@@ -703,6 +732,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
         mediaUrl: mediaUrl || null,
         mediaDataUrl: (sm.mediaType === 'image' && mediaDataUrl) ? mediaDataUrl : null,
         originalImageUrl: item.sourceImageUrl || null,
+        _isThumbnail: !!item._isThumbnail,
         status: 'pending',
         error: null,
         createdAt: Date.now(),
@@ -724,7 +754,11 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
         } else {
           throw new Error('No media data available');
         }
-        if (sm.mediaType === 'video') {
+        if (item._isThumbnail) {
+          // 썸네일 이미지 업로드
+          await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename);
+          broadcastLog(`썸네일 업로드 완료: concept ${item.segmentIndex}`, 'success');
+        } else if (sm.mediaType === 'video') {
           await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
         } else {
           await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
@@ -823,6 +857,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           mediaUrl: mediaUrl || null,
           mediaDataUrl: (sm.mediaType === 'image' && mediaDataUrl) ? mediaDataUrl : null,
           originalImageUrl: item.sourceImageUrl || null,
+          _isThumbnail: !!item._isThumbnail,
           status: 'pending',
           error: null,
           createdAt: Date.now(),
@@ -841,7 +876,10 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           } else if (mediaUrl) {
             blob = await fetchMediaWithCookies(mediaUrl);
           }
-          if (sm.mediaType === 'video') {
+          if (item._isThumbnail) {
+            await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename);
+            broadcastLog(`썸네일 업로드 완료: concept ${item.segmentIndex}`, 'success');
+          } else if (sm.mediaType === 'video') {
             await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
           } else {
             await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
@@ -1373,7 +1411,9 @@ async function uploadApprovedItems() {
       }
 
       const filename = `${String(item.segmentIndex + 1).padStart(3, '0')}_review_${Date.now()}.${item.mediaType === 'video' ? 'mp4' : 'png'}`;
-      if (item.mediaType === 'video') {
+      if (item._isThumbnail) {
+        await MangoHubAPI.uploadThumbnailImage(item.projectId, item.segmentIndex, blob, filename);
+      } else if (item.mediaType === 'video') {
         await MangoHubAPI.uploadVideo(item.projectId, item.segmentIndex, blob, filename);
       } else {
         await MangoHubAPI.uploadImage(item.projectId, item.segmentIndex, blob, filename);
@@ -1382,7 +1422,7 @@ async function uploadApprovedItems() {
       item.status = 'uploaded';
       item.uploadedAt = Date.now();
       uploaded++;
-      broadcastLog(`검토 업로드 완료: 세그먼트 ${item.segmentIndex + 1}`, 'success');
+      broadcastLog(`검토 업로드 완료: ${item._isThumbnail ? '썸네일' : '세그먼트'} ${item.segmentIndex + 1}`, 'success');
     } catch (err) {
       if (err.message === 'AUTH_EXPIRED') {
         item.status = 'error';

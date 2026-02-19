@@ -9,6 +9,7 @@ const MANGOHUB_BASE = 'https://mangois.love';
 let currentSource = 'mangohub';
 let currentPlatform = 'grok';
 let currentMode = 'text-image';  // text-image | text-video | image-video | image-image
+let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
@@ -173,6 +174,22 @@ function bindEvents() {
       btn.classList.add('active');
       currentMode = btn.dataset.mode;
       updateModeUI();
+    });
+  });
+
+  // Content type tabs (segments / thumbnail)
+  $$('.ctab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('.ctab').forEach(t => {
+        t.classList.remove('active');
+        t.style.background = '#fff';
+        t.style.color = '#666';
+      });
+      tab.classList.add('active');
+      tab.style.background = '#4f46e5';
+      tab.style.color = '#fff';
+      currentContentType = tab.dataset.ctype;
+      updateQueuePreview();
     });
   });
 
@@ -363,13 +380,29 @@ async function loadProject() {
       video_url: s.video_url ? s.video_url.substring(0, 50) + '...' : null
     })));
 
+    // 썸네일 정보
+    const thumbConcepts = project.thumbnail_concepts?.concepts || [];
+    const thumbImages = project.thumbnail_images || {};
+    const thumbWithPrompt = thumbConcepts.filter(c => c.prompt).length;
+    const thumbWithImage = Object.keys(thumbImages).length;
+
     $('#projectName').textContent = project.name || 'Unnamed';
     $('#segmentCount').textContent =
       `${segments.length}개 세그먼트 | 이미지프롬프트 ${withImagePrompt} | 영상프롬프트 ${withVideoPrompt} | 이미지 ${withImage}장 | 영상 ${withVideo}개`;
     $('#projectInfo').classList.remove('hidden');
 
+    // 썸네일 정보 표시
+    const thumbInfo = $('#thumbnailInfo');
+    const thumbCount = $('#thumbnailCount');
+    if (thumbWithPrompt > 0) {
+      thumbCount.textContent = `썸네일 프롬프트 ${thumbWithPrompt}개 | 생성완료 ${thumbWithImage}개`;
+      thumbInfo.classList.remove('hidden');
+    } else {
+      thumbInfo.classList.add('hidden');
+    }
+
     updateQueuePreview();
-    addLog(`불러옴: ${project.name}`, 'info');
+    addLog(`불러옴: ${project.name} (썸네일 ${thumbWithPrompt}개)`, 'info');
   } catch (err) {
     addLog('프로젝트 로드 실패: ' + err.message, 'error');
   }
@@ -384,28 +417,50 @@ function updateQueuePreview() {
   let items = [];
 
   if (currentSource === 'mangohub' && currentProject) {
-    const segments = currentProject.segments || [];
     const skipCompleted = $('#skipCompleted').checked;
 
-    for (const seg of segments) {
-      let prompt, hasExisting;
-      if (currentMode === 'text-image') {
-        prompt = seg.prompt;
-        hasExisting = !!seg.image_url;
-      } else {
-        prompt = seg.video_prompt;
-        hasExisting = !!seg.video_url;
+    if (currentContentType === 'thumbnail') {
+      // 썸네일 큐
+      const concepts = currentProject.thumbnail_concepts?.concepts || [];
+      const thumbImages = currentProject.thumbnail_images || {};
+      for (let i = 0; i < concepts.length; i++) {
+        const c = concepts[i];
+        if (!c.prompt) continue;
+        const hasExisting = !!thumbImages[String(i)];
+        if (skipCompleted && hasExisting) continue;
+        items.push({
+          idx: i,
+          _isMangoHub: true,
+          _isThumbnail: true,
+          text: `[${c.group || '?'}] ${(c.name || c.prompt).substring(0, 50)}`,
+          hasImage: hasExisting,
+          imageUrl: thumbImages[String(i)] ? resolveMangoUrl(thumbImages[String(i)]) : null,
+          imageName: `thumb_${String(i).padStart(2, '0')}`
+        });
       }
-      if (!prompt) continue;
-      if (skipCompleted && hasExisting) continue;
-      items.push({
-        idx: seg.index,  // MangoHub seg.index는 1-based
-        _isMangoHub: true,
-        text: prompt.substring(0, 60),
-        hasImage: !!seg.image_url,
-        imageUrl: seg.image_url ? resolveMangoUrl(seg.image_url) : null,
-        imageName: seg.image_url ? `seg_${String(seg.index).padStart(3, '0')}` : null
-      });
+    } else {
+      // 세그먼트 큐 (기존)
+      const segments = currentProject.segments || [];
+      for (const seg of segments) {
+        let prompt, hasExisting;
+        if (currentMode === 'text-image') {
+          prompt = seg.prompt;
+          hasExisting = !!seg.image_url;
+        } else {
+          prompt = seg.video_prompt;
+          hasExisting = !!seg.video_url;
+        }
+        if (!prompt) continue;
+        if (skipCompleted && hasExisting) continue;
+        items.push({
+          idx: seg.index,  // MangoHub seg.index는 1-based
+          _isMangoHub: true,
+          text: prompt.substring(0, 60),
+          hasImage: !!seg.image_url,
+          imageUrl: seg.image_url ? resolveMangoUrl(seg.image_url) : null,
+          imageName: seg.image_url ? `seg_${String(seg.index).padStart(3, '0')}` : null
+        });
+      }
     }
   } else if (currentSource === 'standalone') {
     const prompts = parsePrompts($('#promptsInput').value || '');
@@ -563,6 +618,7 @@ async function startAutomation() {
       addLog('프로젝트를 선택해주세요', 'error');
       return;
     }
+    config.contentType = currentContentType;
     config.useExistingImages = $('#useExistingImages').checked;
     config.skipCompleted = $('#skipCompleted').checked;
   } else {
@@ -800,6 +856,7 @@ async function saveSettings() {
         source: currentSource,
         platform: currentPlatform,
         mode: currentMode,
+        contentType: currentContentType,
         projectId: $('#projectSelect').value
       }
     }
@@ -877,6 +934,15 @@ async function loadSettings() {
     }
     if (s._ui.mode) {
       setMode(s._ui.mode);
+    }
+    if (s._ui.contentType) {
+      currentContentType = s._ui.contentType;
+      $$('.ctab').forEach(t => {
+        const isActive = t.dataset.ctype === currentContentType;
+        t.classList.toggle('active', isActive);
+        t.style.background = isActive ? '#4f46e5' : '#fff';
+        t.style.color = isActive ? '#fff' : '#666';
+      });
     }
     if (s._ui.projectId) {
       setTimeout(() => {

@@ -84,6 +84,16 @@
             <span id="projectName" class="info-label"></span>
             <span id="segmentCount" class="info-value"></span>
           </div>
+          <!-- 콘텐츠 유형 선택 -->
+          <div class="info-row" style="margin-top:4px;">
+            <div class="content-type-tabs" style="display:flex;gap:4px;width:100%;">
+              <button class="ctab active" data-ctype="segments" style="flex:1;padding:5px 0;font-size:11px;border:1px solid #e5e7eb;border-radius:6px;background:#4f46e5;color:#fff;cursor:pointer;font-weight:600;">세그먼트</button>
+              <button class="ctab" data-ctype="thumbnail" style="flex:1;padding:5px 0;font-size:11px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;color:#666;cursor:pointer;font-weight:600;">썸네일</button>
+            </div>
+          </div>
+          <div id="thumbnailInfo" class="info-row hidden" style="font-size:10px;color:#888;padding:2px 4px;background:#fef3c7;border-radius:4px;">
+            <span id="thumbnailCount"></span>
+          </div>
           <div class="info-row">
             <label class="check-label">
               <input type="checkbox" id="useExistingImages" checked>
