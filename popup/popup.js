@@ -196,6 +196,7 @@ function bindEvents() {
 
   // Load project
   $('#loadProjectBtn').addEventListener('click', loadProject);
+  $('#refreshProjectsBtn').addEventListener('click', loadProjects);
 
   // Image upload
   const imagesInput = $('#imagesInput');
