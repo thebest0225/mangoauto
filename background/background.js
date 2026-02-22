@@ -503,6 +503,9 @@ async function runSequentialLoop() {
     broadcastLog(`[${idx}/${total}] ${item.text}`, 'info');
 
     sm.markGenerating();
+    broadcastState(getExtendedSnapshot());
+
+    let resp;
     try {
       // Fetch source image if needed (MangoHub image-to-video mode)
       if (item.sourceImageUrl && !item.sourceImageDataUrl) {
@@ -511,11 +514,12 @@ async function runSequentialLoop() {
       }
       const message = buildExecuteMessage(item);
       broadcastLog(`탭 ${activeTabIds[0]}에 EXECUTE_PROMPT 전송 중... (mode=${message.settings?._mode}, hasImage=${!!message.sourceImageDataUrl})`, 'info');
-      const resp = await sendToTab(activeTabIds[0] || null, message);
+      resp = await sendToTab(activeTabIds[0] || null, message);
       broadcastLog(`Content script 응답: ${JSON.stringify(resp)}`, 'info');
     } catch (err) {
       broadcastLog(`sendToTab 실패: ${err.message}`, 'error');
       sm.markError(err);
+      broadcastState(getExtendedSnapshot());
       if (sm.state === AutoState.ERROR) {
         broadcastLog(`에러 (재시도 ${sm.retryCount}/${sm.maxRetries}): ${err.message}`, 'error');
         await MangoUtils.sleep(3000);
@@ -527,8 +531,23 @@ async function runSequentialLoop() {
       continue;
     }
 
-    // Content script will report back via GENERATION_COMPLETE
-    broadcastLog('Content script에서 결과 대기 중...', 'info');
+    // Content script가 에러를 반환한 경우 → 인라인 처리 (GENERATION_ERROR 레이스 방지)
+    if (resp?.error) {
+      broadcastLog(`생성 에러: ${resp.error}`, 'error');
+      sm.markError(resp.error);
+      broadcastState(getExtendedSnapshot());
+      if (sm.state === AutoState.ERROR) {
+        broadcastLog(`에러 (재시도 ${sm.retryCount}/${sm.maxRetries}): ${resp.error}`, 'error');
+        await MangoUtils.sleep(3000);
+        sm.transition(AutoState.PREPARING);
+        continue;
+      }
+      broadcastLog(`실패 처리 후 다음 항목으로: ${resp.error}`, 'error');
+      await handleCooldownAndNext();
+      continue;
+    }
+
+    // Content script will report back via GENERATION_COMPLETE with media data
     break;
   }
 }
@@ -787,19 +806,12 @@ async function handleGenerationError(msg, sender) {
   const senderTabId = sender?.tab?.id;
 
   if (concurrentCount > 1 && activeTasks.size > 0) {
+    // 동시(파이프라인) 모드: 파이프라인 핸들러로 처리
     await handleConcurrentComplete(senderTabId, null, false, msg.error);
   } else {
-    // Sequential mode
-    sm.markError(msg.error);
-    if (sm.state === AutoState.ERROR) {
-      broadcastLog(`에러 (재시도 ${sm.retryCount}/${sm.maxRetries}): ${msg.error}`, 'error');
-      await MangoUtils.sleep(3000);
-      sm.transition(AutoState.PREPARING);
-      await runLoop();
-    } else {
-      broadcastLog(`실패: ${msg.error}`, 'error');
-      await handleCooldownAndNext();
-    }
+    // 순차 모드: runSequentialLoop에서 sendToTab 응답으로 이미 처리됨
+    // 중복 처리 방지 (레이스 컨디션)
+    MangoUtils.log('info', `Sequential GENERATION_ERROR ignored (handled inline): ${msg.error}`);
   }
 }
 
@@ -1117,6 +1129,7 @@ function getDownloadPath(filename) {
 // ─── Cooldown with random range ───
 async function handleCooldownAndNext() {
   if (sm.state === AutoState.COOLDOWN) {
+    broadcastState(getExtendedSnapshot());
     let min, max;
     if (sm.platform === 'flow') {
       // Flow는 동시 작업 가능 → 짧은 쿨다운
@@ -1130,6 +1143,7 @@ async function handleCooldownAndNext() {
     broadcastLog(`쿨다운 ${Math.round(delay / 1000)}초...`, 'info');
     await MangoUtils.sleep(delay);
     sm.next();
+    broadcastState(getExtendedSnapshot());
     if (sm.state === AutoState.PREPARING) {
       await runLoop();
     }
