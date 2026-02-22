@@ -887,7 +887,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
 
     // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
     try {
-      const dlFilename = getDownloadPath(filename);
+      const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
       const downloadUrl = mediaUrl || mediaDataUrl;
       if (downloadUrl) {
         await chrome.downloads.download({
@@ -903,7 +903,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   } else {
     // Standalone - download locally via chrome.downloads (브라우저 쿠키 자동 포함)
     try {
-      const dlFilename = getDownloadPath(filename);
+      const dlFilename = getDownloadPath(filename, false);
       const downloadUrl = mediaUrl || mediaDataUrl;
       await chrome.downloads.download({
         url: downloadUrl,
@@ -1017,7 +1017,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
 
       // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
       try {
-        const dlFilename = getDownloadPath(filename);
+        const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
         const downloadUrl = mediaUrl || mediaDataUrl;
         if (downloadUrl) {
           await chrome.downloads.download({
@@ -1032,7 +1032,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       }
     } else {
       try {
-        const dlFilename = getDownloadPath(filename);
+        const dlFilename = getDownloadPath(filename, false);
         const downloadUrl = mediaUrl || mediaDataUrl;
         await chrome.downloads.download({
           url: downloadUrl,
@@ -1075,29 +1075,36 @@ function generateFilename(index, platform, mediaType) {
   // MangoHub: segmentIndex (서버 기준 번호로 중단/재시작 시에도 일관됨)
   // Retry: _originalIndex (원래 대기열 위치)
   // Standalone: 배열 인덱스
+  const item = sm.queue[index];
   let displayIndex;
-  if (sm.mode === 'mangohub' && sm.queue[index]?.segmentIndex !== undefined) {
-    // MangoHub segmentIndex는 서버에서 1-based로 제공 → 그대로 사용
-    displayIndex = sm.queue[index].segmentIndex;
-  } else if (sm._useOriginalIndex && sm.queue[index]?._originalIndex !== undefined) {
-    displayIndex = sm.queue[index]._originalIndex + 1; // 0-based → 1-based
+  if (sm.mode === 'mangohub' && item?.segmentIndex !== undefined) {
+    displayIndex = item.segmentIndex;
+  } else if (sm._useOriginalIndex && item?._originalIndex !== undefined) {
+    displayIndex = item._originalIndex + 1;
   } else {
-    displayIndex = index + 1; // 0-based → 1-based
+    displayIndex = index + 1;
   }
   const idx = String(displayIndex).padStart(3, '0');
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const ext = mediaType === 'video' ? 'mp4' : 'png';
-  const model = getModelName(platform) || platform || 'auto';
 
+  // 썸네일: 날짜_프로젝트명_썸네일_번호.png
+  if (item?._isThumbnail) {
+    const projectName = sm._config?.projectName || 'project';
+    const safeName = String(projectName).replace(/[^a-zA-Z0-9가-힣_-]/g, '_').substring(0, 20);
+    return `${date}_${safeName}_썸네일_${idx}.${ext}`;
+  }
+
+  const model = getModelName(platform) || platform || 'auto';
   const pattern = automationSettings?.download?.naming || 'idx_model_date';
   switch (pattern) {
     case 'idx_date_model':
       return `${idx}_${date}_${model}.${ext}`;
     case 'idx_prompt_date': {
-      const prompt = sm.queue[index]?.text?.replace(/[^a-zA-Z0-9가-힣]/g, '_').substring(0, 20) || 'prompt';
+      const prompt = item?.text?.replace(/[^a-zA-Z0-9가-힣]/g, '_').substring(0, 20) || 'prompt';
       return `${idx}_${prompt}_${date}.${ext}`;
     }
-    default: // idx_model_date
+    default:
       return `${idx}_${model}_${date}.${ext}`;
   }
 }
@@ -1113,10 +1120,12 @@ function getModelName(platform) {
 }
 
 // ─── Get download path with per-project folder support ───
-function getDownloadPath(filename) {
+function getDownloadPath(filename, isThumbnail) {
+  if (isThumbnail) {
+    return `MangoAuto/썸네일/${filename}`;
+  }
   const perProject = automationSettings?.download?.perProject;
   if (perProject && sm._config?.projectId && sm.mode === 'mangohub') {
-    // Use project name as folder
     const projectName = sm._config?.projectName ||
       sm._config?.projectId ||
       'project';
