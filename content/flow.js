@@ -17,6 +17,7 @@
 (() => {
   const LOG_PREFIX = '[MangoAuto:Flow]';
   let isProcessing = false;
+  let shouldStop = false;
 
   // ─── XPath Selectors (verified) ───
   const SELECTORS = {
@@ -70,6 +71,7 @@
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
+      shouldStop = true;
       isProcessing = false;
       imageSettingsApplied = false;
       sendResponse({ ok: true });
@@ -99,9 +101,14 @@
     return MangoDom.getByXPath(xpath);
   }
 
+  function checkStopped() {
+    if (shouldStop) throw new Error('Stopped by user');
+  }
+
   async function handleExecutePrompt(msg) {
     if (isProcessing) throw new Error('Already processing');
     isProcessing = true;
+    shouldStop = false;
     lastApiResult = null;
 
     try {
@@ -111,10 +118,12 @@
 
       // Step 0: 메인 페이지면 새 프로젝트로 이동
       await ensureProjectPage();
+      checkStopped();
 
       // Step 1: Switch to correct mode (이미지 만들기 / 텍스트 동영상 변환 / 프레임 동영상 변환)
       await switchMode(mode);
       await delay(1000);
+      checkStopped();
 
       // Step 2: Apply settings via tune button (이미지 모드일 때)
       if (mode.includes('image') && !imageSettingsApplied) {
@@ -122,6 +131,7 @@
         imageSettingsApplied = true;
         await delay(500);
       }
+      checkStopped();
 
       // Step 3: Upload source image (for frame-to-video or image-to-image mode)
       if ((mode === 'image-video' || mode === 'image-image') && sourceImageDataUrl) {
@@ -134,6 +144,7 @@
           console.warn(LOG_PREFIX, 'Frame upload failed');
         }
       }
+      checkStopped();
 
       // Step 4: Snapshot existing media (생성 전 기존 미디어 기록)
       snapshotExistingMedia();
@@ -141,9 +152,11 @@
       // Step 5: Fill prompt
       await typePrompt(prompt);
       await delay(600 + Math.random() * 400);
+      checkStopped();
 
       // Step 6: Click generate
       await clickGenerate();
+      checkStopped();
 
       // Step 7: Wait for generation complete
       const isImageMode = mode.includes('image');
@@ -456,93 +469,236 @@
     return position === 'first' ? addButtons[0] : addButtons[addButtons.length - 1];
   }
 
+  function findUploadButton() {
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const icon = btn.querySelector('i');
+      if (icon?.textContent?.trim() === 'upload') return btn;
+      const text = (btn.textContent || '').trim();
+      if (text.includes('업로드') || text.includes('Upload')) return btn;
+    }
+    return null;
+  }
+
   async function uploadFrame(imageDataUrl, position = 'first') {
-    // Step 1: Click the "add" button for the frame slot
+    // HTTP URL → dataUrl 변환 (MangoHub 이미지)
+    if (imageDataUrl.startsWith('http')) {
+      console.log(LOG_PREFIX, 'HTTP URL → dataURL 변환');
+      try {
+        const resp = await fetch(imageDataUrl);
+        const blob = await resp.blob();
+        imageDataUrl = await new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        console.error(LOG_PREFIX, 'URL→dataURL 변환 실패:', e);
+        return false;
+      }
+    }
+
+    // 기존 이미지 제거
+    if (isFrameAttached(position)) {
+      console.log(LOG_PREFIX, '기존 이미지 제거 중...');
+      await removeAttachedImage(position);
+      await delay(500);
+    }
+
     const addBtn = findAddButton(position);
     if (!addBtn) {
       console.warn(LOG_PREFIX, 'Add button not found for frame');
       return false;
     }
 
-    MangoDom.simulateClick(addBtn);
-    await delay(500);
+    // File 객체 생성
+    const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
+    console.log(LOG_PREFIX, `File 객체 생성: ${file.name}, ${file.size}bytes`);
 
-    // Step 2: Look for upload option in menu
-    const uploadItems = document.querySelectorAll('[role="menuitem"], button');
-    for (const item of uploadItems) {
-      const text = (item.textContent || '').trim();
-      const icon = item.querySelector('i');
-      if (icon?.textContent?.trim() === 'upload' || text.includes('업로드') || text.includes('Upload')) {
-        MangoDom.simulateClick(item);
-        await delay(500);
-        break;
-      }
+    // MutationObserver로 file input 감지 준비
+    const fileInputDetected = new Promise(resolve => {
+      let resolved = false;
+      const observer = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (node instanceof HTMLInputElement && node.type === 'file') {
+              observer.disconnect();
+              if (!resolved) { resolved = true; resolve(node); }
+              return;
+            }
+            if (node instanceof HTMLElement) {
+              const inp = node.querySelector('input[type="file"]');
+              if (inp) {
+                observer.disconnect();
+                if (!resolved) { resolved = true; resolve(inp); }
+                return;
+              }
+            }
+          }
+        }
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['type'] });
+      setTimeout(() => { observer.disconnect(); if (!resolved) { resolved = true; resolve(null); } }, 8000);
+    });
+
+    // Step 1: add 버튼 클릭
+    console.log(LOG_PREFIX, 'add 버튼 클릭');
+    addBtn.click();
+
+    // Step 2: upload 버튼 찾기 (최대 3초 대기)
+    let uploadBtn = null;
+    for (let i = 0; i < 15; i++) {
+      await delay(200);
+      uploadBtn = findUploadButton();
+      if (uploadBtn) break;
+    }
+    if (!uploadBtn) {
+      console.error(LOG_PREFIX, '업로드 버튼 못 찾음');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return false;
     }
 
-    // Step 3: Inject file via background script (MAIN world injection)
+    // Step 3: background에서 file input 인터셉터 설치
     try {
-      await chrome.runtime.sendMessage({
-        type: 'INJECT_FILE_INPUT',
-        imageDataUrl
-      });
+      await chrome.runtime.sendMessage({ type: 'INJECT_FILE_INPUT', imageDataUrl });
       console.log(LOG_PREFIX, 'File injection requested');
     } catch (e) {
       console.warn(LOG_PREFIX, 'Background inject failed:', e.message);
-      // Fallback: try direct file input
-      const fileInput = MangoDom.findFileInput();
-      if (fileInput) {
-        const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
-        await MangoDom.attachFileToInput(fileInput, file);
-      } else {
-        return false;
+    }
+    await delay(300);
+
+    // Step 4: upload 버튼 클릭 (file chooser 트리거)
+    console.log(LOG_PREFIX, '업로드 버튼 클릭');
+    uploadBtn.click();
+
+    // Step 5: MutationObserver로 file input 감지 → 직접 파일 주입
+    const detectedInput = await fileInputDetected;
+    if (detectedInput) {
+      console.log(LOG_PREFIX, 'MutationObserver로 file input 감지됨');
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        detectedInput.files = dt.files;
+        detectedInput.dispatchEvent(new Event('change', { bubbles: true }));
+        console.log(LOG_PREFIX, 'file input에 직접 파일 주입 완료');
+
+        const cropResult = await handleCropDialog();
+        if (cropResult) {
+          return await waitForFrameUploaded(position, 15000);
+        }
+        return true;
+      } catch (err) {
+        console.warn(LOG_PREFIX, 'file input 직접 주입 실패:', err);
       }
     }
 
-    // Step 4: Wait for upload + handle crop dialog
-    const uploaded = await waitForFrameUploaded(position, 20000);
-
-    return uploaded;
-  }
-
-  async function waitForFrameUploaded(position, timeout = 20000) {
-    const start = Date.now();
-    const targetText = position === 'first' ? '첫 번째 프레임' : '마지막 프레임';
-
-    while (Date.now() - start < timeout) {
-      // Check if image is already attached
-      if (isFrameAttached(position)) return true;
-
-      // Handle crop dialog if it appears
-      await handleCropDialog();
-
+    // Step 6: 폴백 - DOM에서 input[type=file] 검색
+    console.log(LOG_PREFIX, '폴백: DOM에서 input[type=file] 검색');
+    for (let i = 0; i < 10; i++) {
       await delay(500);
+      const inputs = document.querySelectorAll('input[type="file"]');
+      if (inputs.length > 0) {
+        console.log(LOG_PREFIX, `폴백으로 file input 발견 (시도 ${i + 1})`);
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        inputs[0].files = dt.files;
+        inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+
+        const cropResult = await handleCropDialog();
+        if (cropResult) {
+          return await waitForFrameUploaded(position, 15000);
+        }
+        return true;
+      }
     }
 
+    // Step 7: 최종 폴백 - drag-and-drop 시뮬레이션
+    console.warn(LOG_PREFIX, 'file input 감지 실패, drag-and-drop 시도');
+    return await uploadViaDropSimulation(file, position);
+  }
+
+  async function uploadViaDropSimulation(file, position) {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await delay(300);
+    const dropTarget = findAddButton(position) || document.querySelector('textarea') || document.body;
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    for (const eventName of ['dragenter', 'dragover', 'drop']) {
+      dropTarget.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer }));
+      await delay(100);
+    }
+    await delay(2000);
+    if (isFrameAttached(position)) {
+      console.log(LOG_PREFIX, 'drag-and-drop 업로드 성공');
+      return true;
+    }
+    console.error(LOG_PREFIX, 'drag-and-drop 업로드도 실패');
     return false;
   }
 
   function isFrameAttached(position) {
     const container = findFrameContainer();
     const buttons = (container || document).querySelectorAll('button');
-    const targetText = position === 'first' ? '첫 번째 프레임' : '마지막 프레임';
-
     for (const btn of buttons) {
-      if ((btn.textContent || '').trim().includes(targetText)) return true;
+      const text = (btn.textContent || '').trim();
+      if (text.includes('첫 번째 프레임') || text.includes('First frame') ||
+          text.includes('마지막 프레임') || text.includes('Last frame')) {
+        return true;
+      }
+    }
+    // 이미지가 이미 첨부되면 add 대신 close/delete 아이콘으로 바뀜
+    const icons = (container || document).querySelectorAll('button i');
+    for (const icon of icons) {
+      if (icon.textContent?.trim() === 'close' || icon.textContent?.trim() === 'delete') {
+        return true;
+      }
     }
     return false;
   }
 
-  async function handleCropDialog() {
-    const buttons = document.querySelectorAll('button');
+  async function removeAttachedImage(position) {
+    const container = findFrameContainer();
+    const buttons = (container || document).querySelectorAll('button');
     for (const btn of buttons) {
-      const text = (btn.textContent || '').trim();
-      if (text.includes('자르기 및 저장') || text.includes('Crop and save')) {
-        MangoDom.simulateClick(btn);
-        console.log(LOG_PREFIX, 'Crop dialog handled');
-        await delay(1000);
+      const icon = btn.querySelector('i');
+      if (icon?.textContent?.trim() === 'close' || icon?.textContent?.trim() === 'delete') {
+        btn.click();
+        await delay(500);
         return;
       }
     }
+  }
+
+  async function handleCropDialog() {
+    console.log(LOG_PREFIX, '자르기 및 저장 다이얼로그 대기...');
+    for (let i = 0; i < 30; i++) {
+      await delay(500);
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim().toLowerCase();
+        if (text.includes('자르기 및 저장') || text.includes('crop and save') ||
+            (text.includes('crop') && text.includes('save'))) {
+          console.log(LOG_PREFIX, `"자르기 및 저장" 버튼 발견 (시도 ${i + 1})`);
+          btn.click();
+          await delay(2000);
+          return true;
+        }
+      }
+    }
+    console.warn(LOG_PREFIX, '자르기 및 저장 다이얼로그 타임아웃 (15초)');
+    return false;
+  }
+
+  async function waitForFrameUploaded(position, timeout = 15000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      if (isFrameAttached(position)) {
+        console.log(LOG_PREFIX, '프레임 이미지 첨부 확인됨');
+        return true;
+      }
+      await delay(500);
+    }
+    return false;
   }
 
   // ─── Generation Progress Detection ───
@@ -605,6 +761,8 @@
     await delay(5000);
 
     while (Date.now() - start < timeout) {
+      checkStopped();
+
       // Check if API result arrived first (inject.js가 가장 신뢰할 수 있음)
       if (lastApiResult) {
         if (lastApiResult.ok && lastApiResult.hasMedia) {
