@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "MangoAuto",
   "version": "1.3.0",
-  "description": "Automate image/video generation on Grok, Whisk, Veo with MangoHub integration",
+  "description": "Automate image/video generation on Grok, Flow, Whisk with MangoHub integration",
   "permissions": [
     "cookies",
     "downloads",

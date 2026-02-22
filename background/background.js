@@ -65,7 +65,13 @@ function getExtendedSnapshot() {
 function getGenerationTimeoutMs() {
   let base;
   if (sm.platform === 'flow') {
-    base = (automationSettings?.flowTimeout || 3) * 60 * 1000;
+    // 비디오 모드는 frameDuration 사용, 이미지 모드는 flowTimeout 사용
+    const fv = automationSettings?.flowVideo || automationSettings?.veo;
+    if (sm.mediaType === 'video') {
+      base = (fv?.frameDuration || 10) * 60 * 1000;
+    } else {
+      base = (automationSettings?.flowTimeout || 3) * 60 * 1000;
+    }
   } else {
     base = (automationSettings?.grok?.timeout || 5) * 60 * 1000;
   }
@@ -159,7 +165,7 @@ async function handleMessage(msg, sender) {
       return await injectFileToGrok(msg, sender);
 
     case 'INJECT_FILE_INPUT':
-      return await injectFileToVeo(msg, sender);
+      return await injectFileToFlow(msg, sender);
 
     case 'DOWNLOAD_VIDEO':
       return await downloadMedia(msg);
@@ -398,7 +404,7 @@ async function ensureTargetTabs(platform, count) {
     tabs = await chrome.tabs.query({ url: `https://labs.google/fx/*/tools/${toolName}*` });
   }
 
-  // Flow: video-fx 탭도 검색 (Veo3 → Flow 통합)
+  // Flow: video-fx 탭도 검색
   if (platform === 'flow' && tabs.length === 0) {
     const vfxTabs = await chrome.tabs.query({ url: 'https://labs.google/fx/*/tools/video-fx*' });
     if (vfxTabs.length === 0) {
@@ -908,7 +914,8 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   task.status = success ? 'completed' : 'failed';
   const item = task.item;
   const itemIndex = task.index;
-  const filename = generateFilename(itemIndex, sm.platform, sm.mediaType);
+  // 파일명은 큐 인덱스 기준 (resultIndex가 아닌 실제 큐 위치)
+  const filename = generateFilename(task.queueIndex ?? itemIndex, sm.platform, sm.mediaType);
 
   if (success && (mediaDataUrl || mediaUrl)) {
     if (sm.mode === 'mangohub' && sm.projectId) {
@@ -1057,7 +1064,7 @@ function generateFilename(index, platform, mediaType) {
 function getModelName(platform) {
   switch (platform) {
     case 'grok': return 'grok';
-    case 'flow': return automationSettings?.veo?.model || 'flow';
+    case 'flow': return automationSettings?.flowVideo?.model || automationSettings?.veo?.model || 'flow';
     case 'whisk': return automationSettings?.image?.model || 'whisk';
     default: return platform;
   }
@@ -1332,8 +1339,8 @@ async function injectFileToGrok(msg, sender) {
   }
 }
 
-// ─── File Injection: Veo3/Flow (same technique, different filename) ───
-async function injectFileToVeo(msg, sender) {
+// ─── File Injection: Flow (frame upload file input interception) ───
+async function injectFileToFlow(msg, sender) {
   const tabId = sender?.tab?.id;
   if (!tabId) return { error: 'No tab ID' };
 
@@ -1373,7 +1380,7 @@ async function injectFileToVeo(msg, sender) {
     });
     return { success: true };
   } catch (err) {
-    MangoUtils.log('error', 'Veo file inject failed:', err.message);
+    MangoUtils.log('error', 'Flow file inject failed:', err.message);
     return { error: err.message };
   }
 }

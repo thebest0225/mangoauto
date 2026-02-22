@@ -646,6 +646,7 @@ async function startAutomation() {
       addLog('프로젝트를 선택해주세요', 'error');
       return;
     }
+    config.projectName = currentProject?.name || '';
     config.contentType = currentContentType;
     config.useExistingImages = $('#useExistingImages').checked;
     config.skipCompleted = $('#skipCompleted').checked;
@@ -700,11 +701,11 @@ function gatherSettings() {
       aspectRatio: $('#grokAspectRatio').value,
       timeout: parseInt($('#grokTimeout').value) || 5
     },
-    veo: {
-      model: $('#veoModel').value,
-      aspectRatio: $('#veoAspectRatio').value,
-      frameDuration: $('#veoFrameDuration').value,
-      outputCount: parseInt($('#veoOutputCount').value) || 1
+    flowVideo: {
+      model: $('#flowVideoModel').value,
+      aspectRatio: $('#flowVideoAspectRatio').value,
+      frameDuration: $('#flowVideoFrameDuration').value,
+      outputCount: parseInt($('#flowVideoOutputCount').value) || 1
     },
     flowImage: {
       model: $('#flowImageModel').value,
@@ -952,12 +953,13 @@ async function loadSettings() {
     if (s.grok.timeout) $('#grokTimeout').value = s.grok.timeout;
   }
 
-  // Veo
-  if (s.veo) {
-    if (s.veo.model) $('#veoModel').value = s.veo.model;
-    if (s.veo.aspectRatio) $('#veoAspectRatio').value = s.veo.aspectRatio;
-    if (s.veo.frameDuration) $('#veoFrameDuration').value = s.veo.frameDuration;
-    if (s.veo.outputCount) $('#veoOutputCount').value = s.veo.outputCount;
+  // Flow Video (마이그레이션: 기존 veo 키도 지원)
+  const fv = s.flowVideo || s.veo;
+  if (fv) {
+    if (fv.model) $('#flowVideoModel').value = fv.model;
+    if (fv.aspectRatio) $('#flowVideoAspectRatio').value = fv.aspectRatio;
+    if (fv.frameDuration) $('#flowVideoFrameDuration').value = fv.frameDuration;
+    if (fv.outputCount) $('#flowVideoOutputCount').value = fv.outputCount;
   }
 
   // Image (Grok / Whisk)

@@ -1,7 +1,7 @@
 /**
- * MangoAuto - Google Flow / Veo3 Automation
+ * MangoAuto - Google Flow Automation
  * Content script for labs.google/fx/tools/flow & video-fx
- * Based on verified selectors from working Veo3 automation extension
+ * Handles text-to-video, image-to-video, text-to-image, image-to-image
  *
  * Key selectors:
  *   Prompt: #PINHOLE_TEXT_AREA_ELEMENT_ID
@@ -74,11 +74,13 @@
       shouldStop = true;
       isProcessing = false;
       imageSettingsApplied = false;
+      videoSettingsApplied = false;
       sendResponse({ ok: true });
       return;
     }
     if (msg.type === 'RESET_SETTINGS') {
       imageSettingsApplied = false;
+      videoSettingsApplied = false;
       sendResponse({ ok: true });
       return;
     }
@@ -103,6 +105,10 @@
 
   function checkStopped() {
     if (shouldStop) throw new Error('Stopped by user');
+    // 매 스텝마다 알림/동의 다이얼로그 자동 처리
+    if (window.MangoDialogDismisser) {
+      window.MangoDialogDismisser.tryDismiss();
+    }
   }
 
   async function handleExecutePrompt(msg) {
@@ -125,10 +131,15 @@
       await delay(1000);
       checkStopped();
 
-      // Step 2: Apply settings via tune button (이미지 모드일 때)
-      if (mode.includes('image') && !imageSettingsApplied) {
+      // Step 2: Apply settings via tune button
+      const isImageOutput = (mediaType === 'image');
+      if (isImageOutput && !imageSettingsApplied) {
         await applyImageSettings(settings);
         imageSettingsApplied = true;
+        await delay(500);
+      } else if (!isImageOutput && !videoSettingsApplied) {
+        await applyVideoSettings(settings);
+        videoSettingsApplied = true;
         await delay(500);
       }
       checkStopped();
@@ -141,7 +152,8 @@
           console.log(LOG_PREFIX, 'Frame uploaded');
           await delay(2000);
         } else {
-          console.warn(LOG_PREFIX, 'Frame upload failed');
+          // 이미지 없이 생성하면 전혀 다른 결과가 나오므로 에러 처리
+          throw new Error('Frame upload failed - 이미지 업로드 실패');
         }
       }
       checkStopped();
@@ -159,8 +171,7 @@
       checkStopped();
 
       // Step 7: Wait for generation complete
-      const isImageMode = mode.includes('image');
-      const timeoutMin = isImageMode ? (settings?.flowTimeout || 3) : (settings?.veo?.frameDuration || 10);
+      const timeoutMin = isImageOutput ? (settings?.flowTimeout || 3) : (settings?.flowVideo?.frameDuration || settings?.veo?.frameDuration || 10);
       await waitForGenerationComplete(timeoutMin);
 
       // Step 8: Extract result
@@ -263,6 +274,8 @@
   async function waitForElement(finder, timeoutMs = 10000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
+      // 대기 중 다이얼로그 자동 처리
+      if (window.MangoDialogDismisser) window.MangoDialogDismisser.tryDismiss();
       const el = finder();
       if (el) return el;
       await delay(500);
@@ -873,8 +886,9 @@
     return null;
   }
 
-  // ─── Image Settings Application (tune button) ───
+  // ─── Settings Application (tune button) ───
   let imageSettingsApplied = false;
+  let videoSettingsApplied = false;
 
   async function applyImageSettings(settings) {
     const imageSettings = settings?.flowImage;
@@ -922,6 +936,39 @@
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await delay(300);
     console.log(LOG_PREFIX, 'Image settings applied');
+  }
+
+  async function applyVideoSettings(settings) {
+    const videoSettings = settings?.flowVideo || settings?.veo;
+    if (!videoSettings) {
+      console.log(LOG_PREFIX, 'No flowVideo settings to apply');
+      return;
+    }
+
+    console.log(LOG_PREFIX, 'Applying Flow video settings:', videoSettings);
+
+    const settingsBtn = getByXPath(SELECTORS.SETTINGS_BUTTON_XPATH);
+    if (!settingsBtn) {
+      console.warn(LOG_PREFIX, 'Settings (tune) button not found');
+      return;
+    }
+
+    MangoDom.simulateClick(settingsBtn);
+    await delay(500);
+
+    // Set output count
+    if (videoSettings.outputCount) {
+      await setComboboxByLabel(
+        ['출력', 'output', /^\s*\d+\s*$/],
+        String(videoSettings.outputCount),
+        '비디오 출력 개수'
+      );
+    }
+
+    // Close settings panel
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await delay(300);
+    console.log(LOG_PREFIX, 'Video settings applied');
   }
 
   async function setImageModel(model) {

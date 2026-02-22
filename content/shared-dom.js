@@ -498,9 +498,9 @@ const MangoDialogDismisser = {
   },
 
   // Start periodic checking
-  startAutoDismisal(intervalMs = 8000) {
+  startAutoDismisal(intervalMs = 4000) {
     // Initial check after page load
-    setTimeout(() => this.tryDismiss(), 3000);
+    setTimeout(() => this.tryDismiss(), 2000);
 
     // Periodic check
     setInterval(() => this.tryDismiss(), intervalMs);

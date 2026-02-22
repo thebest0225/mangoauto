@@ -1,5 +1,5 @@
 /**
- * MangoAuto - Veo3/Flow Fetch Interceptor
+ * MangoAuto - Flow Fetch Interceptor
  * Injected into MAIN world to intercept native window.fetch
  * Captures API responses for video/image generation and posts results back
  *
