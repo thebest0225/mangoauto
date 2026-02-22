@@ -503,7 +503,7 @@ function updateQueuePreview() {
 
   queueCount.textContent = `${items.length}개`;
 
-  for (const item of items.slice(0, 50)) {
+  for (const item of items) {
     const div = document.createElement('div');
     div.className = 'queue-item';
     let thumbHtml = '';
@@ -517,12 +517,6 @@ function updateQueuePreview() {
       <span class="queue-status qs-pending">대기</span>
     `;
     queueList.appendChild(div);
-  }
-  if (items.length > 50) {
-    const more = document.createElement('div');
-    more.className = 'queue-item';
-    more.innerHTML = `<span class="queue-text" style="color:#666">... 외 ${items.length - 50}개</span>`;
-    queueList.appendChild(more);
   }
 }
 
