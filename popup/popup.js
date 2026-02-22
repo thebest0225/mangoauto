@@ -650,6 +650,22 @@ async function startAutomation() {
     config.contentType = currentContentType;
     config.useExistingImages = $('#useExistingImages').checked;
     config.skipCompleted = $('#skipCompleted').checked;
+
+    // 썸네일 모드: 기존 이미지가 있으면 확인
+    if (currentContentType === 'thumbnail') {
+      const thumbImages = currentProject?.thumbnail_images || {};
+      const existingCount = Object.keys(thumbImages).filter(k => !!thumbImages[k]).length;
+      if (existingCount > 0 && config.skipCompleted) {
+        const doOverwrite = confirm(
+          `이미 생성된 썸네일이 ${existingCount}개 있습니다.\n` +
+          `[확인] 기존 이미지 건너뛰고 나머지만 생성\n` +
+          `[취소] 전체 다시 생성`
+        );
+        if (!doOverwrite) {
+          config.skipCompleted = false;
+        }
+      }
+    }
   } else {
     // Standalone - 빈 줄로 구분된 프롬프트 파싱
     const prompts = parsePrompts($('#promptsInput').value || '');
