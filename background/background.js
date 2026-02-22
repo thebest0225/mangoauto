@@ -11,6 +11,33 @@ let automationSettings = {};
 let allResults = [];        // { index, success, dataUrl?, filename? }
 let reviewModeEnabled = false;
 
+// 썸네일 문구 → 최종 프롬프트 조합 (노란=큰글씨, 흰=작은글씨, swap=위치만)
+function _buildThumbFinalPrompt(basePrompt, textData) {
+  if (!basePrompt) return '';
+  let prompt = basePrompt.trim();
+  const yellowText = (textData?.top || '').trim();
+  const whiteText = (textData?.bottom || '').trim();
+  const isSwapped = !!textData?.swapped;
+
+  if (!yellowText && !whiteText) return prompt;
+
+  prompt = prompt.replace(/, no text, no letters, no watermark/gi, '');
+  let ti = ', with large bold impactful YouTube thumbnail style Korean text overlay on the lower portion of the image';
+  if (yellowText && whiteText) {
+    const topText = isSwapped ? whiteText : yellowText;
+    const botText = isSwapped ? yellowText : whiteText;
+    const topColor = isSwapped ? 'bold white' : 'EXTRA LARGE bold golden-orange (#F5A623)';
+    const botColor = isSwapped ? 'EXTRA LARGE bold golden-orange (#F5A623)' : 'bold white';
+    const bigPos = isSwapped ? 'bottom' : 'top';
+    ti += `. Top line reads "${topText}" in ${topColor} color with thick black outline stroke. Bottom line reads "${botText}" in ${botColor} color with thick black outline stroke. The ${bigPos} line (golden-orange one) should be about 1.5x larger font size. Both lines centered horizontally, extra bold weight, dramatic impact font style like popular YouTube thumbnails`;
+  } else if (yellowText) {
+    ti += `. Text reads "${yellowText}" in EXTRA LARGE bold golden-orange (#F5A623) color with thick black outline stroke, centered, extra bold weight, dramatic impact font style`;
+  } else {
+    ti += `. Text reads "${whiteText}" in bold white color with thick black outline stroke, centered, extra bold weight, dramatic impact font style`;
+  }
+  return prompt + ti;
+}
+
 // Restore review mode on startup
 chrome.storage.local.get('mangoauto_review_mode').then(data => {
   reviewModeEnabled = data.mangoauto_review_mode || false;
@@ -250,9 +277,10 @@ async function startAutomation(config) {
     const project = await MangoHubAPI.getProject(projectId);
 
     if (contentType === 'thumbnail') {
-      // 썸네일 프롬프트 큐 빌드
+      // 썸네일 프롬프트 큐 빌드 (문구 포함 최종 프롬프트)
       const concepts = project.thumbnail_concepts?.concepts || [];
       const thumbImages = project.thumbnail_images || {};
+      const thumbTexts = project.thumbnail_texts || {};
 
       for (let i = 0; i < concepts.length; i++) {
         const c = concepts[i];
@@ -260,15 +288,17 @@ async function startAutomation(config) {
         const hasExisting = !!thumbImages[String(i)];
         if (skipCompleted && hasExisting) continue;
 
+        const finalPrompt = _buildThumbFinalPrompt(c.prompt, thumbTexts[String(i)]);
+
         queue.push({
           segmentIndex: i,  // concept index (0-based)
-          prompt: c.prompt,
+          prompt: finalPrompt,
           text: MangoUtils.truncate(c.name || c.prompt, 50),
           _isThumbnail: true,
           _conceptGroup: c.group || 'A'
         });
       }
-      broadcastLog(`썸네일 프롬프트 ${queue.length}개 로드 (전체 ${concepts.length}개)`, 'info');
+      broadcastLog(`썸네일 프롬프트 ${queue.length}개 로드 (전체 ${concepts.length}개, 문구 포함)`, 'info');
     } else {
       // 세그먼트 프롬프트 큐 빌드 (기존)
       const segments = project.segments || [];
