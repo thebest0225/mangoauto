@@ -788,6 +788,12 @@
           e.errorCode = lastApiResult.errorCode || '';
           throw e;
         }
+        // API 200 OK이지만 미디어 없음 → 생성 실패 (검열 등)
+        if (lastApiResult.ok && !lastApiResult.hasMedia) {
+          const e = new Error('생성 실패: 미디어 없이 완료됨 (검열 가능성)');
+          e.errorCode = 'NO_MEDIA';
+          throw e;
+        }
       }
 
       // Check for errors (API result보다 후순위)

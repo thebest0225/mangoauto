@@ -995,12 +995,6 @@ async function saveSettings() {
     }
   });
 
-  // API 키가 있으면 자동으로 파일 내보내기 (다른 프로필 공유용)
-  const apiKey = settings.llm?.kieApiKey;
-  if (apiKey) {
-    sendBg({ type: 'EXPORT_API_KEY', apiKey }).catch(() => {});
-  }
-
   addLog('설정 저장됨', 'info');
 }
 

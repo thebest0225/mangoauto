@@ -146,10 +146,17 @@
           };
 
           if (response.ok && data.media) {
-            result.hasMedia = true;
             result.mediaUrls = data.media
               .map(m => m.image?.generatedImage?.fifeUrl || m.fifeUrl || '')
               .filter(Boolean);
+            result.hasMedia = result.mediaUrls.length > 0;
+            if (!result.hasMedia) {
+              result.error = '생성 실패: 미디어 URL 없음';
+              result.errorCode = 'NO_MEDIA';
+            }
+          } else if (response.ok && !data.media) {
+            result.error = '생성 실패: 응답에 미디어 없음';
+            result.errorCode = 'NO_MEDIA';
           } else if (!response.ok) {
             result.error = data.error?.message || 'Image generation failed';
             result.errorCode = data.error?.code;

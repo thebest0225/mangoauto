@@ -92,7 +92,8 @@ function getExtendedSnapshot() {
 const CENSORSHIP_PATTERNS = [
   'safety', 'blocked', 'policy', 'harmful', 'inappropriate', 'violat',
   'prohibited', 'not allowed', 'content filter', 'moderat',
-  'responsible ai', 'generation failed', 'MEDIA_GENERATION_STATUS_FAILED'
+  'responsible ai', 'generation failed', 'MEDIA_GENERATION_STATUS_FAILED',
+  '생성 실패', '생성에 실패', '안전', '차단', '정책', '부적절'
 ];
 
 function isCensorshipError(errorMsg, errorCode) {
