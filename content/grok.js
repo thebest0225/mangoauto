@@ -321,7 +321,8 @@
       } else {
         chrome.runtime.sendMessage({
           type: 'GENERATION_ERROR',
-          error: err.message
+          error: err.message,
+          errorCode: err instanceof ModerationError ? 'MODERATED' : ''
         });
       }
 
@@ -335,7 +336,7 @@
         console.warn(LOG_PREFIX, 'Recovery failed:', e.message);
       }
 
-      return { error: err.message };
+      return { error: err.message, errorCode: err instanceof ModerationError ? 'MODERATED' : '' };
     } finally {
       isProcessing = false;
     }

@@ -91,7 +91,7 @@ function getExtendedSnapshot() {
 // ─── LLM 프롬프트 수정 (검열 회피) ───
 const CENSORSHIP_PATTERNS = [
   'safety', 'blocked', 'policy', 'harmful', 'inappropriate', 'violat',
-  'prohibited', 'not allowed', 'content filter', 'moderation',
+  'prohibited', 'not allowed', 'content filter', 'moderat',
   'responsible ai', 'generation failed', 'MEDIA_GENERATION_STATUS_FAILED'
 ];
 
