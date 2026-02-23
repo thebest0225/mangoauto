@@ -254,6 +254,13 @@
           <label>생성 대기 타임아웃 (분)</label>
           <input type="number" id="grokTimeout" class="input-sm" value="5" min="1" max="30">
         </div>
+        <div class="setting-row">
+          <label class="check-label">
+            <input type="checkbox" id="grokAutoUpscale" checked>
+            480p 자동 업스케일 (720p 한도 초과 시)
+          </label>
+        </div>
+        <div class="setting-hint">720p 한도 초과로 480p 생성 시 자동으로 업스케일 후 다운로드</div>
       </div>
 
       <!-- Flow 설정 -->

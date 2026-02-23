@@ -171,10 +171,21 @@
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
 
-        // Step 9: 비디오 URL 추출 + 전송
+        // Step 9: 비디오 URL 추출
         showToast('Step 9: 비디오 URL 추출...', 'info');
-        const videoUrl = await extractVideoUrl();
+        let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
+
+        // Step 10: 480p면 자동 업스케일 시도
+        if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
+          showToast('Step 10: 480p 감지 - 업스케일 시도...', 'info');
+          const upscaled = await tryUpscaleVideo(timeoutMs);
+          if (upscaled) {
+            const hdUrl = await extractVideoUrl();
+            if (hdUrl) videoUrl = hdUrl;
+          }
+        }
+        checkStopped();
 
         showToast(`비디오 URL: ${videoUrl.substring(0, 60)}`, 'success');
         chrome.runtime.sendMessage({
@@ -231,8 +242,19 @@
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
 
-        const videoUrl = await extractVideoUrl();
+        let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
+
+        // 480p면 자동 업스케일 시도
+        if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
+          showToast('480p 감지 - 업스케일 시도...', 'info');
+          const upscaled = await tryUpscaleVideo(timeoutMs);
+          if (upscaled) {
+            const hdUrl = await extractVideoUrl();
+            if (hdUrl) videoUrl = hdUrl;
+          }
+        }
+        checkStopped();
 
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
@@ -1280,77 +1302,124 @@
     return 'timeout';
   }
 
-  // ─── 480p Upscale ───
+  // ─── 480p → 720p Upscale (... 메뉴 → 동영상 업스케일) ───
   async function tryUpscaleVideo(timeout = 300000) {
-    // Look for Upscale / 업스케일 / HD button after video is ready
-    const upscaleTexts = ['업스케일', 'Upscale', 'HD', 'Enhance', '고화질'];
-    let upscaleBtn = null;
+    const upscaleKeywords = ['업스케일', 'upscale'];
 
-    const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      const text = (btn.textContent || '').trim();
-      for (const t of upscaleTexts) {
-        if (text.includes(t)) {
-          upscaleBtn = btn;
+    // Step 1: ... (점 세 개) 메뉴 버튼 찾기
+    // 이미지 위 오버레이 영역에서 마지막 아이콘 버튼 (보통 ...)
+    let moreBtn = null;
+
+    // aria-label로 찾기
+    const ariaLabels = ['더보기', 'More', 'More options', '옵션'];
+    for (const label of ariaLabels) {
+      const btn = document.querySelector(`button[aria-label="${label}"]`);
+      if (btn) { moreBtn = btn; break; }
+    }
+
+    // 못 찾으면 "..." 텍스트 또는 SVG 3-dot 아이콘 버튼 찾기
+    if (!moreBtn) {
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim();
+        // "..." 또는 "⋯" 또는 SVG만 있는 작은 버튼
+        if (text === '...' || text === '⋯' || text === '⋮') {
+          moreBtn = btn;
+          break;
+        }
+        // SVG 3-dot 패턴: circle 이 3개인 SVG
+        const svg = btn.querySelector('svg');
+        if (svg && svg.querySelectorAll('circle').length >= 3 && !btn.textContent?.trim()) {
+          moreBtn = btn;
           break;
         }
       }
-      if (upscaleBtn) break;
     }
 
-    if (!upscaleBtn) {
-      // Also check aria-labels
-      for (const t of upscaleTexts) {
-        const btn = document.querySelector(`button[aria-label*="${t}" i]`);
-        if (btn && !btn.disabled) {
-          upscaleBtn = btn;
-          break;
-        }
-      }
-    }
-
-    if (!upscaleBtn || upscaleBtn.disabled) {
-      console.log(LOG_PREFIX, 'Upscale button not found or disabled');
+    if (!moreBtn) {
+      console.log(LOG_PREFIX, 'More (...) button not found');
       return false;
     }
 
-    console.log(LOG_PREFIX, 'Clicking upscale button...');
-    MangoDom.simulateClick(upscaleBtn);
+    // Step 2: 메뉴 열기
+    console.log(LOG_PREFIX, 'Opening more menu...');
+    MangoDom.simulateClick(moreBtn);
+    await delay(800);
+
+    // Step 3: "동영상 업스케일" 메뉴 항목 찾기
+    let upscaleItem = null;
+    const menuItems = document.querySelectorAll('[role="menuitem"], [role="option"], button, div[class*="menu"] span, div[class*="menu"] div');
+    for (const el of menuItems) {
+      const text = (el.textContent || '').trim().toLowerCase();
+      for (const kw of upscaleKeywords) {
+        if (text.includes(kw)) {
+          // 가장 클릭 가능한 요소 찾기 (자신이 버튼이거나 부모가 버튼)
+          upscaleItem = el.closest('button') || el.closest('[role="menuitem"]') || el;
+          break;
+        }
+      }
+      if (upscaleItem) break;
+    }
+
+    if (!upscaleItem) {
+      console.log(LOG_PREFIX, 'Upscale menu item not found, closing menu');
+      // 메뉴 닫기
+      document.body.click();
+      await delay(300);
+      return false;
+    }
+
+    // Step 4: 업스케일 클릭
+    console.log(LOG_PREFIX, 'Clicking upscale menu item...');
+    showToast('업스케일 시작...', 'info');
+    MangoDom.simulateClick(upscaleItem);
     await delay(3000);
 
-    // Wait for upscaled video to appear (look for _hd.mp4 or new video src)
+    // Step 5: HD 비디오 대기 (_hd.mp4 또는 새 비디오 URL)
     const start = Date.now();
     const checkInterval = 3000;
     const beforeUrls = new Set();
-    document.querySelectorAll('video[src]').forEach(v => beforeUrls.add(v.src));
+    document.querySelectorAll('video[src]').forEach(v => {
+      if (v.src && v.src.startsWith('http')) beforeUrls.add(v.src);
+    });
+    // currentSrc도 기록
+    document.querySelectorAll('video').forEach(v => {
+      if (v.currentSrc && v.currentSrc.startsWith('http')) beforeUrls.add(v.currentSrc);
+    });
 
     while (Date.now() - start < timeout) {
-      // Check for HD video URL
+      checkStopped();
+
+      // HD URL 감지
       const hdUrl = getVideoUrl();
       if (hdUrl && hdUrl.includes('_hd')) {
-        console.log(LOG_PREFIX, 'Upscaled video ready:', hdUrl.substring(0, 60));
+        console.log(LOG_PREFIX, 'Upscaled (HD) video ready:', hdUrl.substring(0, 60));
+        showToast('업스케일 완료!', 'success');
         return true;
       }
 
-      // Check for any new video URL that wasn't there before
-      const videos = document.querySelectorAll('video[src]');
-      for (const v of videos) {
-        if (v.src && !beforeUrls.has(v.src)) {
-          console.log(LOG_PREFIX, 'New video detected after upscale');
+      // 새 비디오 URL 감지 (HD 태그 없어도 URL이 바뀌면 업스케일된 것)
+      const allVideos = document.querySelectorAll('video');
+      for (const v of allVideos) {
+        const src = v.src || v.currentSrc || '';
+        if (src.startsWith('http') && !src.startsWith('blob:') && !beforeUrls.has(src)) {
+          console.log(LOG_PREFIX, 'New video detected after upscale:', src.substring(0, 60));
+          showToast('업스케일 완료! (새 URL 감지)', 'success');
           return true;
         }
       }
 
-      // Check if upscale button changed (e.g., became disabled or text changed)
-      if (upscaleBtn.disabled || !(upscaleBtn.textContent || '').trim()) {
-        await delay(5000);
-        return true;
+      // 진행 로그 (15초마다)
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      if (elapsed % 15 === 0 && elapsed > 0) {
+        showToast(`업스케일 대기 중... (${elapsed}초)`, 'info');
       }
 
       await delay(checkInterval);
     }
 
-    console.warn(LOG_PREFIX, 'Upscale timeout');
+    console.warn(LOG_PREFIX, 'Upscale timeout after', timeout / 1000, 'seconds');
+    showToast('업스케일 타임아웃 - 480p로 진행', 'warn');
     return false;
   }
 

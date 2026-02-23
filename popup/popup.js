@@ -750,7 +750,8 @@ function gatherSettings() {
       videoDuration: $('#grokVideoDuration').value,
       videoResolution: $('#grokVideoResolution').value,
       aspectRatio: $('#grokAspectRatio').value,
-      timeout: parseInt($('#grokTimeout').value) || 5
+      timeout: parseInt($('#grokTimeout').value) || 5,
+      autoUpscale: $('#grokAutoUpscale').checked
     },
     flowVideo: {
       model: $('#flowVideoModel').value,
@@ -1014,6 +1015,7 @@ async function loadSettings() {
     if (s.grok.videoResolution) $('#grokVideoResolution').value = s.grok.videoResolution;
     if (s.grok.aspectRatio) $('#grokAspectRatio').value = s.grok.aspectRatio;
     if (s.grok.timeout) $('#grokTimeout').value = s.grok.timeout;
+    if (s.grok.autoUpscale !== undefined) $('#grokAutoUpscale').checked = s.grok.autoUpscale;
   }
 
   // Flow Video (마이그레이션: 기존 veo 키도 지원)
