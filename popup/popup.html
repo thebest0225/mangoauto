@@ -425,6 +425,29 @@
         </div>
       </div>
 
+      <!-- LLM 프롬프트 수정 설정 -->
+      <div class="settings-section">
+        <h3 class="settings-title llm-title">검열 회피 (LLM 프롬프트 수정)</h3>
+        <div class="setting-hint">생성 실패(검열) 시 LLM으로 프롬프트를 수정하여 재시도합니다</div>
+        <div class="setting-row">
+          <label class="check-label">
+            <input type="checkbox" id="llmRewriteEnabled">
+            검열 실패 시 LLM 프롬프트 수정 사용
+          </label>
+        </div>
+        <div class="setting-row">
+          <label>KIE API Key</label>
+          <input type="password" id="kieApiKey" class="input-full" placeholder="kie_xxxxxxxx...">
+        </div>
+        <div class="setting-hint">
+          <a href="https://kie.ai/api-key" target="_blank" style="color:#aaa;">kie.ai/api-key</a>에서 발급
+        </div>
+        <div class="setting-row">
+          <label>LLM 재시도 횟수</label>
+          <input type="number" id="llmRetryCount" class="input-sm" value="2" min="1" max="5">
+        </div>
+      </div>
+
       <button id="saveSettingsBtn" class="btn btn-primary" style="width:100%;margin-top:8px;">설정 저장</button>
     </div>
 

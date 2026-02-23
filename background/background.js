@@ -88,6 +88,72 @@ function getExtendedSnapshot() {
   return snapshot;
 }
 
+// ─── LLM 프롬프트 수정 (검열 회피) ───
+const CENSORSHIP_PATTERNS = [
+  'safety', 'blocked', 'policy', 'harmful', 'inappropriate', 'violat',
+  'prohibited', 'not allowed', 'content filter', 'moderation',
+  'responsible ai', 'generation failed', 'MEDIA_GENERATION_STATUS_FAILED'
+];
+
+function isCensorshipError(errorMsg, errorCode) {
+  const combined = `${errorMsg || ''} ${errorCode || ''}`.toLowerCase();
+  return CENSORSHIP_PATTERNS.some(p => combined.includes(p));
+}
+
+async function callKieApi(model, apiKey, prompt) {
+  const url = `https://api.kie.ai/${model}/v1/chat/completions`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      messages: [
+        {
+          role: 'system',
+          content: '당신은 AI 이미지/영상 생성 프롬프트 전문가입니다. 사용자의 프롬프트가 Google의 콘텐츠 정책으로 거부되었습니다. 원래의 시각적 묘사와 의미를 최대한 유지하면서, 검열에 걸릴 수 있는 표현 1~2개만 부드럽게 수정해주세요. 수정된 프롬프트만 출력하세요. 설명이나 부연 없이 프롬프트 텍스트만 반환하세요.'
+        },
+        {
+          role: 'user',
+          content: `다음 프롬프트가 거부되었습니다. 수정해주세요:\n\n${prompt}`
+        }
+      ],
+      stream: false
+    })
+  });
+  if (!resp.ok) {
+    const errData = await resp.json().catch(() => ({}));
+    throw new Error(`KIE API ${model} error ${resp.status}: ${errData.error?.message || resp.statusText}`);
+  }
+  const data = await resp.json();
+  const content = data.choices?.[0]?.message?.content?.trim();
+  if (!content) throw new Error('LLM returned empty response');
+  return content;
+}
+
+async function rewritePromptWithLLM(prompt, apiKey) {
+  // 1차: Gemini 3 Pro
+  try {
+    broadcastLog('LLM 프롬프트 수정 중 (Gemini 3 Pro)...', 'info');
+    const rewritten = await callKieApi('gemini-3-pro', apiKey, prompt);
+    broadcastLog(`프롬프트 수정 완료: "${rewritten.substring(0, 60)}..."`, 'info');
+    return rewritten;
+  } catch (err) {
+    broadcastLog(`Gemini 실패: ${err.message}, Claude로 폴백`, 'warn');
+  }
+  // 2차: Claude Opus 4.5
+  try {
+    broadcastLog('LLM 프롬프트 수정 중 (Claude Opus 4.5)...', 'info');
+    const rewritten = await callKieApi('claude-opus-4-5', apiKey, prompt);
+    broadcastLog(`프롬프트 수정 완료: "${rewritten.substring(0, 60)}..."`, 'info');
+    return rewritten;
+  } catch (err) {
+    broadcastLog(`Claude도 실패: ${err.message}`, 'error');
+    return null;
+  }
+}
+
 // Generation timeout (content script timeout + 2분 안전 버퍼)
 function getGenerationTimeoutMs() {
   let base;
@@ -542,7 +608,42 @@ async function runSequentialLoop() {
         sm.transition(AutoState.PREPARING);
         continue;
       }
-      broadcastLog(`실패 처리 후 다음 항목으로: ${resp.error}`, 'error');
+
+      // maxRetries 초과 → 검열 에러이면 LLM 프롬프트 수정 재시도
+      const llmCfg = automationSettings?.llm;
+      if (llmCfg?.enabled && llmCfg?.kieApiKey &&
+          isCensorshipError(resp.error, resp.errorCode) &&
+          !item._llmRewriteAttempted) {
+        broadcastLog('검열 에러 감지 → LLM 프롬프트 수정 시도', 'info');
+        const rewritten = await rewritePromptWithLLM(item.prompt, llmCfg.kieApiKey);
+        if (rewritten) {
+          // 수정된 프롬프트로 재시도 (원본 보존)
+          item._originalPrompt = item._originalPrompt || item.prompt;
+          item.prompt = rewritten;
+          item._llmRewriteAttempted = true;
+
+          // 실패 결과 제거 (LLM 재시도이므로 다시 시도)
+          const lastResult = sm.results[sm.results.length - 1];
+          if (lastResult && !lastResult.success) {
+            sm.results.pop();
+          }
+
+          // 재시도 카운터 리셋 후 재시도
+          sm.retryCount = 0;
+          const llmRetries = llmCfg.retryCount || 2;
+          sm.maxRetries = llmRetries;
+          broadcastLog(`LLM 수정 프롬프트로 ${llmRetries}번 재시도`, 'info');
+          sm.transition(AutoState.PREPARING);
+          continue;
+        }
+      }
+
+      // LLM 수정 후 재시도도 실패한 경우 원본 maxRetries 복원
+      if (item._llmRewriteAttempted) {
+        sm.maxRetries = automationSettings?.general?.maxRetries || 3;
+      }
+
+      broadcastLog(`최종 실패: ${resp.error}`, 'error');
       await handleCooldownAndNext();
       continue;
     }
@@ -1056,8 +1157,27 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     });
 
   } else {
-    broadcastLog(`실패 [${itemIndex + 1}]: ${errorMsg || 'Unknown error'}`, 'error');
-    sm.results.push({ success: false, index: itemIndex, error: errorMsg || 'Failed' });
+    // 실패 → 검열 에러이면 LLM 수정 후 큐에 재삽입
+    const llmCfg = automationSettings?.llm;
+    if (llmCfg?.enabled && llmCfg?.kieApiKey &&
+        isCensorshipError(errorMsg, '') &&
+        !item._llmRewriteAttempted) {
+      broadcastLog(`검열 에러 [${itemIndex + 1}] → LLM 프롬프트 수정 시도`, 'info');
+      const rewritten = await rewritePromptWithLLM(item.prompt, llmCfg.kieApiKey);
+      if (rewritten) {
+        item._originalPrompt = item._originalPrompt || item.prompt;
+        item.prompt = rewritten;
+        item._llmRewriteAttempted = true;
+        // 큐 끝에 다시 추가하여 재시도
+        sm.queue.push(item);
+        broadcastLog(`LLM 수정 프롬프트로 재시도 예약: [${itemIndex + 1}]`, 'info');
+      } else {
+        sm.results.push({ success: false, index: itemIndex, error: errorMsg || 'Failed' });
+      }
+    } else {
+      broadcastLog(`실패 [${itemIndex + 1}]: ${errorMsg || 'Unknown error'}`, 'error');
+      sm.results.push({ success: false, index: itemIndex, error: errorMsg || 'Failed' });
+    }
   }
 
   // 슬롯 해제 및 진행 상황 업데이트

@@ -213,9 +213,10 @@
       console.error(LOG_PREFIX, 'Error:', err);
       chrome.runtime.sendMessage({
         type: 'GENERATION_ERROR',
-        error: err.message
+        error: err.message,
+        errorCode: err.errorCode || ''
       });
-      return { error: err.message };
+      return { error: err.message, errorCode: err.errorCode || '' };
     } finally {
       isProcessing = false;
     }
@@ -783,7 +784,9 @@
           return;
         }
         if (!lastApiResult.ok) {
-          throw new Error(`API error: ${lastApiResult.error || 'Unknown'}`);
+          const e = new Error(`API error: ${lastApiResult.error || 'Unknown'}`);
+          e.errorCode = lastApiResult.errorCode || '';
+          throw e;
         }
       }
 

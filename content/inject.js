@@ -78,7 +78,8 @@
 
             } else if (op.status === 'MEDIA_GENERATION_STATUS_FAILED') {
               pendingVideoOps.delete(opName);
-              console.log(LOG_PREFIX, 'Video failed:', opName);
+              const failReason = op.operation?.error?.message || op.failureReason || '';
+              console.log(LOG_PREFIX, 'Video failed:', opName, failReason);
 
               window.postMessage({
                 type: 'VEO3_API_RESULT',
@@ -86,7 +87,8 @@
                 prompt: pending.prompt,
                 status: 400,
                 ok: false,
-                error: 'Video generation failed',
+                error: failReason || 'Video generation failed',
+                errorCode: op.operation?.error?.code || op.status,
                 isVideo: true
               }, '*');
             }

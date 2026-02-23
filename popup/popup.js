@@ -749,6 +749,11 @@ function gatherSettings() {
       defaultMode: $('#defaultMode').value,
       concurrentCount: parseInt($('#concurrentCount').value) || 1,
       promptDelay: parseInt($('#promptDelay').value) || 40
+    },
+    llm: {
+      enabled: $('#llmRewriteEnabled').checked,
+      kieApiKey: $('#kieApiKey').value.trim(),
+      retryCount: parseInt($('#llmRetryCount').value) || 2
     }
   };
 }
@@ -1011,6 +1016,13 @@ async function loadSettings() {
     if (s.general.defaultMode) $('#defaultMode').value = s.general.defaultMode;
     if (s.general.concurrentCount) $('#concurrentCount').value = s.general.concurrentCount;
     if (s.general.promptDelay) $('#promptDelay').value = s.general.promptDelay;
+  }
+
+  // LLM
+  if (s.llm) {
+    if (s.llm.enabled !== undefined) $('#llmRewriteEnabled').checked = s.llm.enabled;
+    if (s.llm.kieApiKey) $('#kieApiKey').value = s.llm.kieApiKey;
+    if (s.llm.retryCount) $('#llmRetryCount').value = s.llm.retryCount;
   }
 
   // UI state

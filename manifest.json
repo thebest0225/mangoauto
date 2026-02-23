@@ -18,7 +18,8 @@
     "https://*.grok.com/*",
     "https://imagine-public.x.ai/*",
     "https://labs.google/*",
-    "https://*.mangois.love/*"
+    "https://*.mangois.love/*",
+    "https://api.kie.ai/*"
   ],
   "background": {
     "service_worker": "background/background.js"
