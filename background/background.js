@@ -611,16 +611,20 @@ async function runSequentialLoop() {
 
       // maxRetries 초과 → 검열 에러이면 LLM 프롬프트 수정 재시도
       const llmCfg = automationSettings?.llm;
+      const llmMaxAttempts = llmCfg?.retryCount || 2;
+      const llmAttemptsSoFar = item._llmRewriteCount || 0;
+
       if (llmCfg?.enabled && llmCfg?.kieApiKey &&
           isCensorshipError(resp.error, resp.errorCode) &&
-          !item._llmRewriteAttempted) {
-        broadcastLog('검열 에러 감지 → LLM 프롬프트 수정 시도', 'info');
-        const rewritten = await rewritePromptWithLLM(item.prompt, llmCfg.kieApiKey);
+          llmAttemptsSoFar < llmMaxAttempts) {
+        broadcastLog(`검열 에러 감지 → LLM 프롬프트 수정 시도 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
+        // 매번 원본 프롬프트 기준으로 LLM에 요청 (다른 수정본을 받기 위해)
+        const originalPrompt = item._originalPrompt || item.prompt;
+        const rewritten = await rewritePromptWithLLM(originalPrompt, llmCfg.kieApiKey);
         if (rewritten) {
-          // 수정된 프롬프트로 재시도 (원본 보존)
           item._originalPrompt = item._originalPrompt || item.prompt;
           item.prompt = rewritten;
-          item._llmRewriteAttempted = true;
+          item._llmRewriteCount = llmAttemptsSoFar + 1;
 
           // 실패 결과 제거 (LLM 재시도이므로 다시 시도)
           const lastResult = sm.results[sm.results.length - 1];
@@ -628,18 +632,17 @@ async function runSequentialLoop() {
             sm.results.pop();
           }
 
-          // 재시도 카운터 리셋 후 재시도
+          // 일반 재시도 1번만 (실패하면 다시 LLM 수정)
           sm.retryCount = 0;
-          const llmRetries = llmCfg.retryCount || 2;
-          sm.maxRetries = llmRetries;
-          broadcastLog(`LLM 수정 프롬프트로 ${llmRetries}번 재시도`, 'info');
+          sm.maxRetries = 1;
+          broadcastLog(`LLM 수정본 #${llmAttemptsSoFar + 1}: "${rewritten.substring(0, 60)}..."`, 'info');
           sm.transition(AutoState.PREPARING);
           continue;
         }
       }
 
-      // LLM 수정 후 재시도도 실패한 경우 원본 maxRetries 복원
-      if (item._llmRewriteAttempted) {
+      // LLM 수정 시도 완료 후 원본 maxRetries 복원
+      if (item._llmRewriteCount) {
         sm.maxRetries = automationSettings?.general?.maxRetries || 3;
       }
 
@@ -1159,18 +1162,22 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   } else {
     // 실패 → 검열 에러이면 LLM 수정 후 큐에 재삽입
     const llmCfg = automationSettings?.llm;
+    const llmMaxAttempts = llmCfg?.retryCount || 2;
+    const llmAttemptsSoFar = item._llmRewriteCount || 0;
+
     if (llmCfg?.enabled && llmCfg?.kieApiKey &&
         isCensorshipError(errorMsg, '') &&
-        !item._llmRewriteAttempted) {
-      broadcastLog(`검열 에러 [${itemIndex + 1}] → LLM 프롬프트 수정 시도`, 'info');
-      const rewritten = await rewritePromptWithLLM(item.prompt, llmCfg.kieApiKey);
+        llmAttemptsSoFar < llmMaxAttempts) {
+      broadcastLog(`검열 에러 [${itemIndex + 1}] → LLM 프롬프트 수정 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
+      const originalPrompt = item._originalPrompt || item.prompt;
+      const rewritten = await rewritePromptWithLLM(originalPrompt, llmCfg.kieApiKey);
       if (rewritten) {
         item._originalPrompt = item._originalPrompt || item.prompt;
         item.prompt = rewritten;
-        item._llmRewriteAttempted = true;
+        item._llmRewriteCount = llmAttemptsSoFar + 1;
         // 큐 끝에 다시 추가하여 재시도
         sm.queue.push(item);
-        broadcastLog(`LLM 수정 프롬프트로 재시도 예약: [${itemIndex + 1}]`, 'info');
+        broadcastLog(`LLM 수정본 #${llmAttemptsSoFar + 1} 재시도 예약: [${itemIndex + 1}]`, 'info');
       } else {
         sm.results.push({ success: false, index: itemIndex, error: errorMsg || 'Failed' });
       }
