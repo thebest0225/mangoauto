@@ -356,10 +356,12 @@ async function startAutomation(config) {
       for (let i = 0; i < concepts.length; i++) {
         const c = concepts[i];
         if (!c.prompt) continue;
+        broadcastLog(`썸네일[${i}] 서버 원본: "${c.prompt.substring(0, 80)}..."`, 'info');
         const hasExisting = !!thumbImages[String(i)];
         if (skipCompleted && hasExisting) continue;
 
         const finalPrompt = _buildThumbFinalPrompt(c.prompt, thumbTexts[String(i)]);
+        broadcastLog(`썸네일[${i}] 최종 프롬프트: "${finalPrompt.substring(0, 80)}..."`, 'info');
 
         queue.push({
           segmentIndex: i,  // concept index (0-based)
@@ -620,6 +622,7 @@ async function runSequentialLoop() {
       const llmAttemptsSoFar = item._llmRewriteCount || 0;
 
       if (llmCfg?.enabled && llmCfg?.kieApiKey &&
+          !item._isThumbnail &&
           isCensorshipError(resp.error, resp.errorCode) &&
           llmAttemptsSoFar < llmMaxAttempts) {
         broadcastLog(`검열 에러 감지 → LLM 프롬프트 수정 시도 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
@@ -1191,6 +1194,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     const llmAttemptsSoFar = item._llmRewriteCount || 0;
 
     if (llmCfg?.enabled && llmCfg?.kieApiKey &&
+        !item._isThumbnail &&
         isCensorshipError(errorMsg, '') &&
         llmAttemptsSoFar < llmMaxAttempts) {
       broadcastLog(`검열 에러 [${itemIndex + 1}] → LLM 프롬프트 수정 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
