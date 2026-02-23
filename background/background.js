@@ -308,6 +308,10 @@ async function handleMessage(msg, sender) {
     case 'REVIEW_CLEAR_COMPLETED':
       return await clearCompletedReviewItems();
 
+    // ── API Key Export (cross-profile sharing) ──
+    case 'EXPORT_API_KEY':
+      return await exportApiKey(msg.apiKey);
+
     default:
       return { error: 'Unknown message type: ' + msg.type };
   }
@@ -1635,6 +1639,28 @@ async function downloadMedia(msg) {
     });
     return { success: true, downloadId };
   } catch (err) {
+    return { error: err.message };
+  }
+}
+
+// ─── API Key Export (cross-profile file sharing) ───
+async function exportApiKey(apiKey) {
+  try {
+    const blob = new Blob([apiKey], { type: 'text/plain' });
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    });
+    await chrome.downloads.download({
+      url: dataUrl,
+      filename: 'MangoAuto/kie_api.key',
+      conflictAction: 'overwrite',
+      saveAs: false
+    });
+    return { ok: true };
+  } catch (err) {
+    MangoUtils.log('error', 'API key export failed:', err.message);
     return { error: err.message };
   }
 }

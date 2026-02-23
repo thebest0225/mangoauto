@@ -298,6 +298,41 @@ function bindEvents() {
   // Save settings
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
 
+  // API Key export/import
+  $('#exportApiKeyBtn').addEventListener('click', async () => {
+    const key = $('#kieApiKey').value.trim();
+    if (!key) {
+      addLog('내보낼 API 키가 없습니다', 'error');
+      return;
+    }
+    const result = await sendBg({ type: 'EXPORT_API_KEY', apiKey: key });
+    if (result?.ok) {
+      addLog('API 키 파일 내보내기 완료 (MangoAuto 폴더)', 'success');
+    } else {
+      addLog('API 키 내보내기 실패: ' + (result?.error || ''), 'error');
+    }
+  });
+
+  $('#importApiKeyFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const key = text.trim();
+      if (key && key.length > 5) {
+        $('#kieApiKey').value = key;
+        addLog('API 키 가져오기 완료', 'success');
+        // 자동 저장
+        await saveSettings();
+      } else {
+        addLog('유효하지 않은 키 파일입니다', 'error');
+      }
+    } catch (err) {
+      addLog('키 파일 읽기 실패: ' + err.message, 'error');
+    }
+    e.target.value = '';
+  });
+
   // ── Review tab events ──
   $('#reviewModeToggle').addEventListener('change', async (e) => {
     await sendBg({ type: 'SET_REVIEW_MODE', enabled: e.target.checked });
@@ -958,6 +993,13 @@ async function saveSettings() {
       }
     }
   });
+
+  // API 키가 있으면 자동으로 파일 내보내기 (다른 프로필 공유용)
+  const apiKey = settings.llm?.kieApiKey;
+  if (apiKey) {
+    sendBg({ type: 'EXPORT_API_KEY', apiKey }).catch(() => {});
+  }
+
   addLog('설정 저장됨', 'info');
 }
 
