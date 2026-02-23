@@ -519,14 +519,14 @@ input[type="checkbox"] {
 
 /* ─── Log ─── */
 .log-container {
-  max-height: 150px;
+  max-height: 180px;
   overflow-y: auto;
   background: #0f0f23;
   border-radius: 4px;
-  padding: 4px 6px;
+  padding: 6px 8px;
   font-family: monospace;
-  font-size: 9px;
-  line-height: 1.4;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .log-entry { color: #666; }

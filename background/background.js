@@ -931,6 +931,16 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   const filename = generateFilename(sm.currentIndex, sm.platform, sm.mediaType);
   broadcastLog(`handleSequentialComplete: mode=${sm.mode}, mediaType=${sm.mediaType}, hasUrl=${!!mediaUrl}, hasDataUrl=${!!mediaDataUrl}`, 'info');
 
+  // Flow 비디오 품질 업스케일 적용
+  if (mediaUrl && sm.platform === 'flow' && sm.mediaType === 'video') {
+    const videoQuality = automationSettings?.download?.videoQuality || '720p';
+    const originalUrl = mediaUrl;
+    mediaUrl = applyFlowVideoQuality(mediaUrl, videoQuality);
+    if (mediaUrl !== originalUrl) {
+      broadcastLog(`Flow 비디오 품질 적용: ${videoQuality}`, 'info');
+    }
+  }
+
   if (sm.mode === 'mangohub' && sm.projectId) {
     if (reviewModeEnabled) {
       // 검토 모드: 즉시 업로드하지 않고 검토 큐에 추가
@@ -1066,6 +1076,16 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   const itemIndex = task.index;
   // 파일명은 큐 인덱스 기준 (resultIndex가 아닌 실제 큐 위치)
   const filename = generateFilename(task.queueIndex ?? itemIndex, sm.platform, sm.mediaType);
+
+  // Flow 비디오 품질 업스케일 적용 (concurrent)
+  if (mediaUrl && sm.platform === 'flow' && sm.mediaType === 'video') {
+    const videoQuality = automationSettings?.download?.videoQuality || '720p';
+    const originalUrl = mediaUrl;
+    mediaUrl = applyFlowVideoQuality(mediaUrl, videoQuality);
+    if (mediaUrl !== originalUrl) {
+      broadcastLog(`Flow 비디오 품질 적용: ${videoQuality}`, 'info');
+    }
+  }
 
   if (success && (mediaDataUrl || mediaUrl)) {
     if (sm.mode === 'mangohub' && sm.projectId) {
@@ -1627,6 +1647,28 @@ async function fetchMediaWithCookies(url) {
   }
 
   throw new Error(`미디어 다운로드 실패: ${url.substring(0, 60)}`);
+}
+
+// ─── Apply video quality to Flow fifeUrl ───
+function applyFlowVideoQuality(url, quality) {
+  if (!url || !quality || quality === '720p') return url;
+
+  // Flow/Google Labs fifeUrl만 대상 (storage.googleapis.com 또는 lh3.google)
+  const isGoogleUrl = url.includes('storage.googleapis.com') ||
+                      url.includes('lh3.google') ||
+                      url.includes('labs.google');
+  if (!isGoogleUrl) return url;
+
+  // 1080p: =w1920 파라미터 추가 (Google fife URL 스타일)
+  if (quality === '1080p') {
+    // 기존 =xxx 파라미터가 있으면 교체, 없으면 추가
+    if (url.includes('=w')) {
+      return url.replace(/=w\d+/, '=w1920');
+    }
+    return url + (url.includes('?') ? '&' : '=') + 'w1920';
+  }
+
+  return url;
 }
 
 // ─── Download media ───
