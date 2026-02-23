@@ -1323,7 +1323,16 @@ async function retryFailed() {
     const originalItem = sm.queue[fr.index];
     if (originalItem) {
       // Preserve original index for consistent filename numbering
-      failedItems.push({ ...originalItem, _originalIndex: fr.index });
+      // LLM 관련 상태 리셋: 재시도 시 LLM이 새로 시도할 수 있도록
+      const retryItem = { ...originalItem, _originalIndex: fr.index };
+      if (retryItem._llmRewriteCount) {
+        retryItem._llmRewriteCount = 0;
+        if (retryItem._originalPrompt) {
+          retryItem.prompt = retryItem._originalPrompt;  // 원본 프롬프트 복원
+          delete retryItem._originalPrompt;
+        }
+      }
+      failedItems.push(retryItem);
     }
   }
 
@@ -1389,7 +1398,16 @@ async function retrySelected(indices) {
   for (const idx of indices) {
     const originalItem = sm.queue[idx];
     if (originalItem) {
-      selectedItems.push({ ...originalItem, _originalIndex: idx });
+      // LLM 관련 상태 리셋: 재생성 시 LLM이 새로 시도할 수 있도록
+      const retryItem = { ...originalItem, _originalIndex: idx };
+      if (retryItem._llmRewriteCount) {
+        retryItem._llmRewriteCount = 0;
+        if (retryItem._originalPrompt) {
+          retryItem.prompt = retryItem._originalPrompt;  // 원본 프롬프트 복원
+          delete retryItem._originalPrompt;
+        }
+      }
+      selectedItems.push(retryItem);
     }
   }
 

@@ -1008,30 +1008,32 @@
     }
     showToast(`모델 버튼 찾음: "${(modelBtn.textContent || '').trim().substring(0, 20)}"`, 'info');
 
-    // Step 2: 드롭다운 열기
+    // Step 2: 패널 열기
     MangoDom.simulateClick(modelBtn);
     await delay(600);
 
-    // Step 3: "비디오" 모드 선택 (이미 "비디오"면 건너뜀)
+    // Step 3: "비디오" 모드 선택
     const videoItem = findDropdownItem('비디오');
     if (videoItem) {
       const itemText = (videoItem.textContent || '').trim();
-      // "비디오" 항목이 있으면 클릭 (이미 선택된 상태여도 클릭해도 무방)
       MangoDom.simulateClick(videoItem);
       showToast(`"${itemText}" 선택`, 'info');
-      await delay(300);
+      await delay(500);
     }
 
-    // Step 4: 드롭다운 다시 열기 (설정 옵션 표시)
-    MangoDom.simulateClick(modelBtn);
-    await delay(600);
+    // Step 4: 패널이 닫혔는지 확인 → 닫혔으면 다시 열기
+    let dropdownBtns = findDropdownButtons();
+    if (dropdownBtns.length === 0) {
+      showToast('패널 닫힘 감지 → 다시 열기', 'info');
+      MangoDom.simulateClick(modelBtn);
+      await delay(600);
+      dropdownBtns = findDropdownButtons();
+    }
 
-    // Step 5: 드롭다운/팝오버 안의 버튼 목록 수집
-    const dropdownBtns = findDropdownButtons();
     const btnTexts = dropdownBtns.map(b => (b.textContent || '').trim()).filter(t => t.length < 20);
-    showToast(`드롭다운 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
+    showToast(`패널 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
 
-    // Step 6: 재생시간 설정
+    // Step 5: 재생시간 설정
     if (videoDuration) {
       const durationLabels = [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)];
       if (!clickButtonInList(dropdownBtns, durationLabels, 'duration')) {
@@ -1040,7 +1042,7 @@
       await delay(200);
     }
 
-    // Step 7: 해상도 설정
+    // Step 6: 해상도 설정
     if (videoResolution) {
       const resLabels = [videoResolution, videoResolution.replace('p', '')];
       if (!clickButtonInList(dropdownBtns, resLabels, 'resolution')) {
@@ -1049,7 +1051,7 @@
       await delay(200);
     }
 
-    // Step 8: 종횡비 설정
+    // Step 7: 종횡비 설정
     if (aspectRatio) {
       const arLabels = [aspectRatio];
       if (!clickButtonInList(dropdownBtns, arLabels, 'aspectRatio')) {
@@ -1058,7 +1060,7 @@
       await delay(200);
     }
 
-    // Step 9: 드롭다운 닫기
+    // Step 8: 패널 닫기
     document.body.click();
     await delay(300);
 
