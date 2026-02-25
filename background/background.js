@@ -58,11 +58,45 @@ let pipelineNextIdx = 0;
 // ─── Side Panel: open on icon click ───
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
-// ─── Keepalive via chrome.alarms ───
+// ─── Keepalive + Watchdog via chrome.alarms ───
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 });
-chrome.alarms.onAlarm.addListener((alarm) => {
+let _lastStateChange = Date.now();
+let _lastWatchdogState = null;
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') {
-    // Keeps service worker alive
+    // Watchdog: GENERATING/DOWNLOADING/UPLOADING 상태가 너무 오래 지속되면 에러 처리
+    const state = sm.state;
+    const stuckStates = [AutoState.GENERATING, AutoState.DOWNLOADING, AutoState.UPLOADING];
+
+    if (state !== _lastWatchdogState) {
+      _lastStateChange = Date.now();
+      _lastWatchdogState = state;
+    }
+
+    if (stuckStates.includes(state)) {
+      // 타임아웃 계산: Grok 비디오는 길게 (10분), 나머지는 5분
+      const isGrokVideo = sm.platform === 'grok' && sm.mediaType === 'video';
+      const maxStuckMs = isGrokVideo ? 600000 : 300000; // 10분 / 5분
+      const elapsed = Date.now() - _lastStateChange;
+
+      if (elapsed > maxStuckMs) {
+        broadcastLog(`Watchdog: ${state} 상태 ${Math.round(elapsed/1000)}초 경과 → 강제 에러 처리`, 'error');
+
+        // 현재 아이템 실패 처리 후 다음으로 진행
+        const item = sm.currentItem;
+        sm.results.push({
+          success: false,
+          index: sm._resultIndex?.() ?? sm.currentIndex,
+          segmentIndex: item?.segmentIndex,
+          error: `Watchdog timeout (${Math.round(elapsed/1000)}s stuck in ${state})`
+        });
+        sm.transition(AutoState.COOLDOWN);
+        _lastStateChange = Date.now();
+        broadcastState(getExtendedSnapshot());
+        await handleCooldownAndNext();
+      }
+    }
   }
 });
 
