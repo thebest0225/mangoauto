@@ -546,7 +546,7 @@ function updateQueuePreview() {
       thumbHtml = `<img class="queue-thumb" src="${escapeHtml(item.imageUrl)}" title="${escapeHtml(item.imageName || '')}">`;
     }
     div.innerHTML = `
-      <span class="queue-idx">${String(item._isMangoHub ? item.idx : item.idx + 1).padStart(3, '0')}</span>
+      <span class="queue-idx">${String(item._isThumbnail ? item.idx + 1 : (item._isMangoHub ? item.idx : item.idx + 1)).padStart(3, '0')}</span>
       ${thumbHtml}
       <span class="queue-text">${escapeHtml(item.text)}</span>
       <span class="queue-status qs-pending">대기</span>
