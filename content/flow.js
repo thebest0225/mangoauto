@@ -965,6 +965,20 @@
     MangoDom.simulateClick(settingsBtn);
     await delay(500);
 
+    // Set video model
+    if (videoSettings.model) {
+      await setVideoModel(videoSettings.model);
+    }
+
+    // Set aspect ratio
+    if (videoSettings.aspectRatio) {
+      await setComboboxByLabel(
+        ['가로세로', '비율', 'aspect', 'ratio'],
+        videoSettings.aspectRatio,
+        '비디오 화면비'
+      );
+    }
+
     // Set output count
     if (videoSettings.outputCount) {
       await setComboboxByLabel(
@@ -1026,6 +1040,51 @@
       }
     }
     console.warn(LOG_PREFIX, `Image model not found: ${model}`);
+  }
+
+  async function setVideoModel(model) {
+    const modelDefs = {
+      'veo-3':            { match: ['Veo 3'], exclude: ['3.1', 'Fast', 'Quality'] },
+      'veo-3.1-fast':     { match: ['Veo 3.1', 'Fast'] },
+      'veo-3.1-quality':  { match: ['Veo 3.1', 'Quality'] }
+    };
+    const def = modelDefs[model] || { match: [model] };
+
+    const matchesModel = (text) => {
+      const lower = text.toLowerCase();
+      const hasMatch = def.match.every(name => lower.includes(name.toLowerCase()));
+      if (!hasMatch) return false;
+      if (def.exclude) {
+        return !def.exclude.some(ex => lower.includes(ex.toLowerCase()));
+      }
+      return true;
+    };
+
+    const comboboxes = document.querySelectorAll('[role="combobox"]');
+    for (const combobox of comboboxes) {
+      const text = combobox.textContent || '';
+      if (text.includes('Veo') || text.includes('veo') || text.includes('모델') || text.includes('Model')) {
+        if (matchesModel(text)) {
+          console.log(LOG_PREFIX, `Video model already set: ${model}`);
+          return;
+        }
+        combobox.click();
+        await delay(300);
+        const options = document.querySelectorAll('[role="option"]');
+        for (const option of options) {
+          if (matchesModel(option.textContent || '')) {
+            console.log(LOG_PREFIX, `Video model selected: ${option.textContent.trim()}`);
+            option.click();
+            await delay(300);
+            return;
+          }
+        }
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await delay(200);
+        break;
+      }
+    }
+    console.warn(LOG_PREFIX, `Video model not found: ${model}`);
   }
 
   async function setComboboxByLabel(labelPatterns, targetValue, settingName) {

@@ -1296,10 +1296,8 @@ async function handleCooldownAndNext() {
   if (sm.state === AutoState.COOLDOWN) {
     broadcastState(getExtendedSnapshot());
     let min, max;
-    if (sm.platform === 'flow') {
-      // Flow는 동시 작업 가능 → 짧은 쿨다운
-      min = 1000;
-      max = 2000;
+    if (false) {
+      // (구: Flow 짧은 쿨다운 하드코딩 제거 — 사용자 설정값 사용)
     } else {
       min = sm._cooldownMin || 10000;
       max = sm._cooldownMax || 15000;
