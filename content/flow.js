@@ -761,10 +761,11 @@
     await delay(300);
 
     if (!already && relevant) {
-      console.log(LOG_PREFIX, `[settings] 적용: ratio=${relevant.aspectRatio}, count=${relevant.outputCount}, model=${relevant.model}`);
+      console.log(LOG_PREFIX, `[settings] 적용: model=${relevant.model}, ratio=${relevant.aspectRatio}, count=${relevant.outputCount}`);
+      // 모델을 먼저 변경 (모델 변경 시 ratio/count가 리셋될 수 있음)
+      if (relevant.model) { await setModelNew(relevant.model); await delay(500); }
       if (relevant.aspectRatio) await setAspectRatioNew(relevant.aspectRatio);
       if (relevant.outputCount) await setOutputCountNew(relevant.outputCount);
-      if (relevant.model) await setModelNew(relevant.model);
       if (isImageOutput) imageSettingsApplied = true;
       else videoSettingsApplied = true;
     }
@@ -775,41 +776,68 @@
 
   // ─── Prompt Input ───
   function findPromptTextarea() {
-    // Primary: by ID (PINHOLE_TEXT_AREA_ELEMENT_ID)
-    let textarea = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
-    if (textarea) return textarea;
+    // 1. by ID (PINHOLE_TEXT_AREA_ELEMENT_ID)
+    let el = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
+    if (el) { console.log(LOG_PREFIX, '[prompt] ID로 발견'); return el; }
 
-    // placeholder 속성으로 검색
-    textarea = document.querySelector('textarea[placeholder*="create" i], textarea[placeholder*="만들"], textarea[placeholder*="want" i]');
-    if (textarea) return textarea;
+    // 2. placeholder/aria-label 속성으로 textarea 검색
+    el = document.querySelector(
+      'textarea[placeholder*="create" i], textarea[placeholder*="만들"], textarea[placeholder*="want" i], ' +
+      'textarea[aria-label*="create" i], textarea[aria-label*="prompt" i], textarea[aria-label*="만들"]'
+    );
+    if (el) { console.log(LOG_PREFIX, '[prompt] 속성으로 발견:', el.tagName); return el; }
 
-    // aria-label 속성으로 검색
-    textarea = document.querySelector('textarea[aria-label*="create" i], textarea[aria-label*="prompt" i], textarea[aria-label*="만들"]');
-    if (textarea) return textarea;
+    // 3. 생성 버튼(arrow_forward) 근처의 textarea 검색
+    const genBtn = findGenerateButton();
+    if (genBtn) {
+      let container = genBtn.parentElement;
+      for (let i = 0; i < 6 && container; i++) {
+        const ta = container.querySelector('textarea:not([id*="recaptcha"])');
+        if (ta) { console.log(LOG_PREFIX, '[prompt] 생성버튼 근처 textarea 발견'); return ta; }
+        container = container.parentElement;
+      }
+    }
 
-    // 보이는 textarea 중 recaptcha 제외
+    // 4. 보이는 textarea 중 recaptcha 제외
     const allTextareas = document.querySelectorAll('textarea');
     for (const ta of allTextareas) {
-      const id = ta.id || '';
-      if (id.includes('recaptcha')) continue;
+      if ((ta.id || '').includes('recaptcha')) continue;
       if (ta.type === 'hidden') continue;
-      // 보이는 textarea (크기 있음)
       if (ta.offsetHeight > 10 && ta.offsetWidth > 50) {
-        console.log(LOG_PREFIX, `[prompt] 보이는 textarea 발견: id="${id}", placeholder="${(ta.placeholder||'').substring(0,30)}", size=${ta.offsetWidth}x${ta.offsetHeight}`);
+        console.log(LOG_PREFIX, `[prompt] 보이는 textarea: id="${ta.id}", ${ta.offsetWidth}x${ta.offsetHeight}`);
         return ta;
       }
     }
 
-    // contenteditable 검색
-    const editables = document.querySelectorAll('[contenteditable="true"]');
-    for (const el of editables) {
-      const hint = (el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || el.textContent || '').toLowerCase();
-      if (hint.includes('create') || hint.includes('만들') || hint.includes('want')) return el;
+    // 5. 생성 버튼 근처의 contenteditable
+    if (genBtn) {
+      let container = genBtn.parentElement;
+      for (let i = 0; i < 6 && container; i++) {
+        const ce = container.querySelector('[contenteditable="true"]');
+        if (ce && ce.offsetHeight > 10) {
+          console.log(LOG_PREFIX, '[prompt] 생성버튼 근처 contenteditable 발견');
+          return ce;
+        }
+        container = container.parentElement;
+      }
     }
 
-    // 최후: 아무 textarea (recaptcha 제외)
+    // 6. 페이지 하단 근처의 contenteditable (프롬프트 영역)
+    const editables = document.querySelectorAll('[contenteditable="true"]');
+    for (const ce of editables) {
+      if (ce.offsetHeight > 10 && ce.offsetWidth > 100) {
+        console.log(LOG_PREFIX, '[prompt] 보이는 contenteditable 발견');
+        return ce;
+      }
+    }
+
+    // 7. 디버그: 모든 textarea/contenteditable 덤프
+    console.warn(LOG_PREFIX, '[prompt] 못찾음! textarea 목록:');
     for (const ta of allTextareas) {
-      if (!(ta.id || '').includes('recaptcha')) return ta;
+      console.log(LOG_PREFIX, `  textarea: id="${ta.id}" placeholder="${(ta.placeholder||'').substring(0,30)}" size=${ta.offsetWidth}x${ta.offsetHeight}`);
+    }
+    for (const ce of document.querySelectorAll('[contenteditable="true"]')) {
+      console.log(LOG_PREFIX, `  contenteditable: tag=${ce.tagName} id="${ce.id}" size=${ce.offsetWidth}x${ce.offsetHeight} text="${(ce.textContent||'').substring(0,30)}"`);
     }
     return null;
   }
@@ -819,32 +847,42 @@
     await closeSettingsPanel();
     await delay(300);
 
-    const textarea = findPromptTextarea();
-    if (!textarea) throw new Error('Cannot find prompt textarea');
+    const input = findPromptTextarea();
+    if (!input) throw new Error('Cannot find prompt input');
 
-    console.log(LOG_PREFIX, `Prompt textarea found: ${textarea.tagName}#${textarea.id}, placeholder="${(textarea.placeholder || '').substring(0, 30)}"`);
+    const isTextarea = (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT');
+    console.log(LOG_PREFIX, `Prompt found: ${input.tagName}#${input.id}, isTextarea=${isTextarea}`);
 
-    textarea.click();
+    input.click();
     await delay(200);
-    textarea.focus();
+    input.focus();
     await delay(100);
 
-    // Use React-compatible native setter
-    MangoDom.setTextareaValue(textarea, text);
+    if (isTextarea) {
+      // textarea/input: React-compatible native setter
+      MangoDom.setTextareaValue(input, text);
+    } else {
+      // contenteditable div: execCommand 방식
+      MangoDom.setContentEditable(input, text);
+    }
     await delay(200);
 
     // 확인: 값이 실제로 설정되었는지
-    const actual = textarea.value || textarea.textContent || '';
+    const actual = isTextarea ? (input.value || '') : (input.textContent || '');
     if (!actual.includes(text.substring(0, 20))) {
-      console.warn(LOG_PREFIX, `Prompt not set properly. Expected start: "${text.substring(0, 30)}", Got: "${actual.substring(0, 30)}"`);
-      // 재시도: dispatchEvent 방식
-      textarea.value = text;
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      console.warn(LOG_PREFIX, `Prompt 설정 실패. 기대: "${text.substring(0, 30)}", 실제: "${actual.substring(0, 30)}"`);
+      // 재시도
+      if (isTextarea) {
+        input.value = text;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        input.textContent = text;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      }
       await delay(200);
     }
 
-    console.log(LOG_PREFIX, 'Prompt typed');
+    console.log(LOG_PREFIX, 'Prompt typed OK');
   }
 
   // ─── Generate Button ───
