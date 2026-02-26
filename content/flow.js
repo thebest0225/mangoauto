@@ -384,28 +384,53 @@
   function findSettingsTrigger() {
     const genBtn = findGenerateButton();
     const clickables = document.querySelectorAll('button, [role="button"]');
+    const modelKeywords = ['Nano', 'Imagen', 'Veo', 'Banana', '모델', 'Model'];
+
+    // 1차: 모델명 + xN 패턴
     for (const el of clickables) {
       if (el === genBtn) continue;
       const text = el.textContent || '';
-      if (/x\d/.test(text) && text.length < 60 &&
-          (text.includes('Nano') || text.includes('Imagen') || text.includes('Veo') ||
-           text.includes('Banana') || text.includes('모델'))) {
+      if (text.length < 80 && modelKeywords.some(kw => text.includes(kw))) {
+        console.log(LOG_PREFIX, `Settings trigger found (model): "${text.trim().substring(0, 40)}"`);
         return el;
       }
     }
-    // Broader: xN pattern near prompt
+    // 2차: xN 패턴 (프롬프트 입력 근처)
     const textarea = findPromptTextarea();
     if (textarea) {
       let container = textarea.parentElement;
-      for (let i = 0; i < 6 && container; i++) container = container.parentElement;
+      for (let i = 0; i < 8 && container; i++) container = container.parentElement;
       if (container) {
         for (const el of container.querySelectorAll('button, [role="button"]')) {
           if (el === genBtn) continue;
           const text = el.textContent || '';
-          if (/x\d/.test(text) && text.length < 60 && !el.querySelector('textarea')) return el;
+          if (/x\d/.test(text) && text.length < 60 && !el.querySelector('textarea')) {
+            console.log(LOG_PREFIX, `Settings trigger found (xN): "${text.trim().substring(0, 40)}"`);
+            return el;
+          }
         }
       }
     }
+    // 3차: 프롬프트 입력 영역 근처의 아이콘 버튼 (화살표 제외)
+    if (textarea) {
+      let row = textarea.closest('div');
+      for (let i = 0; i < 5 && row; i++) {
+        const btns = row.querySelectorAll('button');
+        for (const btn of btns) {
+          if (btn === genBtn) continue;
+          const text = (btn.textContent || '').trim();
+          const icons = btn.querySelectorAll('i, mat-icon, svg');
+          // tune 아이콘 또는 settings 아이콘
+          if (text === 'tune' || text === 'settings' || text === '⚙') {
+            console.log(LOG_PREFIX, `Settings trigger found (icon): "${text}"`);
+            return btn;
+          }
+        }
+        row = row.parentElement;
+      }
+    }
+    console.warn(LOG_PREFIX, 'Settings trigger not found. Buttons:',
+      [...clickables].map(b => b.textContent?.trim()?.substring(0, 30)).filter(t => t && t.length < 30).join(' | '));
     return null;
   }
 
@@ -450,20 +475,25 @@
       const btnText = btn.textContent?.trim() || '';
       for (const text of texts) {
         if (btnText === text || (btnText.includes(text) && btnText.length < text.length + 30)) {
-          if (btn.getAttribute('aria-selected') === 'true' ||
+          // 이미 선택된 상태 감지 (aria 속성 또는 시각적 스타일)
+          const isSelected = btn.getAttribute('aria-selected') === 'true' ||
               btn.getAttribute('aria-pressed') === 'true' ||
-              btn.getAttribute('aria-checked') === 'true') {
-            console.log(LOG_PREFIX, `${settingName} already: ${btnText}`);
+              btn.getAttribute('aria-checked') === 'true' ||
+              btn.classList.contains('selected') ||
+              btn.classList.contains('active');
+          if (isSelected) {
+            console.log(LOG_PREFIX, `${settingName} already selected: ${btnText}`);
             return true;
           }
-          btn.click();
-          console.log(LOG_PREFIX, `${settingName}: ${btnText}`);
+          MangoDom.simulateClick(btn);
+          console.log(LOG_PREFIX, `${settingName} clicked: ${btnText}`);
           await delay(300);
           return true;
         }
       }
     }
-    console.warn(LOG_PREFIX, `${settingName} not found: ${texts.join('/')}`);
+    console.warn(LOG_PREFIX, `${settingName} not found: ${texts.join('/')}. Available buttons:`,
+      [...buttons].map(b => b.textContent?.trim()?.substring(0, 20)).filter(t => t && t.length < 20).join(' | '));
     return false;
   }
 
