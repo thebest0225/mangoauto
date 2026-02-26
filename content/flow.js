@@ -458,15 +458,28 @@
   }
 
   async function closeSettingsPanel() {
-    if (!isSettingsPanelOpen()) return;
-    const trigger = findSettingsTrigger();
-    if (trigger) {
-      MangoDom.simulateClick(trigger);
-      await delay(300);
-      if (!isSettingsPanelOpen()) return;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!isSettingsPanelOpen()) {
+        console.log(LOG_PREFIX, 'Settings panel closed');
+        return;
+      }
+      if (attempt === 0) {
+        const trigger = findSettingsTrigger();
+        if (trigger) {
+          MangoDom.simulateClick(trigger);
+          await delay(400);
+          continue;
+        }
+      }
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await delay(400);
     }
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await delay(300);
+    // 최후 수단: 빈 곳 클릭
+    if (isSettingsPanelOpen()) {
+      document.body.click();
+      await delay(300);
+      console.log(LOG_PREFIX, 'Settings panel force close attempt');
+    }
   }
 
   async function clickSettingsButton(texts, settingName) {
@@ -516,7 +529,27 @@
   }
 
   async function setOutputCountNew(count) {
-    return await clickSettingsButton([`x${count}`], 'Output count');
+    // 정확 매칭: 버튼 텍스트가 정확히 "x1", "x2" 등이어야 함
+    const target = `x${count}`;
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const btnText = btn.textContent?.trim() || '';
+      if (btnText === target) {
+        const isSelected = btn.getAttribute('aria-selected') === 'true' ||
+            btn.getAttribute('aria-pressed') === 'true' ||
+            btn.classList.contains('selected') || btn.classList.contains('active');
+        if (isSelected) {
+          console.log(LOG_PREFIX, `Output count already: ${target}`);
+          return true;
+        }
+        MangoDom.simulateClick(btn);
+        console.log(LOG_PREFIX, `Output count clicked: ${target}`);
+        await delay(300);
+        return true;
+      }
+    }
+    console.warn(LOG_PREFIX, `Output count not found: ${target}`);
+    return false;
   }
 
   async function setModelNew(model) {
@@ -617,15 +650,34 @@
   }
 
   async function typePrompt(text) {
+    // 설정 패널이 열려있으면 먼저 닫기
+    await closeSettingsPanel();
+    await delay(300);
+
     const textarea = findPromptTextarea();
     if (!textarea) throw new Error('Cannot find prompt textarea');
 
+    console.log(LOG_PREFIX, `Prompt textarea found: ${textarea.tagName}#${textarea.id}, placeholder="${(textarea.placeholder || '').substring(0, 30)}"`);
+
     textarea.click();
-    await delay(100);
+    await delay(200);
     textarea.focus();
+    await delay(100);
 
     // Use React-compatible native setter
     MangoDom.setTextareaValue(textarea, text);
+    await delay(200);
+
+    // 확인: 값이 실제로 설정되었는지
+    const actual = textarea.value || textarea.textContent || '';
+    if (!actual.includes(text.substring(0, 20))) {
+      console.warn(LOG_PREFIX, `Prompt not set properly. Expected start: "${text.substring(0, 30)}", Got: "${actual.substring(0, 30)}"`);
+      // 재시도: dispatchEvent 방식
+      textarea.value = text;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      await delay(200);
+    }
 
     console.log(LOG_PREFIX, 'Prompt typed');
   }
