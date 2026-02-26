@@ -1,5 +1,5 @@
 /**
- * MangoAuto - Flow Fetch Interceptor
+ * MangoAuto - Flow Fetch Interceptor + Prompt Injector
  * Injected into MAIN world to intercept native window.fetch
  * Captures API responses for video/image generation and posts results back
  *
@@ -7,6 +7,10 @@
  * - batchGenerate (image generation - sync)
  * - batchAsyncGenerateVideo (video generation - start)
  * - batchCheckAsyncVideo (video generation - status polling)
+ *
+ * Also handles:
+ * - SET_FLOW_PROMPT: Stores prompt and injects it into outgoing API requests
+ *   (bypasses Lit framework internal state issue)
  */
 
 (() => {
@@ -15,6 +19,72 @@
   let batchSeq = 0;
   const pendingVideoOps = new Map();
 
+  // ─── Prompt Injection State ───
+  let pendingPrompt = null;
+
+  // Listen for SET_FLOW_PROMPT from content script (flow.js)
+  window.addEventListener('message', (event) => {
+    if (event.data?.type === 'SET_FLOW_PROMPT') {
+      pendingPrompt = event.data.text;
+      console.log(LOG_PREFIX, 'Prompt stored for injection:', pendingPrompt?.substring(0, 60));
+
+      // Also try to set prompt on Lit component directly (for UI state sync)
+      trySetLitPrompt(event.data.text);
+
+      window.postMessage({ type: 'SET_FLOW_PROMPT_RESULT', ok: true }, '*');
+    }
+  });
+
+  /**
+   * Try to find the Lit/Web Component hosting the prompt input
+   * and set its property directly for UI state consistency
+   */
+  function trySetLitPrompt(text) {
+    const el = document.getElementById('PINHOLE_TEXT_AREA_ELEMENT_ID') ||
+               document.querySelector('textarea:not([id*="recaptcha"])') ||
+               document.querySelector('[contenteditable="true"]');
+
+    if (!el) {
+      console.log(LOG_PREFIX, 'Prompt element not found for Lit property set');
+      return;
+    }
+
+    // Walk up DOM to find custom elements (Lit components have hyphenated tag names)
+    let node = el;
+    for (let i = 0; i < 30 && node; i++) {
+      if (node.tagName?.includes('-')) {
+        // Log all properties that look prompt-related
+        const allProps = Object.getOwnPropertyNames(node);
+        const protoProps = Object.getOwnPropertyNames(Object.getPrototypeOf(node) || {});
+        const combined = [...new Set([...allProps, ...protoProps])];
+
+        for (const prop of combined) {
+          const lower = prop.toLowerCase();
+          if (lower.includes('prompt') || lower.includes('userinput') ||
+              lower.includes('textinput') || lower === 'value' || lower === 'text') {
+            try {
+              const val = node[prop];
+              if (typeof val === 'string' || val === null || val === undefined) {
+                console.log(LOG_PREFIX, `Lit ${node.tagName}.${prop} = "${String(val)?.substring(0, 30)}"`);
+                node[prop] = text;
+                console.log(LOG_PREFIX, `  → Set to: "${text.substring(0, 30)}"`);
+              }
+            } catch (e) {
+              // Skip non-writable props
+            }
+          }
+        }
+
+        // Trigger Lit re-render if available
+        if (typeof node.requestUpdate === 'function') {
+          try { node.requestUpdate(); } catch (e) {}
+        }
+      }
+      node = node.parentElement || node.getRootNode()?.host;
+    }
+  }
+
+  // ─── Fetch Interceptor ───
   window.fetch = async function (...args) {
     const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
 
@@ -42,6 +112,45 @@
       }
     } catch (e) {
       // Ignore parse errors
+    }
+
+    // ─── Prompt Injection: replace empty prompt with pending prompt ───
+    if ((isImageApi || isVideoStart) && pendingPrompt) {
+      try {
+        const body = args[1]?.body;
+        if (typeof body === 'string') {
+          const parsed = JSON.parse(body);
+          const currentPrompt = parsed.requests?.[0]?.prompt ||
+                               parsed.requests?.[0]?.textInput?.prompt ||
+                               parsed.request?.prompt || '';
+
+          // Inject if current prompt is empty or differs from what we want
+          if (!currentPrompt || currentPrompt.trim() === '') {
+            console.log(LOG_PREFIX, '⚡ Injecting prompt (was empty):', pendingPrompt.substring(0, 60));
+          } else {
+            console.log(LOG_PREFIX, '⚡ Overriding prompt:', currentPrompt.substring(0, 30), '→', pendingPrompt.substring(0, 30));
+          }
+
+          // Set prompt in all known locations
+          if (parsed.requests?.[0]) {
+            parsed.requests[0].prompt = pendingPrompt;
+            if (parsed.requests[0].textInput) {
+              parsed.requests[0].textInput.prompt = pendingPrompt;
+            }
+          }
+          if (parsed.request) {
+            parsed.request.prompt = pendingPrompt;
+          }
+
+          // Rebuild args with modified body
+          args = [args[0], { ...args[1], body: JSON.stringify(parsed) }];
+          requestPrompt = pendingPrompt;
+          console.log(LOG_PREFIX, '✓ Prompt injected into request body');
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, 'Prompt injection failed:', e.message);
+      }
+      pendingPrompt = null; // Clear after use
     }
 
     try {
@@ -176,5 +285,5 @@
     }
   };
 
-  console.log(LOG_PREFIX, 'Fetch interceptor installed');
+  console.log(LOG_PREFIX, 'Fetch interceptor + prompt injector installed');
 })();

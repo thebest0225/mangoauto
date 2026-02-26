@@ -86,12 +86,15 @@
     }
   });
 
-  // ─── Listen for API results from inject.js ───
+  // ─── Listen for messages from inject.js (MAIN world) ───
   let lastApiResult = null;
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'VEO3_API_RESULT') {
       console.log(LOG_PREFIX, 'API result received:', event.data);
       lastApiResult = event.data;
+    }
+    if (event.data?.type === 'SET_FLOW_PROMPT_RESULT') {
+      console.log(LOG_PREFIX, 'Prompt injection confirmed by inject.js:', event.data.ok);
     }
   });
 
@@ -149,10 +152,17 @@
       // Step 4: Snapshot existing media (생성 전 기존 미디어 기록)
       snapshotExistingMedia();
 
-      // Step 5: Fill prompt
+      // Step 5: Fill prompt (DOM + MAIN world injection)
       await typePrompt(prompt);
       await delay(600 + Math.random() * 400);
       checkStopped();
+
+      // Step 5.5: Send prompt to inject.js (MAIN world) for fetch interception
+      // inject.js will inject this prompt into the outgoing API request body
+      // This bypasses Lit framework internal state desync issue
+      window.postMessage({ type: 'SET_FLOW_PROMPT', text: prompt }, '*');
+      console.log(LOG_PREFIX, 'Prompt sent to inject.js for fetch injection');
+      await delay(200);
 
       // Step 6: Click generate
       await clickGenerate();
