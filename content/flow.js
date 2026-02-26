@@ -126,22 +126,10 @@
       await ensureProjectPage();
       checkStopped();
 
-      // Step 1: Switch to correct mode (이미지 만들기 / 텍스트 동영상 변환 / 프레임 동영상 변환)
-      await switchMode(mode);
-      await delay(1000);
-      checkStopped();
-
-      // Step 2: Apply settings via tune button
+      // Step 1+2: Switch mode + apply settings via settings panel (New UI Feb 2026)
       const isImageOutput = (mediaType === 'image');
-      if (isImageOutput && !imageSettingsApplied) {
-        await applyImageSettings(settings);
-        imageSettingsApplied = true;
-        await delay(500);
-      } else if (!isImageOutput && !videoSettingsApplied) {
-        await applyVideoSettings(settings);
-        videoSettingsApplied = true;
-        await delay(500);
-      }
+      await applyAllSettings(mode, settings, isImageOutput);
+      await delay(500);
       checkStopped();
 
       // Step 3: Upload source image (for frame-to-video or image-to-image mode)
@@ -259,7 +247,7 @@
       window.location.href = url.replace(/\/flow\/?$/, '/flow/project/new');
       await delay(3000);
       // 페이지 로드 대기
-      await waitForElement(() => document.getElementById('PINHOLE_TEXT_AREA_ELEMENT_ID'), 15000);
+      await waitForElement(() => findPromptTextarea(), 15000);
       return;
     }
 
@@ -373,15 +361,229 @@
     }
   }
 
+  // ─── Settings Panel (New UI - Feb 2026) ───
+  // Settings accessed via model badge near prompt (e.g., "Nano Banana □ x2")
+  // Panel: Image/Video tabs, Landscape/Portrait, x1-x4, model dropdown
+
+  function isSettingsPanelOpen() {
+    const buttons = document.querySelectorAll('button');
+    let countBtns = 0;
+    for (const btn of buttons) {
+      if (/^x[1-4]$/.test(btn.textContent?.trim())) countBtns++;
+    }
+    if (countBtns >= 2) return true;
+    let hasLandscape = false, hasPortrait = false;
+    for (const btn of buttons) {
+      const t = btn.textContent?.trim() || '';
+      if (t.includes('Landscape') || t === '가로') hasLandscape = true;
+      if (t.includes('Portrait') || t === '세로') hasPortrait = true;
+    }
+    return hasLandscape && hasPortrait;
+  }
+
+  function findSettingsTrigger() {
+    const genBtn = findGenerateButton();
+    const clickables = document.querySelectorAll('button, [role="button"]');
+    for (const el of clickables) {
+      if (el === genBtn) continue;
+      const text = el.textContent || '';
+      if (/x\d/.test(text) && text.length < 60 &&
+          (text.includes('Nano') || text.includes('Imagen') || text.includes('Veo') ||
+           text.includes('Banana') || text.includes('모델'))) {
+        return el;
+      }
+    }
+    // Broader: xN pattern near prompt
+    const textarea = findPromptTextarea();
+    if (textarea) {
+      let container = textarea.parentElement;
+      for (let i = 0; i < 6 && container; i++) container = container.parentElement;
+      if (container) {
+        for (const el of container.querySelectorAll('button, [role="button"]')) {
+          if (el === genBtn) continue;
+          const text = el.textContent || '';
+          if (/x\d/.test(text) && text.length < 60 && !el.querySelector('textarea')) return el;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function openSettingsPanel() {
+    if (isSettingsPanelOpen()) {
+      console.log(LOG_PREFIX, 'Settings panel already open');
+      return true;
+    }
+    const trigger = findSettingsTrigger();
+    if (trigger) {
+      console.log(LOG_PREFIX, 'Opening settings:', trigger.textContent?.trim()?.substring(0, 30));
+      MangoDom.simulateClick(trigger);
+      await delay(600);
+      if (isSettingsPanelOpen()) return true;
+    }
+    // Legacy: tune button
+    const tuneBtn = getByXPath(SELECTORS.SETTINGS_BUTTON_XPATH);
+    if (tuneBtn) {
+      MangoDom.simulateClick(tuneBtn);
+      await delay(500);
+      return true;
+    }
+    console.warn(LOG_PREFIX, 'Cannot open settings panel');
+    return false;
+  }
+
+  async function closeSettingsPanel() {
+    if (!isSettingsPanelOpen()) return;
+    const trigger = findSettingsTrigger();
+    if (trigger) {
+      MangoDom.simulateClick(trigger);
+      await delay(300);
+      if (!isSettingsPanelOpen()) return;
+    }
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await delay(300);
+  }
+
+  async function clickSettingsButton(texts, settingName) {
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const btnText = btn.textContent?.trim() || '';
+      for (const text of texts) {
+        if (btnText === text || (btnText.includes(text) && btnText.length < text.length + 30)) {
+          if (btn.getAttribute('aria-selected') === 'true' ||
+              btn.getAttribute('aria-pressed') === 'true' ||
+              btn.getAttribute('aria-checked') === 'true') {
+            console.log(LOG_PREFIX, `${settingName} already: ${btnText}`);
+            return true;
+          }
+          btn.click();
+          console.log(LOG_PREFIX, `${settingName}: ${btnText}`);
+          await delay(300);
+          return true;
+        }
+      }
+    }
+    console.warn(LOG_PREFIX, `${settingName} not found: ${texts.join('/')}`);
+    return false;
+  }
+
+  async function setMediaType(mode) {
+    if (mode.includes('video')) {
+      return await clickSettingsButton(['Video', '동영상', 'Videos'], 'Media type');
+    }
+    return await clickSettingsButton(['Image', '이미지', 'Images'], 'Media type');
+  }
+
+  async function setAspectRatioNew(ratio) {
+    const map = {
+      '16:9': ['Landscape', '가로'],
+      '9:16': ['Portrait', '세로'],
+      '1:1': ['Square', '정사각형']
+    };
+    if (map[ratio]) return await clickSettingsButton(map[ratio], 'Aspect ratio');
+    console.warn(LOG_PREFIX, 'Unknown aspect ratio:', ratio);
+    return false;
+  }
+
+  async function setOutputCountNew(count) {
+    return await clickSettingsButton([`x${count}`], 'Output count');
+  }
+
+  async function setModelNew(model) {
+    const defs = {
+      'imagen4':          { match: ['Imagen 4', 'imagen4'], exclude: [] },
+      'nano-banana-pro':  { match: ['Nano Banana Pro'], exclude: [] },
+      'nano-banana':      { match: ['Nano Banana'], exclude: ['Pro'] },
+      'veo-3':            { match: ['Veo 3'], exclude: ['3.1', 'Fast', 'Quality'] },
+      'veo-3.1-fast':     { match: ['Veo 3.1', 'Fast'], exclude: [] },
+      'veo-3.1-quality':  { match: ['Veo 3.1', 'Quality'], exclude: [] }
+    };
+    const def = defs[model] || { match: [model], exclude: [] };
+    const matches = (text) => {
+      const l = text.toLowerCase();
+      const ok = def.match.some(n => l.includes(n.toLowerCase()));
+      if (!ok) return false;
+      return !def.exclude.some(ex => l.includes(ex.toLowerCase()));
+    };
+
+    const elems = document.querySelectorAll('[role="combobox"], button');
+    for (const el of elems) {
+      const text = el.textContent || '';
+      if (!text.includes('Imagen') && !text.includes('Nano') && !text.includes('Banana') &&
+          !text.includes('Veo') && !text.includes('모델') && !text.includes('Model')) continue;
+      if (matches(text)) {
+        console.log(LOG_PREFIX, `Model already: ${model}`);
+        return;
+      }
+      el.click();
+      await delay(400);
+      for (const opt of document.querySelectorAll('[role="option"], [role="menuitem"]')) {
+        if (matches(opt.textContent || '')) {
+          opt.click();
+          console.log(LOG_PREFIX, `Model: ${opt.textContent.trim()}`);
+          await delay(300);
+          return;
+        }
+      }
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await delay(200);
+      break;
+    }
+    console.warn(LOG_PREFIX, `Model not found: ${model}`);
+  }
+
+  async function applyAllSettings(mode, settings, isImageOutput) {
+    const relevant = isImageOutput ?
+      settings?.flowImage : (settings?.flowVideo || settings?.veo);
+    const already = isImageOutput ? imageSettingsApplied : videoSettingsApplied;
+
+    const opened = await openSettingsPanel();
+    if (!opened) {
+      console.warn(LOG_PREFIX, 'Panel unavailable, legacy fallback');
+      await switchMode(mode);
+      if (!already && relevant) {
+        if (isImageOutput) { await applyImageSettings(settings); imageSettingsApplied = true; }
+        else { await applyVideoSettings(settings); videoSettingsApplied = true; }
+      }
+      return;
+    }
+
+    await setMediaType(mode);
+    await delay(300);
+
+    if (!already && relevant) {
+      if (relevant.aspectRatio) await setAspectRatioNew(relevant.aspectRatio);
+      if (relevant.outputCount) await setOutputCountNew(relevant.outputCount);
+      if (relevant.model) await setModelNew(relevant.model);
+      if (isImageOutput) imageSettingsApplied = true;
+      else videoSettingsApplied = true;
+    }
+
+    await closeSettingsPanel();
+    console.log(LOG_PREFIX, 'Settings applied');
+  }
+
   // ─── Prompt Input ───
   function findPromptTextarea() {
-    // Primary: by ID (most reliable)
+    // Primary: by ID
     let textarea = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
+    if (textarea) return textarea;
+
+    // Fallback: textarea with creation placeholder
+    textarea = document.querySelector('textarea[placeholder*="create" i], textarea[placeholder*="만들"]');
     if (textarea) return textarea;
 
     // Fallback: any textarea
     textarea = document.querySelector('textarea');
-    return textarea;
+    if (textarea) return textarea;
+
+    // Fallback: contenteditable element
+    const editables = document.querySelectorAll('[contenteditable="true"]');
+    for (const el of editables) {
+      const hint = (el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
+      if (hint.includes('create') || hint.includes('만들')) return el;
+    }
+    return null;
   }
 
   async function typePrompt(text) {
