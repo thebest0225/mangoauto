@@ -1268,7 +1268,7 @@ function generateFilename(index, platform, mediaType) {
   const item = sm.queue[index];
   let displayIndex;
   if (sm.mode === 'mangohub' && item?.segmentIndex !== undefined) {
-    displayIndex = item._isThumbnail ? item.segmentIndex + 1 : item.segmentIndex;
+    displayIndex = item.segmentIndex + 1;
   } else if (sm._useOriginalIndex && item?._originalIndex !== undefined) {
     displayIndex = item._originalIndex + 1;
   } else {

@@ -362,124 +362,113 @@
   }
 
   // ─── Settings Panel (New UI - Feb 2026) ───
-  // Settings accessed via model badge near prompt (e.g., "Nano Banana □ x2")
+  // Settings badge at bottom: "🔥 Nano Banana Pro ▢ x1" → click to open panel
   // Panel: Image/Video tabs, Landscape/Portrait, x1-x4, model dropdown
+  // Model dropdown: click trigger → floating option list appears
 
   function isSettingsPanelOpen() {
+    // 패널 감지: x1~x4 버튼이 2개 이상 보이면 패널 열린 상태
     const buttons = document.querySelectorAll('button');
-    let countBtns = 0;
+    let xCount = 0;
     for (const btn of buttons) {
-      if (/^x[1-4]$/.test(btn.textContent?.trim())) countBtns++;
+      if (/^x[1-4]$/.test(btn.textContent?.trim())) xCount++;
     }
-    if (countBtns >= 2) return true;
-    let hasLandscape = false, hasPortrait = false;
-    for (const btn of buttons) {
-      const t = btn.textContent?.trim() || '';
-      if (t.includes('Landscape') || t === '가로') hasLandscape = true;
-      if (t.includes('Portrait') || t === '세로') hasPortrait = true;
-    }
-    return hasLandscape && hasPortrait;
+    return xCount >= 2;
   }
 
   function findSettingsTrigger() {
+    // 하단 배지 버튼: 모델명 + xN이 포함된 버튼 (프롬프트 텍스트에어리어 근처)
     const genBtn = findGenerateButton();
-    const clickables = document.querySelectorAll('button, [role="button"]');
-    const modelKeywords = ['Nano', 'Imagen', 'Veo', 'Banana', '모델', 'Model'];
+    const buttons = document.querySelectorAll('button, [role="button"]');
+    const modelKw = ['Nano', 'Imagen', 'Veo', 'Banana'];
 
-    // 1차: 모델명 + xN 패턴
-    for (const el of clickables) {
-      if (el === genBtn) continue;
-      const text = el.textContent || '';
-      if (text.length < 80 && modelKeywords.some(kw => text.includes(kw))) {
-        console.log(LOG_PREFIX, `Settings trigger found (model): "${text.trim().substring(0, 40)}"`);
-        return el;
+    for (const btn of buttons) {
+      if (btn === genBtn) continue;
+      const text = btn.textContent || '';
+      if (text.length > 80 || text.length < 3) continue;
+      // 모델명 + x숫자 패턴 (배지)
+      if (modelKw.some(kw => text.includes(kw)) && /x[1-4]/.test(text)) {
+        console.log(LOG_PREFIX, `[trigger] 배지 발견: "${text.trim().substring(0, 50)}"`);
+        return btn;
       }
     }
-    // 2차: xN 패턴 (프롬프트 입력 근처)
-    const textarea = findPromptTextarea();
-    if (textarea) {
-      let container = textarea.parentElement;
-      for (let i = 0; i < 8 && container; i++) container = container.parentElement;
-      if (container) {
-        for (const el of container.querySelectorAll('button, [role="button"]')) {
-          if (el === genBtn) continue;
-          const text = el.textContent || '';
-          if (/x\d/.test(text) && text.length < 60 && !el.querySelector('textarea')) {
-            console.log(LOG_PREFIX, `Settings trigger found (xN): "${text.trim().substring(0, 40)}"`);
-            return el;
-          }
-        }
+    // 모델명만 있는 버튼 (x숫자 없을 수도)
+    for (const btn of buttons) {
+      if (btn === genBtn) continue;
+      const text = btn.textContent || '';
+      if (text.length > 80 || text.length < 3) continue;
+      if (modelKw.some(kw => text.includes(kw)) && !btn.querySelector('textarea')) {
+        console.log(LOG_PREFIX, `[trigger] 모델 버튼 발견: "${text.trim().substring(0, 50)}"`);
+        return btn;
       }
     }
-    // 3차: 프롬프트 입력 영역 근처의 아이콘 버튼 (화살표 제외)
-    if (textarea) {
-      let row = textarea.closest('div');
-      for (let i = 0; i < 5 && row; i++) {
-        const btns = row.querySelectorAll('button');
-        for (const btn of btns) {
-          if (btn === genBtn) continue;
-          const text = (btn.textContent || '').trim();
-          const icons = btn.querySelectorAll('i, mat-icon, svg');
-          // tune 아이콘 또는 settings 아이콘
-          if (text === 'tune' || text === 'settings' || text === '⚙') {
-            console.log(LOG_PREFIX, `Settings trigger found (icon): "${text}"`);
-            return btn;
-          }
-        }
-        row = row.parentElement;
-      }
-    }
-    console.warn(LOG_PREFIX, 'Settings trigger not found. Buttons:',
-      [...clickables].map(b => b.textContent?.trim()?.substring(0, 30)).filter(t => t && t.length < 30).join(' | '));
+    console.warn(LOG_PREFIX, '[trigger] 못찾음. 버튼 목록:',
+      [...buttons].map(b => `"${b.textContent?.trim()?.substring(0, 30)}"`).filter(t => t.length < 35).join(', '));
     return null;
   }
 
   async function openSettingsPanel() {
     if (isSettingsPanelOpen()) {
-      console.log(LOG_PREFIX, 'Settings panel already open');
+      console.log(LOG_PREFIX, '[panel] 이미 열려있음');
       return true;
     }
     const trigger = findSettingsTrigger();
-    if (trigger) {
-      console.log(LOG_PREFIX, 'Opening settings:', trigger.textContent?.trim()?.substring(0, 30));
-      MangoDom.simulateClick(trigger);
+    if (!trigger) {
+      console.warn(LOG_PREFIX, '[panel] 트리거 못찾음');
+      return false;
+    }
+    console.log(LOG_PREFIX, '[panel] 열기:', trigger.textContent?.trim()?.substring(0, 40));
+    MangoDom.simulateClick(trigger);
+    await delay(600);
+    const open = isSettingsPanelOpen();
+    console.log(LOG_PREFIX, `[panel] 열림 상태: ${open}`);
+    if (!open) {
+      // 재시도: 일반 click
+      trigger.click();
       await delay(600);
-      if (isSettingsPanelOpen()) return true;
+      return isSettingsPanelOpen();
     }
-    // Legacy: tune button
-    const tuneBtn = getByXPath(SELECTORS.SETTINGS_BUTTON_XPATH);
-    if (tuneBtn) {
-      MangoDom.simulateClick(tuneBtn);
-      await delay(500);
-      return true;
-    }
-    console.warn(LOG_PREFIX, 'Cannot open settings panel');
-    return false;
+    return true;
   }
 
   async function closeSettingsPanel() {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (!isSettingsPanelOpen()) {
-        console.log(LOG_PREFIX, 'Settings panel closed');
-        return;
-      }
-      if (attempt === 0) {
-        const trigger = findSettingsTrigger();
-        if (trigger) {
-          MangoDom.simulateClick(trigger);
-          await delay(400);
-          continue;
-        }
-      }
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    if (!isSettingsPanelOpen()) return;
+    // 1차: 배지 다시 클릭 (토글)
+    const trigger = findSettingsTrigger();
+    if (trigger) {
+      MangoDom.simulateClick(trigger);
       await delay(400);
+      if (!isSettingsPanelOpen()) { console.log(LOG_PREFIX, '[panel] 닫힘 (배지)'); return; }
     }
-    // 최후 수단: 빈 곳 클릭
-    if (isSettingsPanelOpen()) {
-      document.body.click();
-      await delay(300);
-      console.log(LOG_PREFIX, 'Settings panel force close attempt');
-    }
+    // 2차: Escape
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await delay(400);
+    if (!isSettingsPanelOpen()) { console.log(LOG_PREFIX, '[panel] 닫힘 (Esc)'); return; }
+    // 3차: body 클릭
+    document.body.click();
+    await delay(400);
+    console.log(LOG_PREFIX, `[panel] 닫기 시도 후 상태: ${isSettingsPanelOpen() ? '열림' : '닫힘'}`);
+  }
+
+  // 패널 내 버튼 클릭 (Image/Video, Landscape/Portrait 등)
+  function isButtonSelected(btn) {
+    // aria 속성 확인
+    if (btn.getAttribute('aria-selected') === 'true') return true;
+    if (btn.getAttribute('aria-pressed') === 'true') return true;
+    if (btn.getAttribute('aria-checked') === 'true') return true;
+    // CSS 클래스 확인
+    const cl = btn.className || '';
+    if (/selected|active|checked/i.test(cl)) return true;
+    // computedStyle: 배경색 차이로 감지 (선택된 버튼은 보통 밝은 배경)
+    try {
+      const style = window.getComputedStyle(btn);
+      const bg = style.backgroundColor;
+      // 투명이 아닌 배경 = 선택 상태일 가능성
+      if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+        // 이것만으로 판단하진 않지만, 로그에 기록
+      }
+    } catch (e) {}
+    return false;
   }
 
   async function clickSettingsButton(texts, settingName) {
@@ -487,26 +476,20 @@
     for (const btn of buttons) {
       const btnText = btn.textContent?.trim() || '';
       for (const text of texts) {
-        if (btnText === text || (btnText.includes(text) && btnText.length < text.length + 30)) {
-          // 이미 선택된 상태 감지 (aria 속성 또는 시각적 스타일)
-          const isSelected = btn.getAttribute('aria-selected') === 'true' ||
-              btn.getAttribute('aria-pressed') === 'true' ||
-              btn.getAttribute('aria-checked') === 'true' ||
-              btn.classList.contains('selected') ||
-              btn.classList.contains('active');
-          if (isSelected) {
-            console.log(LOG_PREFIX, `${settingName} already selected: ${btnText}`);
+        if (btnText === text || (btnText.includes(text) && btnText.length < text.length + 20)) {
+          if (isButtonSelected(btn)) {
+            console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택: "${btnText}"`);
             return true;
           }
           MangoDom.simulateClick(btn);
-          console.log(LOG_PREFIX, `${settingName} clicked: ${btnText}`);
+          console.log(LOG_PREFIX, `[btn] ${settingName} 클릭: "${btnText}"`);
           await delay(300);
           return true;
         }
       }
     }
-    console.warn(LOG_PREFIX, `${settingName} not found: ${texts.join('/')}. Available buttons:`,
-      [...buttons].map(b => b.textContent?.trim()?.substring(0, 20)).filter(t => t && t.length < 20).join(' | '));
+    console.warn(LOG_PREFIX, `[btn] ${settingName} 못찾음: ${texts.join('/')}. 버튼들:`,
+      [...buttons].map(b => `"${b.textContent?.trim()?.substring(0, 25)}"`).filter(t => t.length < 30).join(', '));
     return false;
   }
 
@@ -524,114 +507,225 @@
       '1:1': ['Square', '정사각형']
     };
     if (map[ratio]) return await clickSettingsButton(map[ratio], 'Aspect ratio');
-    console.warn(LOG_PREFIX, 'Unknown aspect ratio:', ratio);
     return false;
   }
 
   async function setOutputCountNew(count) {
-    // 정확 매칭: 버튼 텍스트가 정확히 "x1", "x2" 등이어야 함
     const target = `x${count}`;
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
-      const btnText = btn.textContent?.trim() || '';
-      if (btnText === target) {
-        const isSelected = btn.getAttribute('aria-selected') === 'true' ||
-            btn.getAttribute('aria-pressed') === 'true' ||
-            btn.classList.contains('selected') || btn.classList.contains('active');
-        if (isSelected) {
-          console.log(LOG_PREFIX, `Output count already: ${target}`);
+      if (btn.textContent?.trim() === target) {
+        if (isButtonSelected(btn)) {
+          console.log(LOG_PREFIX, `[count] 이미 선택: ${target}`);
           return true;
         }
         MangoDom.simulateClick(btn);
-        console.log(LOG_PREFIX, `Output count clicked: ${target}`);
+        console.log(LOG_PREFIX, `[count] 클릭: ${target}`);
         await delay(300);
         return true;
       }
     }
-    console.warn(LOG_PREFIX, `Output count not found: ${target}`);
+    console.warn(LOG_PREFIX, `[count] ${target} 못찾음`);
     return false;
   }
 
   async function setModelNew(model) {
     const defs = {
-      'imagen4':          { match: ['Imagen 4', 'imagen4'], exclude: [] },
+      'imagen4':          { match: ['Imagen 4'], exclude: [] },
       'nano-banana-pro':  { match: ['Nano Banana Pro'], exclude: [] },
       'nano-banana':      { match: ['Nano Banana'], exclude: ['Pro'] },
-      'veo-3':            { match: ['Veo 3'], exclude: ['3.1', 'Fast', 'Quality'] },
+      'veo-3':            { match: ['Veo 3'], exclude: ['3.1'] },
       'veo-3.1-fast':     { match: ['Veo 3.1', 'Fast'], exclude: [] },
       'veo-3.1-quality':  { match: ['Veo 3.1', 'Quality'], exclude: [] }
     };
     const def = defs[model] || { match: [model], exclude: [] };
     const matchesModel = (text) => {
       const l = text.toLowerCase();
-      const ok = def.match.every(n => l.includes(n.toLowerCase()));
-      if (!ok) return false;
-      return !def.exclude.some(ex => l.includes(ex.toLowerCase()));
+      return def.match.every(n => l.includes(n.toLowerCase())) &&
+             !def.exclude.some(ex => l.includes(ex.toLowerCase()));
     };
 
-    // 모델 드롭다운 트리거 찾기: 모델 키워드가 있는 요소 (드롭다운 화살표 ▼ 포함)
-    const modelKeywords = ['Imagen', 'Nano', 'Banana', 'Veo', '모델', 'Model'];
-    const allElements = document.querySelectorAll('[role="combobox"], [role="listbox"], button, [class*="dropdown"], [class*="select"]');
+    console.log(LOG_PREFIX, `[model] 설정 시작: ${model}, 매칭 키워드: ${def.match.join('+')}`);
+
+    // ── Step 1: 모델 드롭다운 트리거 찾기 ──
+    // 패널 안에서 모델명이 적힌 드롭다운 (▼ 아이콘 포함)
+    // x1~x4 버튼이나 Image/Video/Landscape/Portrait 버튼은 제외
+    const skipTexts = ['Image', 'Video', 'Landscape', 'Portrait', '가로', '세로', '이미지', '동영상'];
+    const modelKw = ['Nano', 'Banana', 'Imagen', 'Veo'];
+
+    // DOM 스냅샷: 클릭 전 모든 요소 기록
+    const beforeElems = new Set(document.querySelectorAll('*'));
+
     let dropdownTrigger = null;
 
-    for (const el of allElements) {
-      const text = el.textContent || '';
-      if (text.length > 100) continue;
-      if (!modelKeywords.some(kw => text.includes(kw))) continue;
-      // 이미 선택된 모델인지 확인
-      if (matchesModel(text)) {
-        console.log(LOG_PREFIX, `Model already set: ${model} (text: "${text.trim().substring(0, 40)}")`);
-        return;
+    // 방법 1: 모든 클릭 가능 요소 중 모델 키워드가 있고, 설정 버튼이 아닌 것
+    const clickables = document.querySelectorAll('button, [role="button"], [role="combobox"], [role="listbox"], [tabindex]');
+    console.log(LOG_PREFIX, `[model] 클릭 가능 요소: ${clickables.length}개`);
+
+    for (const el of clickables) {
+      const text = el.textContent?.trim() || '';
+      if (text.length > 80 || text.length < 3) continue;
+      if (/^x[1-4]$/.test(text)) continue;
+      if (skipTexts.some(s => text === s)) continue;
+
+      if (modelKw.some(kw => text.includes(kw))) {
+        // 이미 원하는 모델인지 확인
+        if (matchesModel(text)) {
+          console.log(LOG_PREFIX, `[model] 이미 선택됨: "${text.substring(0, 40)}"`);
+          return;
+        }
+        // 배지 (하단 바)가 아닌, 패널 내부의 드롭다운인지 구별
+        // 배지는 xN을 포함하고, 드롭다운은 모델명만 있음
+        if (/x[1-4]/.test(text)) {
+          console.log(LOG_PREFIX, `[model] 배지 스킵 (xN 포함): "${text.substring(0, 40)}"`);
+          continue;
+        }
+        console.log(LOG_PREFIX, `[model] 드롭다운 후보: tag=${el.tagName}, role=${el.getAttribute('role')}, text="${text.substring(0, 40)}", classes="${(el.className || '').substring(0, 60)}"`);
+        dropdownTrigger = el;
+        break;
       }
-      dropdownTrigger = el;
-      break;
+    }
+
+    // 방법 2: aria-haspopup 속성이 있는 요소
+    if (!dropdownTrigger) {
+      const popups = document.querySelectorAll('[aria-haspopup="true"], [aria-haspopup="listbox"], [aria-haspopup="menu"]');
+      for (const el of popups) {
+        const text = el.textContent?.trim() || '';
+        if (modelKw.some(kw => text.includes(kw))) {
+          console.log(LOG_PREFIX, `[model] aria-haspopup 발견: "${text.substring(0, 40)}"`);
+          dropdownTrigger = el;
+          break;
+        }
+      }
+    }
+
+    // 방법 3: arrow_drop_down 아이콘 근처
+    if (!dropdownTrigger) {
+      const icons = document.querySelectorAll('i, mat-icon');
+      for (const icon of icons) {
+        const iconText = icon.textContent?.trim();
+        if (iconText === 'arrow_drop_down' || iconText === 'expand_more' || iconText === 'keyboard_arrow_down') {
+          const parent = icon.closest('button, [role="button"], [tabindex]') || icon.parentElement;
+          if (parent && modelKw.some(kw => parent.textContent?.includes(kw))) {
+            console.log(LOG_PREFIX, `[model] 화살표 아이콘 근처 발견: "${parent.textContent?.trim()?.substring(0, 40)}"`);
+            dropdownTrigger = parent;
+            break;
+          }
+        }
+      }
     }
 
     if (!dropdownTrigger) {
-      console.warn(LOG_PREFIX, `Model dropdown trigger not found for: ${model}`);
+      // 진단: 패널의 모든 요소 덤프
+      console.warn(LOG_PREFIX, '[model] 드롭다운 트리거 못찾음! 패널 내 요소 덤프:');
+      const allBtns = document.querySelectorAll('button, [role="button"], [role="combobox"], [tabindex]');
+      for (const b of allBtns) {
+        const t = b.textContent?.trim() || '';
+        if (t.length > 0 && t.length < 60) {
+          console.log(LOG_PREFIX, `  - tag=${b.tagName} role=${b.getAttribute('role')} text="${t}" class="${(b.className||'').substring(0,40)}"`);
+        }
+      }
       return;
     }
 
-    console.log(LOG_PREFIX, `Model dropdown click: "${dropdownTrigger.textContent?.trim()?.substring(0, 40)}"`);
+    // ── Step 2: 드롭다운 열기 ──
+    console.log(LOG_PREFIX, `[model] 드롭다운 클릭: "${dropdownTrigger.textContent?.trim()?.substring(0, 40)}"`);
     MangoDom.simulateClick(dropdownTrigger);
     await delay(500);
 
-    // 옵션 탐색: role="option", role="menuitem", 또는 일반 div/li 등 모든 클릭 가능 요소
-    const optionSelectors = '[role="option"], [role="menuitem"], [role="listbox"] > *, [class*="option"], [class*="menu-item"], li';
-    const options = document.querySelectorAll(optionSelectors);
-    console.log(LOG_PREFIX, `Model options found: ${options.length} (selectors: ${optionSelectors})`);
-
-    for (const opt of options) {
-      const optText = opt.textContent || '';
-      if (matchesModel(optText)) {
-        MangoDom.simulateClick(opt);
-        console.log(LOG_PREFIX, `Model selected: ${optText.trim().substring(0, 40)}`);
-        await delay(400);
-        return;
-      }
+    // ── Step 3: 옵션 찾기 ──
+    // 방법 A: 새로 나타난 요소 (DOM diff)
+    const afterElems = document.querySelectorAll('*');
+    const newElems = [];
+    for (const el of afterElems) {
+      if (!beforeElems.has(el)) newElems.push(el);
     }
+    console.log(LOG_PREFIX, `[model] 새로 나타난 요소: ${newElems.length}개`);
 
-    // 폭넓은 탐색: 새로 나타난 모든 요소 중 모델명이 포함된 것
-    const allVisible = document.querySelectorAll('div, span, button, a');
-    for (const el of allVisible) {
+    // 새 요소 중 모델명이 있는 클릭 가능한 것
+    for (const el of newElems) {
       const text = el.textContent?.trim() || '';
-      // 직접 텍스트가 모델명이고 길이가 짧은 요소 (하위 요소 텍스트가 아닌)
-      const directText = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-      const checkText = directText || text;
-      if (checkText.length > 60) continue;
-      if (matchesModel(checkText) && el.offsetParent !== null) {
+      if (text.length > 60 || text.length < 3) continue;
+      if (matchesModel(text)) {
+        console.log(LOG_PREFIX, `[model] ✓ DOM diff 매칭: tag=${el.tagName}, text="${text.substring(0, 40)}"`);
         MangoDom.simulateClick(el);
-        console.log(LOG_PREFIX, `Model selected (broad): ${checkText.substring(0, 40)}`);
         await delay(400);
         return;
       }
     }
 
-    // 닫기
+    // 새 요소 로그
+    if (newElems.length > 0 && newElems.length < 50) {
+      console.log(LOG_PREFIX, '[model] 새 요소 목록:');
+      for (const el of newElems) {
+        const t = el.textContent?.trim() || '';
+        if (t.length > 0 && t.length < 60) {
+          console.log(LOG_PREFIX, `  - tag=${el.tagName} text="${t}" class="${(el.className||'').substring(0,40)}"`);
+        }
+      }
+    }
+
+    // 방법 B: Angular Material 오버레이 컨테이너
+    const overlayContainers = document.querySelectorAll('.cdk-overlay-container, [class*="overlay"], [class*="popover"], [class*="dropdown-menu"], [class*="listbox"]');
+    console.log(LOG_PREFIX, `[model] 오버레이 컨테이너: ${overlayContainers.length}개`);
+    for (const container of overlayContainers) {
+      const items = container.querySelectorAll('*');
+      for (const item of items) {
+        const text = item.textContent?.trim() || '';
+        if (text.length > 60 || text.length < 3) continue;
+        if (matchesModel(text) && item.offsetParent !== null) {
+          console.log(LOG_PREFIX, `[model] ✓ 오버레이 매칭: tag=${item.tagName}, text="${text.substring(0, 40)}"`);
+          MangoDom.simulateClick(item);
+          await delay(400);
+          return;
+        }
+      }
+    }
+
+    // 방법 C: role="option", role="menuitem" 등 표준 셀렉터
+    const stdOptions = document.querySelectorAll('[role="option"], [role="menuitem"], [role="menuitemradio"], mat-option');
+    console.log(LOG_PREFIX, `[model] 표준 옵션 요소: ${stdOptions.length}개`);
+    for (const opt of stdOptions) {
+      const text = opt.textContent?.trim() || '';
+      if (matchesModel(text)) {
+        console.log(LOG_PREFIX, `[model] ✓ 표준 셀렉터 매칭: "${text.substring(0, 40)}"`);
+        MangoDom.simulateClick(opt);
+        await delay(400);
+        return;
+      }
+    }
+
+    // 방법 D: 가장 넓은 탐색 — 모든 요소 중 모델명 + 클릭 가능 (자식 없는 리프 노드)
+    const allElements = document.querySelectorAll('div, span, li, a, button, p');
+    let candidates = [];
+    for (const el of allElements) {
+      const text = el.textContent?.trim() || '';
+      if (text.length > 60 || text.length < 3) continue;
+      if (!matchesModel(text)) continue;
+      if (el.offsetParent === null) continue; // hidden
+      // 리프에 가까운 요소 우선 (자식 요소 수가 적은)
+      const childCount = el.children.length;
+      candidates.push({ el, text, childCount });
+    }
+    // 자식 수가 적은 순으로 정렬 (가장 구체적인 요소 우선)
+    candidates.sort((a, b) => a.childCount - b.childCount);
+    console.log(LOG_PREFIX, `[model] 전체 탐색 후보: ${candidates.length}개`);
+    for (const c of candidates.slice(0, 5)) {
+      console.log(LOG_PREFIX, `  - tag=${c.el.tagName} children=${c.childCount} text="${c.text.substring(0, 40)}" class="${(c.el.className||'').substring(0,40)}"`);
+    }
+    // 드롭다운 트리거 자체는 제외하고 클릭
+    for (const c of candidates) {
+      if (c.el === dropdownTrigger || dropdownTrigger.contains(c.el)) continue;
+      console.log(LOG_PREFIX, `[model] ✓ 전체탐색 클릭: tag=${c.el.tagName}, text="${c.text.substring(0, 40)}"`);
+      MangoDom.simulateClick(c.el);
+      await delay(400);
+      return;
+    }
+
+    // 실패
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await delay(200);
-    console.warn(LOG_PREFIX, `Model option not found: ${model}. Visible options:`,
-      [...options].map(o => o.textContent?.trim()?.substring(0, 30)).join(' | '));
+    console.error(LOG_PREFIX, `[model] ✗ 옵션 못찾음: ${model}`);
   }
 
   async function applyAllSettings(mode, settings, isImageOutput) {
