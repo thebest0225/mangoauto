@@ -471,11 +471,30 @@
     return false;
   }
 
-  // 패널 내 버튼 클릭 (scrollIntoView 없이 — 팝업 패널 보호)
-  function panelClick(el) {
-    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  // 패널 내 버튼 클릭 — 좌표 포함 + 여러 방법 시도
+  async function panelClick(el) {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const evtOpts = { bubbles: true, cancelable: true, clientX: x, clientY: y, screenX: x, screenY: y };
+
+    // 방법 1: PointerEvent + MouseEvent (좌표 포함)
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...evtOpts, pointerId: 1, pointerType: 'mouse' }));
+    el.dispatchEvent(new MouseEvent('mousedown', evtOpts));
+    await delay(50);
+    el.dispatchEvent(new PointerEvent('pointerup', { ...evtOpts, pointerId: 1, pointerType: 'mouse' }));
+    el.dispatchEvent(new MouseEvent('mouseup', evtOpts));
+    el.dispatchEvent(new MouseEvent('click', evtOpts));
+
+    // 방법 2: native el.click() (isTrusted: true)
+    await delay(50);
+    el.click();
+
+    // 방법 3: focus + keyboard Enter/Space
+    await delay(50);
+    el.focus();
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
   }
 
   async function clickSettingsButton(texts, settingName) {
@@ -488,14 +507,8 @@
             console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택: "${btnText}"`);
             return true;
           }
-          panelClick(btn);
-          await delay(200);
-          // 검증: 클릭 후 선택 상태 확인
-          if (!isButtonSelected(btn)) {
-            console.log(LOG_PREFIX, `[btn] ${settingName} 재시도 (native click): "${btnText}"`);
-            btn.click();
-            await delay(200);
-          }
+          await panelClick(btn);
+          await delay(300);
           console.log(LOG_PREFIX, `[btn] ${settingName} 클릭: "${btnText}" → selected=${isButtonSelected(btn)}`);
           return true;
         }
@@ -532,12 +545,8 @@
           console.log(LOG_PREFIX, `[count] 이미 선택: ${target}`);
           return true;
         }
-        panelClick(btn);
-        await delay(200);
-        if (!isButtonSelected(btn)) {
-          btn.click();
-          await delay(200);
-        }
+        await panelClick(btn);
+        await delay(300);
         console.log(LOG_PREFIX, `[count] 클릭: ${target} → selected=${isButtonSelected(btn)}`);
         return true;
       }
@@ -868,7 +877,7 @@
     if (!input) throw new Error('Cannot find prompt input');
 
     const isTextarea = (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT');
-    console.log(LOG_PREFIX, `Prompt found: ${input.tagName}#${input.id}, isTextarea=${isTextarea}`);
+    console.log(LOG_PREFIX, `[prompt] 발견: ${input.tagName}#${input.id}, isTextarea=${isTextarea}`);
 
     input.click();
     await delay(200);
@@ -876,43 +885,112 @@
     await delay(100);
 
     if (isTextarea) {
-      // textarea/input: React-compatible native setter
       MangoDom.setTextareaValue(input, text);
     } else {
-      // contenteditable div: execCommand 방식 (프레임워크 상태 동기화)
-      // 1) 포커스 + 기존 내용 선택 후 삭제 (execCommand로 — DOM 직접 조작 금지)
-      input.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(input);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      document.execCommand('delete', false);
-      await delay(100);
-      // 2) insertText로 삽입 (브라우저가 input 이벤트 자동 발생)
-      document.execCommand('insertText', false, text);
-      console.log(LOG_PREFIX, `[prompt] execCommand insertText 완료 (${text.length}자)`);
+      // contenteditable div: 여러 방법 시도
+      await typeIntoContentEditable(input, text);
     }
     await delay(300);
 
-    // 확인: 값이 실제로 설정되었는지
+    // 검증
     const actual = isTextarea ? (input.value || '') : (input.textContent || '');
-    if (!actual.includes(text.substring(0, 20))) {
-      console.warn(LOG_PREFIX, `[prompt] 검증 실패. 기대: "${text.substring(0, 30)}", 실제: "${actual.substring(0, 30)}"`);
-      // 재시도: 직접 텍스트 설정 + input 이벤트
-      if (isTextarea) {
-        input.value = text;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      } else {
-        input.textContent = text;
-        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-      }
-      await delay(200);
-    } else {
+    if (actual.includes(text.substring(0, 20))) {
       console.log(LOG_PREFIX, `[prompt] 검증 OK: "${actual.substring(0, 40)}..."`);
+    } else {
+      console.warn(LOG_PREFIX, `[prompt] 검증 실패: "${actual.substring(0, 40)}"`);
+    }
+  }
+
+  async function typeIntoContentEditable(input, text) {
+    // contenteditable에 플레이스홀더 자식이 있을 수 있음 → 먼저 활성화
+    input.click();
+    await delay(300);
+    input.focus();
+    await delay(200);
+
+    // 플레이스홀더 자식 요소 제거 (있으면)
+    const placeholders = input.querySelectorAll('[data-placeholder], [class*="placeholder"]');
+    for (const ph of placeholders) {
+      console.log(LOG_PREFIX, `[prompt] 플레이스홀더 제거: "${ph.textContent?.substring(0, 30)}"`);
+      ph.remove();
     }
 
-    console.log(LOG_PREFIX, 'Prompt typed OK');
+    // 기존 내용 모두 삭제 (DOM 직접 조작 → 프레임워크가 빈 상태로 인식)
+    while (input.firstChild) input.firstChild.remove();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await delay(100);
+
+    console.log(LOG_PREFIX, `[prompt] 클리어 후 textContent: "${input.textContent}"`);
+
+    // ── 방법 1: 클립보드 copy → paste ──
+    try {
+      const tmp = document.createElement('textarea');
+      tmp.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+      tmp.value = text;
+      document.body.appendChild(tmp);
+      tmp.focus();
+      tmp.select();
+      document.execCommand('copy');
+      document.body.removeChild(tmp);
+
+      input.focus();
+      await delay(100);
+      const pasted = document.execCommand('paste');
+      if (pasted && (input.textContent || '').includes(text.substring(0, 15))) {
+        console.log(LOG_PREFIX, '[prompt] ✓ 방법1 성공 (clipboard paste)');
+        return;
+      }
+      console.log(LOG_PREFIX, `[prompt] 방법1 paste=${pasted}, content="${(input.textContent||'').substring(0,30)}"`);
+    } catch (e) {
+      console.log(LOG_PREFIX, `[prompt] 방법1 에러: ${e.message}`);
+    }
+
+    // ── 방법 2: InputEvent insertFromPaste (가짜 붙여넣기) ──
+    try {
+      input.focus();
+      while (input.firstChild) input.firstChild.remove();
+
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      input.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true,
+        inputType: 'insertFromPaste', dataTransfer: dt
+      }));
+
+      // 텍스트 노드 삽입
+      input.appendChild(document.createTextNode(text));
+
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true, inputType: 'insertFromPaste', dataTransfer: dt
+      }));
+
+      await delay(200);
+      console.log(LOG_PREFIX, `[prompt] 방법2 insertFromPaste 완료, content="${(input.textContent||'').substring(0,30)}"`);
+
+      // blur → focus (프레임워크 change 감지)
+      input.blur();
+      await delay(150);
+      input.focus();
+      return;
+    } catch (e) {
+      console.log(LOG_PREFIX, `[prompt] 방법2 에러: ${e.message}`);
+    }
+
+    // ── 방법 3: execCommand insertText ──
+    try {
+      input.focus();
+      while (input.firstChild) input.firstChild.remove();
+      await delay(50);
+      document.execCommand('insertText', false, text);
+      await delay(200);
+      input.blur();
+      await delay(100);
+      input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      console.log(LOG_PREFIX, '[prompt] 방법3 완료 (execCommand insertText)');
+    } catch (e) {
+      console.log(LOG_PREFIX, `[prompt] 방법3 에러: ${e.message}`);
+    }
   }
 
   // ─── Generate Button ───

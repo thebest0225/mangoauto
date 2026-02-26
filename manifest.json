@@ -11,7 +11,9 @@
     "scripting",
     "alarms",
     "activeTab",
-    "sidePanel"
+    "sidePanel",
+    "clipboardWrite",
+    "clipboardRead"
   ],
   "host_permissions": [
     "https://grok.com/*",
