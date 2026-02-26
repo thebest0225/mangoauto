@@ -471,6 +471,13 @@
     return false;
   }
 
+  // 패널 내 버튼 클릭 (scrollIntoView 없이 — 팝업 패널 보호)
+  function panelClick(el) {
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }
+
   async function clickSettingsButton(texts, settingName) {
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
@@ -481,9 +488,15 @@
             console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택: "${btnText}"`);
             return true;
           }
-          MangoDom.simulateClick(btn);
-          console.log(LOG_PREFIX, `[btn] ${settingName} 클릭: "${btnText}"`);
-          await delay(300);
+          panelClick(btn);
+          await delay(200);
+          // 검증: 클릭 후 선택 상태 확인
+          if (!isButtonSelected(btn)) {
+            console.log(LOG_PREFIX, `[btn] ${settingName} 재시도 (native click): "${btnText}"`);
+            btn.click();
+            await delay(200);
+          }
+          console.log(LOG_PREFIX, `[btn] ${settingName} 클릭: "${btnText}" → selected=${isButtonSelected(btn)}`);
           return true;
         }
       }
@@ -519,9 +532,13 @@
           console.log(LOG_PREFIX, `[count] 이미 선택: ${target}`);
           return true;
         }
-        MangoDom.simulateClick(btn);
-        console.log(LOG_PREFIX, `[count] 클릭: ${target}`);
-        await delay(300);
+        panelClick(btn);
+        await delay(200);
+        if (!isButtonSelected(btn)) {
+          btn.click();
+          await delay(200);
+        }
+        console.log(LOG_PREFIX, `[count] 클릭: ${target} → selected=${isButtonSelected(btn)}`);
         return true;
       }
     }
@@ -862,24 +879,37 @@
       // textarea/input: React-compatible native setter
       MangoDom.setTextareaValue(input, text);
     } else {
-      // contenteditable div: execCommand 방식
-      MangoDom.setContentEditable(input, text);
+      // contenteditable div: execCommand 방식 (프레임워크 상태 동기화)
+      // 1) 포커스 + 기존 내용 선택 후 삭제 (execCommand로 — DOM 직접 조작 금지)
+      input.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('delete', false);
+      await delay(100);
+      // 2) insertText로 삽입 (브라우저가 input 이벤트 자동 발생)
+      document.execCommand('insertText', false, text);
+      console.log(LOG_PREFIX, `[prompt] execCommand insertText 완료 (${text.length}자)`);
     }
-    await delay(200);
+    await delay(300);
 
     // 확인: 값이 실제로 설정되었는지
     const actual = isTextarea ? (input.value || '') : (input.textContent || '');
     if (!actual.includes(text.substring(0, 20))) {
-      console.warn(LOG_PREFIX, `Prompt 설정 실패. 기대: "${text.substring(0, 30)}", 실제: "${actual.substring(0, 30)}"`);
-      // 재시도
+      console.warn(LOG_PREFIX, `[prompt] 검증 실패. 기대: "${text.substring(0, 30)}", 실제: "${actual.substring(0, 30)}"`);
+      // 재시도: 직접 텍스트 설정 + input 이벤트
       if (isTextarea) {
         input.value = text;
         input.dispatchEvent(new Event('input', { bubbles: true }));
       } else {
         input.textContent = text;
-        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
       }
       await delay(200);
+    } else {
+      console.log(LOG_PREFIX, `[prompt] 검증 OK: "${actual.substring(0, 40)}..."`);
     }
 
     console.log(LOG_PREFIX, 'Prompt typed OK');
