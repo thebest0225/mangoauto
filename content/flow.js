@@ -634,7 +634,7 @@
     await delay(500);
 
     // ── Step 3: 옵션 찾기 ──
-    // 방법 A: 새로 나타난 요소 (DOM diff)
+    // 방법 A: 새로 나타난 요소 (DOM diff) — 리프 노드 우선
     const afterElems = document.querySelectorAll('*');
     const newElems = [];
     for (const el of afterElems) {
@@ -642,25 +642,36 @@
     }
     console.log(LOG_PREFIX, `[model] 새로 나타난 요소: ${newElems.length}개`);
 
-    // 새 요소 중 모델명이 있는 클릭 가능한 것
+    // 새 요소 중 모델명 매칭되는 것 수집 → 자식 수 적은 순 (리프 우선)
+    const newMatches = [];
     for (const el of newElems) {
       const text = el.textContent?.trim() || '';
-      if (text.length > 60 || text.length < 3) continue;
+      if (text.length > 80 || text.length < 3) continue;
       if (matchesModel(text)) {
-        console.log(LOG_PREFIX, `[model] ✓ DOM diff 매칭: tag=${el.tagName}, text="${text.substring(0, 40)}"`);
-        MangoDom.simulateClick(el);
-        await delay(400);
-        return;
+        newMatches.push({ el, text, children: el.children.length });
       }
     }
+    newMatches.sort((a, b) => a.children - b.children);
+    console.log(LOG_PREFIX, `[model] DOM diff 매칭: ${newMatches.length}개`);
+    for (const m of newMatches) {
+      console.log(LOG_PREFIX, `  - tag=${m.el.tagName} children=${m.children} text="${m.text.substring(0, 50)}"`);
+    }
+    // 리프 노드 클릭 (children 가장 적은 것, 트리거 자체 제외)
+    for (const m of newMatches) {
+      if (m.el === dropdownTrigger || dropdownTrigger.contains(m.el)) continue;
+      console.log(LOG_PREFIX, `[model] ✓ DOM diff 선택: tag=${m.el.tagName}, children=${m.children}, text="${m.text.substring(0, 40)}"`);
+      MangoDom.simulateClick(m.el);
+      await delay(400);
+      return;
+    }
 
-    // 새 요소 로그
+    // 새 요소 로그 (매칭 실패 시)
     if (newElems.length > 0 && newElems.length < 50) {
-      console.log(LOG_PREFIX, '[model] 새 요소 목록:');
+      console.log(LOG_PREFIX, '[model] 새 요소 전체 목록:');
       for (const el of newElems) {
         const t = el.textContent?.trim() || '';
         if (t.length > 0 && t.length < 60) {
-          console.log(LOG_PREFIX, `  - tag=${el.tagName} text="${t}" class="${(el.className||'').substring(0,40)}"`);
+          console.log(LOG_PREFIX, `  - tag=${el.tagName} children=${el.children.length} text="${t}" class="${(el.className||'').substring(0,40)}"`);
         }
       }
     }
@@ -733,9 +744,11 @@
       settings?.flowImage : (settings?.flowVideo || settings?.veo);
     const already = isImageOutput ? imageSettingsApplied : videoSettingsApplied;
 
+    console.log(LOG_PREFIX, `[settings] mode=${mode}, isImage=${isImageOutput}, already=${already}, relevant=${JSON.stringify(relevant)?.substring(0, 100)}`);
+
     const opened = await openSettingsPanel();
     if (!opened) {
-      console.warn(LOG_PREFIX, 'Panel unavailable, legacy fallback');
+      console.warn(LOG_PREFIX, '[settings] 패널 못열음 → legacy fallback');
       await switchMode(mode);
       if (!already && relevant) {
         if (isImageOutput) { await applyImageSettings(settings); imageSettingsApplied = true; }
@@ -748,6 +761,7 @@
     await delay(300);
 
     if (!already && relevant) {
+      console.log(LOG_PREFIX, `[settings] 적용: ratio=${relevant.aspectRatio}, count=${relevant.outputCount}, model=${relevant.model}`);
       if (relevant.aspectRatio) await setAspectRatioNew(relevant.aspectRatio);
       if (relevant.outputCount) await setOutputCountNew(relevant.outputCount);
       if (relevant.model) await setModelNew(relevant.model);
@@ -761,23 +775,41 @@
 
   // ─── Prompt Input ───
   function findPromptTextarea() {
-    // Primary: by ID
+    // Primary: by ID (PINHOLE_TEXT_AREA_ELEMENT_ID)
     let textarea = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
     if (textarea) return textarea;
 
-    // Fallback: textarea with creation placeholder
-    textarea = document.querySelector('textarea[placeholder*="create" i], textarea[placeholder*="만들"]');
+    // placeholder 속성으로 검색
+    textarea = document.querySelector('textarea[placeholder*="create" i], textarea[placeholder*="만들"], textarea[placeholder*="want" i]');
     if (textarea) return textarea;
 
-    // Fallback: any textarea
-    textarea = document.querySelector('textarea');
+    // aria-label 속성으로 검색
+    textarea = document.querySelector('textarea[aria-label*="create" i], textarea[aria-label*="prompt" i], textarea[aria-label*="만들"]');
     if (textarea) return textarea;
 
-    // Fallback: contenteditable element
+    // 보이는 textarea 중 recaptcha 제외
+    const allTextareas = document.querySelectorAll('textarea');
+    for (const ta of allTextareas) {
+      const id = ta.id || '';
+      if (id.includes('recaptcha')) continue;
+      if (ta.type === 'hidden') continue;
+      // 보이는 textarea (크기 있음)
+      if (ta.offsetHeight > 10 && ta.offsetWidth > 50) {
+        console.log(LOG_PREFIX, `[prompt] 보이는 textarea 발견: id="${id}", placeholder="${(ta.placeholder||'').substring(0,30)}", size=${ta.offsetWidth}x${ta.offsetHeight}`);
+        return ta;
+      }
+    }
+
+    // contenteditable 검색
     const editables = document.querySelectorAll('[contenteditable="true"]');
     for (const el of editables) {
-      const hint = (el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
-      if (hint.includes('create') || hint.includes('만들')) return el;
+      const hint = (el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || el.textContent || '').toLowerCase();
+      if (hint.includes('create') || hint.includes('만들') || hint.includes('want')) return el;
+    }
+
+    // 최후: 아무 textarea (recaptcha 제외)
+    for (const ta of allTextareas) {
+      if (!(ta.id || '').includes('recaptcha')) return ta;
     }
     return null;
   }
