@@ -562,37 +562,76 @@
       'veo-3.1-quality':  { match: ['Veo 3.1', 'Quality'], exclude: [] }
     };
     const def = defs[model] || { match: [model], exclude: [] };
-    const matches = (text) => {
+    const matchesModel = (text) => {
       const l = text.toLowerCase();
-      const ok = def.match.some(n => l.includes(n.toLowerCase()));
+      const ok = def.match.every(n => l.includes(n.toLowerCase()));
       if (!ok) return false;
       return !def.exclude.some(ex => l.includes(ex.toLowerCase()));
     };
 
-    const elems = document.querySelectorAll('[role="combobox"], button');
-    for (const el of elems) {
+    // 모델 드롭다운 트리거 찾기: 모델 키워드가 있는 요소 (드롭다운 화살표 ▼ 포함)
+    const modelKeywords = ['Imagen', 'Nano', 'Banana', 'Veo', '모델', 'Model'];
+    const allElements = document.querySelectorAll('[role="combobox"], [role="listbox"], button, [class*="dropdown"], [class*="select"]');
+    let dropdownTrigger = null;
+
+    for (const el of allElements) {
       const text = el.textContent || '';
-      if (!text.includes('Imagen') && !text.includes('Nano') && !text.includes('Banana') &&
-          !text.includes('Veo') && !text.includes('모델') && !text.includes('Model')) continue;
-      if (matches(text)) {
-        console.log(LOG_PREFIX, `Model already: ${model}`);
+      if (text.length > 100) continue;
+      if (!modelKeywords.some(kw => text.includes(kw))) continue;
+      // 이미 선택된 모델인지 확인
+      if (matchesModel(text)) {
+        console.log(LOG_PREFIX, `Model already set: ${model} (text: "${text.trim().substring(0, 40)}")`);
         return;
       }
-      el.click();
-      await delay(400);
-      for (const opt of document.querySelectorAll('[role="option"], [role="menuitem"]')) {
-        if (matches(opt.textContent || '')) {
-          opt.click();
-          console.log(LOG_PREFIX, `Model: ${opt.textContent.trim()}`);
-          await delay(300);
-          return;
-        }
-      }
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-      await delay(200);
+      dropdownTrigger = el;
       break;
     }
-    console.warn(LOG_PREFIX, `Model not found: ${model}`);
+
+    if (!dropdownTrigger) {
+      console.warn(LOG_PREFIX, `Model dropdown trigger not found for: ${model}`);
+      return;
+    }
+
+    console.log(LOG_PREFIX, `Model dropdown click: "${dropdownTrigger.textContent?.trim()?.substring(0, 40)}"`);
+    MangoDom.simulateClick(dropdownTrigger);
+    await delay(500);
+
+    // 옵션 탐색: role="option", role="menuitem", 또는 일반 div/li 등 모든 클릭 가능 요소
+    const optionSelectors = '[role="option"], [role="menuitem"], [role="listbox"] > *, [class*="option"], [class*="menu-item"], li';
+    const options = document.querySelectorAll(optionSelectors);
+    console.log(LOG_PREFIX, `Model options found: ${options.length} (selectors: ${optionSelectors})`);
+
+    for (const opt of options) {
+      const optText = opt.textContent || '';
+      if (matchesModel(optText)) {
+        MangoDom.simulateClick(opt);
+        console.log(LOG_PREFIX, `Model selected: ${optText.trim().substring(0, 40)}`);
+        await delay(400);
+        return;
+      }
+    }
+
+    // 폭넓은 탐색: 새로 나타난 모든 요소 중 모델명이 포함된 것
+    const allVisible = document.querySelectorAll('div, span, button, a');
+    for (const el of allVisible) {
+      const text = el.textContent?.trim() || '';
+      // 직접 텍스트가 모델명이고 길이가 짧은 요소 (하위 요소 텍스트가 아닌)
+      const directText = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      const checkText = directText || text;
+      if (checkText.length > 60) continue;
+      if (matchesModel(checkText) && el.offsetParent !== null) {
+        MangoDom.simulateClick(el);
+        console.log(LOG_PREFIX, `Model selected (broad): ${checkText.substring(0, 40)}`);
+        await delay(400);
+        return;
+      }
+    }
+
+    // 닫기
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await delay(200);
+    console.warn(LOG_PREFIX, `Model option not found: ${model}. Visible options:`,
+      [...options].map(o => o.textContent?.trim()?.substring(0, 30)).join(' | '));
   }
 
   async function applyAllSettings(mode, settings, isImageOutput) {
