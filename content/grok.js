@@ -213,9 +213,9 @@
         // Step 4: 검열 확인
         if (isModerated()) throw new ModerationError();
 
-        // Step 5: 설정 패널에서 "동영상 만들기" 모드 전환
-        showToast('Step 5: 비디오 모드 전환...', 'info');
-        const switched = await switchToVideoMode();
+        // Step 5: 설정 패널에서 "동영상 만들기" 모드 전환 + 설정 적용
+        showToast('Step 5: 비디오 모드 전환 + 설정...', 'info');
+        const switched = await switchToVideoMode(settings);
         if (!switched) throw new Error('비디오 모드 전환 실패');
         checkStopped();
 
@@ -287,9 +287,9 @@
 
         if (isModerated()) throw new ModerationError();
 
-        // Step 2: 설정 패널에서 "동영상 만들기" 모드 전환
+        // Step 2: 설정 패널에서 "동영상 만들기" 모드 전환 + 설정 적용
         showToast('비디오 모드 전환...', 'info');
-        const switched = await switchToVideoMode();
+        const switched = await switchToVideoMode(settings);
         if (!switched) throw new Error('비디오 모드 전환 실패');
         checkStopped();
 
@@ -542,178 +542,118 @@
     return document.querySelector('textarea');
   }
 
-  // ─── 결과 페이지: 비디오 모드 전환 (새 UI 워크플로우) ───
-  // 결과 페이지에서 설정 패널을 열고 "동영상 만들기" 클릭 → 비디오 모드 전환
-  // 그 후 프롬프트 입력 + 전송 버튼으로 영상 생성
-  async function switchToVideoMode() {
+  // ─── 결과 페이지: 비디오 모드 전환 + 설정 적용 (새 UI 워크플로우) ───
+  // applySettingsOnMainPage()와 동일한 인프라 재사용:
+  //   findButtonByTextInArea, findDropdownItem, findDropdownButtons,
+  //   clickButtonInList, closeSettingsPanel
+  // 워크플로우: 모달열기 → 동영상 만들기 선택 → 설정 적용 → 닫기
+  async function switchToVideoMode(settings) {
+    const grok = settings?.grok || {};
+    const { videoDuration, videoResolution, aspectRatio } = grok;
+
     showToast('비디오 모드 전환 시작...', 'info');
+    console.log(LOG_PREFIX, 'switchToVideoMode settings:', {
+      duration: videoDuration, resolution: videoResolution, aspectRatio
+    });
 
-    // Step 1: "동영상 만들기" + "비디오로 변환" 옵션이 이미 보이는지 확인
-    let videoOption = findVideoModeOption();
+    // Step 1: 설정 패널 트리거 버튼 찾기 (applySettingsOnMainPage와 동일)
+    const modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
+                     findButtonByTextInArea('이미지') ||
+                     findButtonByTextInArea('비디오') ||
+                     findButtonByTextInArea('Image') ||
+                     findButtonByTextInArea('Video');
 
-    if (!videoOption) {
-      // Step 2: 설정 패널 열기 (텍스트필드 옆 트리거 버튼 클릭)
-      showToast('설정 패널 열기 시도...', 'info');
-      const trigger = findSettingsPanelTrigger();
-      if (trigger) {
-        const trigText = (trigger.textContent || '').trim().substring(0, 20);
-        console.log(LOG_PREFIX, `설정 패널 트리거 클릭: "${trigText}"`);
-        MangoDom.simulateClick(trigger);
-        await delay(1000);
-        videoOption = findVideoModeOption();
-      } else {
-        console.warn(LOG_PREFIX, '설정 패널 트리거 못 찾음');
-        // 디버그: 에디터 근처 모든 버튼 출력
-        const editor = findEditor();
-        if (editor) {
-          let c = editor;
-          for (let i = 0; i < 6; i++) c = c?.parentElement;
-          if (c) {
-            console.log(LOG_PREFIX, '=== 에디터 근처 버튼들 ===');
-            c.querySelectorAll('button').forEach((b, i) => {
-              const t = (b.textContent || '').trim().substring(0, 30);
-              const aria = b.getAttribute('aria-label') || '';
-              const expanded = b.getAttribute('aria-expanded');
-              console.log(LOG_PREFIX, `  btn[${i}]: text="${t}" aria="${aria}" expanded=${expanded}`);
-            });
-          }
+    if (!modelBtn) {
+      console.error(LOG_PREFIX, '설정 패널 트리거 버튼 못 찾음');
+      showToast('모달 트리거 버튼 없음', 'error');
+      // 디버그: 하단 200px 이내 모든 버튼 출력
+      const allBtns = document.querySelectorAll('button');
+      console.log(LOG_PREFIX, '=== 하단바 버튼 디버그 ===');
+      allBtns.forEach((b, i) => {
+        const rect = b.getBoundingClientRect();
+        if (rect.top > window.innerHeight - 200) {
+          console.log(LOG_PREFIX, `  btn[${i}]: "${(b.textContent || '').trim().substring(0, 30)}" aria="${b.getAttribute('aria-label') || ''}" top=${Math.round(rect.top)}`);
         }
-      }
-    }
-
-    if (!videoOption) {
-      // Step 3 fallback: 페이지 전체에서 "동영상 만들기" 텍스트 검색
-      // (오버레이 버튼 제외 — 비디오 요소 위가 아닌 것만)
-      console.log(LOG_PREFIX, '패널 옵션 못 찾음, 전체 DOM 검색...');
-      const allClickables = document.querySelectorAll('button, div[role="button"], a, [tabindex="0"]');
-      for (const el of allClickables) {
-        const text = (el.textContent || '').trim();
-        if (text.includes('동영상 만들기') && text.includes('비디오로 변환')) {
-          videoOption = el;
-          break;
-        }
-      }
-    }
-
-    if (!videoOption) {
-      console.error(LOG_PREFIX, '=== "동영상 만들기" 옵션을 어디에서도 못 찾음 ===');
-      showToast('비디오 모드 전환 실패: 옵션 못 찾음', 'error');
+      });
       return false;
     }
 
-    // Step 4: "동영상 만들기" 클릭 → 비디오 모드 전환
-    console.log(LOG_PREFIX, `"동영상 만들기" 옵션 클릭: "${(videoOption.textContent || '').trim().substring(0, 30)}"`);
-    showToast('"동영상 만들기" 모드 전환 클릭...', 'info');
-    MangoDom.simulateClick(videoOption);
-    await delay(1500);
+    showToast(`트리거 버튼: "${(modelBtn.textContent || '').trim().substring(0, 20)}"`, 'info');
 
-    // 전환 확인: 텍스트필드 placeholder가 변경되었는지 체크
+    // Step 2: 패널 열기
+    MangoDom.simulateClick(modelBtn);
+    await delay(800);
+
+    // Step 3: "동영상 만들기" 모드 선택 (findDropdownItem 재사용)
+    const videoItem = findDropdownItem('동영상 만들기') ||
+                      findDropdownItem('비디오') ||
+                      findDropdownItem('Video');
+    if (videoItem) {
+      const itemText = (videoItem.textContent || '').trim().substring(0, 30);
+      showToast(`"${itemText}" 클릭`, 'info');
+      MangoDom.simulateClick(videoItem);
+      await delay(800);
+    } else {
+      console.warn(LOG_PREFIX, '동영상 만들기 옵션 못 찾음');
+      showToast('동영상 만들기 옵션 없음', 'error');
+      // 디버그: 현재 열린 패널 내용 출력
+      const panel = findFloatingContainer();
+      if (panel) {
+        const panelBtns = panel.querySelectorAll('button, [role="menuitem"], [role="option"]');
+        console.log(LOG_PREFIX, `=== 패널 내 항목 ${panelBtns.length}개 ===`);
+        panelBtns.forEach((b, i) => {
+          console.log(LOG_PREFIX, `  [${i}]: "${(b.textContent || '').trim().substring(0, 40)}"`);
+        });
+      }
+      await closeSettingsPanel(modelBtn);
+      return false;
+    }
+
+    // Step 4: 패널이 닫혔으면 다시 열기 (설정 적용을 위해)
+    let dropdownBtns = findDropdownButtons();
+    if (dropdownBtns.length === 0) {
+      showToast('패널 닫힘 → 다시 열기', 'info');
+      MangoDom.simulateClick(modelBtn);
+      await delay(800);
+      dropdownBtns = findDropdownButtons();
+    }
+
+    // Step 5: 비디오 설정 적용 (duration, resolution, aspectRatio)
+    if (dropdownBtns.length > 0) {
+      const btnTexts = dropdownBtns.map(b => (b.textContent || '').trim()).filter(t => t.length < 20);
+      showToast(`패널 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
+
+      if (videoDuration) {
+        const durationLabels = [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)];
+        clickButtonInList(dropdownBtns, durationLabels, 'duration');
+        await delay(200);
+      }
+
+      if (videoResolution) {
+        const resLabels = [videoResolution, videoResolution.replace('p', '')];
+        clickButtonInList(dropdownBtns, resLabels, 'resolution');
+        await delay(200);
+      }
+
+      if (aspectRatio) {
+        const arLabels = [aspectRatio];
+        clickButtonInList(dropdownBtns, arLabels, 'aspectRatio');
+        await delay(200);
+      }
+    }
+
+    // Step 6: 패널 닫기
+    await closeSettingsPanel(modelBtn);
+
+    // 전환 확인: 텍스트필드 placeholder 변경 체크
     const editor = findEditor();
     if (editor) {
       const placeholder = editor.getAttribute('data-placeholder') || editor.textContent || '';
       console.log(LOG_PREFIX, `모드 전환 후 placeholder: "${placeholder.substring(0, 40)}"`);
     }
 
-    showToast('비디오 모드 전환 완료!', 'success');
+    showToast('비디오 모드 전환 + 설정 완료!', 'success');
     return true;
-  }
-
-  // 설정 패널에서 "동영상 만들기" 옵션 찾기
-  // "이 이미지를 비디오로 변환" 서브텍스트로 구별 (오버레이 버튼과 구별)
-  function findVideoModeOption() {
-    // 방법 1: "비디오로 변환" 서브텍스트가 있는 요소
-    const allElements = document.querySelectorAll('div, button, a, span');
-    for (const el of allElements) {
-      const text = (el.textContent || '').trim();
-      if (text.includes('비디오로 변환') && el.children.length <= 5) {
-        // 가장 가까운 클릭 가능한 요소 찾기
-        const clickable = el.closest('button') || el.closest('[role="button"]') ||
-                          el.closest('a') || el.closest('[tabindex]') || el;
-        console.log(LOG_PREFIX, `비디오 모드 옵션 발견: "${text.substring(0, 30)}" (${clickable.tagName})`);
-        return clickable;
-      }
-    }
-
-    // 방법 2: "동영상 만들기" 텍스트가 있고, 비디오/이미지 위가 아닌 요소
-    // (이미지 위 오버레이 버튼 제외)
-    for (const el of allElements) {
-      const text = (el.textContent || '').trim();
-      if (text === '동영상 만들기' || text === 'Create video') {
-        // 비디오/이미지 요소의 직계 부모인지 확인 (오버레이이면 제외)
-        const nearMedia = el.closest('video') || el.closest('img') ||
-                          el.parentElement?.querySelector('video, img');
-        if (!nearMedia) {
-          return el.closest('button') || el.closest('[role="button"]') || el;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  // 텍스트필드 옆 설정 패널 트리거 버튼 찾기
-  function findSettingsPanelTrigger() {
-    const editor = findEditor();
-    if (!editor) return null;
-
-    // 에디터의 상위 컨테이너 (입력 영역 전체)
-    let inputContainer = editor;
-    for (let i = 0; i < 6; i++) {
-      inputContainer = inputContainer?.parentElement;
-      if (!inputContainer) return null;
-    }
-
-    const allBtns = Array.from(inputContainer.querySelectorAll('button'));
-    const submitBtn = findSubmitButton();
-
-    // submit이 아닌 아이콘 버튼만 필터
-    const candidates = allBtns.filter(b => {
-      if (b === submitBtn) return false;
-      if (b.disabled) return false;
-      const text = (b.textContent || '').trim();
-      return text.length <= 20;
-    });
-
-    // 우선순위 1: aria-expanded 또는 aria-haspopup 속성이 있는 버튼
-    for (const btn of candidates) {
-      if (btn.getAttribute('aria-expanded') !== null ||
-          btn.getAttribute('aria-haspopup')) {
-        console.log(LOG_PREFIX, `설정 트리거 (aria): "${(btn.textContent || '').trim().substring(0, 15)}"`);
-        return btn;
-      }
-    }
-
-    // 우선순위 2: SVG 아이콘이 있는 버튼 (submit 제외)
-    for (const btn of candidates) {
-      if (btn.querySelector('svg')) {
-        console.log(LOG_PREFIX, `설정 트리거 (SVG): "${(btn.textContent || '').trim().substring(0, 15)}"`);
-        return btn;
-      }
-    }
-
-    // 우선순위 3: submit 바로 앞의 버튼
-    if (candidates.length > 0) {
-      const btn = candidates[candidates.length - 1];
-      console.log(LOG_PREFIX, `설정 트리거 (마지막 후보): "${(btn.textContent || '').trim().substring(0, 15)}"`);
-      return btn;
-    }
-
-    return null;
-  }
-
-  // 기존 호환: 이미지 위 오버레이 "동영상 만들기" 버튼 (fallback용)
-  function findCreateVideoButton() {
-    let btn = document.querySelector('button[aria-label="동영상 만들기"]');
-    if (btn) return btn;
-
-    const buttons = document.querySelectorAll('button');
-    for (const b of buttons) {
-      const text = (b.textContent || '').trim();
-      if (text.includes('동영상 만들기') || text.includes('Create video')) {
-        return b;
-      }
-    }
-    return null;
   }
 
   // ─── Page Navigation ───
@@ -1502,21 +1442,6 @@
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.dispatchEvent(new Event('change', { bubbles: true }));
     console.log(LOG_PREFIX, 'Result page prompt set');
-  }
-
-  async function clickCreateVideo() {
-    const start = Date.now();
-    while (Date.now() - start < 5000) {
-      const btn = findCreateVideoButton();
-      if (btn && !btn.disabled) {
-        btn.click();
-        console.log(LOG_PREFIX, 'Create video clicked');
-        await delay(1000);
-        return true;
-      }
-      await delay(300);
-    }
-    return false;
   }
 
   // ─── Wait for Video Ready ───
