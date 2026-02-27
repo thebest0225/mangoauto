@@ -323,10 +323,12 @@
       }
 
       // 메인 페이지로 복구 시도
+      // goBack()은 browser history에 따라 프로젝트 페이지 등 엉뚱한 곳으로 갈 수 있음
+      // /imagine으로 직접 이동
       try {
         if (!isOnMainPage()) {
-          await goBack();
-          await waitForMainPage(10000);
+          console.log(LOG_PREFIX, '메인 페이지로 직접 이동...');
+          window.location.href = 'https://grok.com/imagine';
         }
       } catch (e) {
         console.warn(LOG_PREFIX, 'Recovery failed:', e.message);
@@ -518,13 +520,18 @@
   }
 
   async function ensureMainPage() {
-    // Just check URL like reference implementation - don't wait for editor
     if (isOnMainPage()) {
       console.log(LOG_PREFIX, 'On /imagine page - ready');
       await delay(500);
       return;
     }
-    throw new Error('/imagine 페이지가 아닙니다. https://grok.com/imagine 으로 이동해주세요.');
+
+    // /imagine이 아닌 경우 직접 이동
+    console.log(LOG_PREFIX, 'Not on /imagine page, navigating directly...');
+    window.location.href = 'https://grok.com/imagine';
+    // 페이지 리로드 → 현재 스크립트 중단됨. 배경에서 재시도 필요.
+    await delay(10000); // 리로드 전까지 대기
+    throw new Error('/imagine으로 이동 중...');
   }
 
   // Wait for an element to appear
@@ -1057,26 +1064,50 @@
     }
 
     // Step 8: 패널 닫기 (여러 방법 시도)
-    // 방법1: Escape 키
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await delay(300);
-
-    // 방법2: 패널이 아직 열려있으면 트리거 버튼 재클릭 (토글)
-    if (findFloatingContainer()) {
-      console.log(LOG_PREFIX, '패널 아직 열림 → 트리거 버튼 재클릭');
-      MangoDom.simulateClick(modelBtn);
-      await delay(300);
-    }
-
-    // 방법3: 그래도 열려있으면 body 클릭
-    if (findFloatingContainer()) {
-      console.log(LOG_PREFIX, '패널 아직 열림 → body 클릭');
-      document.body.click();
-      await delay(300);
-    }
+    await closeSettingsPanel(modelBtn);
 
     showToast('비디오 설정 적용 완료!', 'success');
     console.log(LOG_PREFIX, `설정 적용 완료: ${videoDuration}, ${videoResolution}, ${aspectRatio}`);
+  }
+
+  /**
+   * 설정 패널(팝오버/드롭다운) 닫기
+   */
+  async function closeSettingsPanel(triggerBtn) {
+    // 방법1: Escape 키 (메뉴 요소에 직접 dispatch)
+    const panel = findFloatingContainer();
+    if (panel) {
+      panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      await delay(300);
+    } else {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await delay(300);
+    }
+
+    // 방법2: 트리거 버튼 재클릭 (토글)
+    if (findFloatingContainer() && triggerBtn) {
+      console.log(LOG_PREFIX, '패널 아직 열림 → 트리거 버튼 재클릭');
+      MangoDom.simulateClick(triggerBtn);
+      await delay(400);
+    }
+
+    // 방법3: 에디터 영역 클릭 (팝오버 외부 클릭 효과)
+    if (findFloatingContainer()) {
+      const editor = findEditor();
+      if (editor) {
+        console.log(LOG_PREFIX, '패널 아직 열림 → 에디터 영역 클릭');
+        editor.click();
+        await delay(300);
+      }
+    }
+
+    // 방법4: 패널을 DOM에서 숨기기 (최후 수단)
+    const stillOpen = findFloatingContainer();
+    if (stillOpen) {
+      console.log(LOG_PREFIX, '패널 아직 열림 → display:none으로 강제 숨김');
+      stillOpen.style.display = 'none';
+      await delay(100);
+    }
   }
 
   /**
