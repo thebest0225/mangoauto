@@ -50,6 +50,16 @@
     if (msg.type === 'EXECUTE_PROMPT') {
       showToast(`EXECUTE_PROMPT 수신! mode=${msg.settings?._mode}, hasImage=${!!msg.sourceImageDataUrl}`, 'info');
 
+      // 올바른 페이지인지 먼저 확인 (project 등 엉뚱한 페이지면 즉시 에러 반환)
+      const url = window.location.href;
+      if (!url.includes('grok.com/imagine')) {
+        console.log(LOG_PREFIX, `Wrong page detected: ${url}, navigating to /imagine`);
+        showToast(`잘못된 페이지: ${url.substring(0, 40)}... → /imagine 이동`, 'warn');
+        sendResponse({ ok: false, error: 'WRONG_PAGE: /imagine이 아닙니다. 페이지 이동 후 재시도 필요.' });
+        window.location.href = 'https://grok.com/imagine';
+        return false;
+      }
+
       // Send immediate acknowledgment to prevent channel closure
       sendResponse({ ok: true, started: true });
 
