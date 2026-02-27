@@ -262,19 +262,23 @@
         showToast('비디오 URL 전송 완료!', 'success');
 
       // ══════════════════════════════════════════════════
-      // 텍스트→영상 (text-to-video) 워크플로우 (새 UI)
-      // 1. 메인 페이지에서 프롬프트 입력 + 제출 → 이미지 생성
-      // 2. 결과 페이지에서 설정 패널 "동영상 만들기" 모드 전환
-      // 3. 프롬프트 재입력 + 전송 → 영상 생성
+      // 텍스트→영상 (text-to-video) 워크플로우
+      // 메인 페이지에서 비디오 모드+설정 적용 → 프롬프트 → 제출 → 바로 영상 생성
       // ══════════════════════════════════════════════════
       } else if (mediaType === 'video') {
-        showToast('=== 텍스트→영상 모드 시작 (새 UI) ===', 'info');
+        showToast('=== 텍스트→영상 모드 시작 ===', 'info');
 
         await ensureMainPage();
         checkStopped();
 
-        // Step 1: 프롬프트 입력 + 제출 → 이미지 생성
-        showToast('프롬프트 입력 중...', 'info');
+        // Step 1: 메인 페이지에서 비디오 모드 + 설정 적용
+        showToast('Step 1: 비디오 설정 적용 (메인)...', 'info');
+        await applySettingsOnMainPage(settings);
+        await delay(500);
+        checkStopped();
+
+        // Step 2: 프롬프트 입력 + 제출 → 바로 영상 생성
+        showToast('Step 2: 프롬프트 입력...', 'info');
         await typePrompt(prompt || '');
         await delay(800 + Math.random() * 500);
 
@@ -287,30 +291,14 @@
 
         if (isModerated()) throw new ModerationError();
 
-        // Step 2: 설정 패널에서 "동영상 만들기" 모드 전환 + 설정 적용
-        showToast('비디오 모드 전환...', 'info');
-        const switched = await switchToVideoMode(settings);
-        if (!switched) throw new Error('비디오 모드 전환 실패');
-        checkStopped();
-
-        // Step 3: 비디오 프롬프트 입력 + 전송
-        if (prompt?.trim()) {
-          await typePrompt(prompt);
-          await delay(500);
-        }
-
-        const videoSubmitted = await tryClickSubmit();
-        if (!videoSubmitted) throw new Error('비디오 전송 실패');
-        checkStopped();
-
-        // Step 4: 비디오 생성 대기
+        // Step 3: 영상 생성 대기 (비디오 모드로 제출했으므로 바로 영상)
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
 
         let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
-        // Step 5: 업스케일
+        // Step 4: 업스케일
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('480p 감지 - 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(timeoutMs);
