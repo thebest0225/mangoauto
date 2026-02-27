@@ -22,14 +22,40 @@
   let shouldStop = false;
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
-  // ─── Navigation Debug: 작업 중 잘못된 네비게이션 감지 ───
+  // ─── Navigation Guard: 작업 중 Grok SPA 페이지 이동 차단 ───
+  // 원인: Grok SPA가 영상 생성 완료 후 history.pushState로 채팅 페이지 등으로 자동 이동
+  // 대책: isProcessing 동안 /imagine 외 이동을 차단
+  const _origPushState = history.pushState;
+  const _origReplaceState = history.replaceState;
+
+  history.pushState = function(...args) {
+    const url = String(args[2] || '');
+    if (isProcessing && url && !url.includes('/imagine')) {
+      console.warn(LOG_PREFIX, `🚫 작업 중 pushState 차단: ${url}`);
+      showToast(`페이지 이동 차단: ${url.substring(0, 40)}`, 'warn');
+      return; // 차단
+    }
+    return _origPushState.apply(this, args);
+  };
+
+  history.replaceState = function(...args) {
+    const url = String(args[2] || '');
+    if (isProcessing && url && !url.includes('/imagine')) {
+      console.warn(LOG_PREFIX, `🚫 작업 중 replaceState 차단: ${url}`);
+      return; // 차단
+    }
+    return _origReplaceState.apply(this, args);
+  };
+
+  // 작업 중 외부 링크 클릭 차단
   document.addEventListener('click', (e) => {
     if (!isProcessing) return;
-    const el = e.target;
-    const href = el.href || el.closest('a')?.href || '';
-    if (href && !href.includes('grok.com/imagine')) {
-      const text = (el.textContent || '').trim().substring(0, 30);
-      console.error(LOG_PREFIX, `🚨 잘못된 네비게이션 클릭: href=${href}, text="${text}"`);
+    const link = e.target.closest('a');
+    if (link && link.href && !link.href.includes('/imagine')) {
+      e.preventDefault();
+      e.stopPropagation();
+      console.warn(LOG_PREFIX, `🚫 작업 중 링크 클릭 차단: ${link.href.substring(0, 60)}`);
+      showToast(`링크 클릭 차단`, 'warn');
     }
   }, true);
 
