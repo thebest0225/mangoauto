@@ -432,14 +432,46 @@
 
   // Submit button: aria-label="제출" or text "제출"/"Submit"
   function findSubmitButton() {
-    let btn = document.querySelector('button[aria-label="제출"]');
-    if (btn) return btn;
+    // 1. aria-label 기반 (여러 가능한 라벨)
+    const ariaLabels = ['제출', '전송', 'Submit', 'Send', '동영상 만들기', 'Create video', '생성'];
+    for (const label of ariaLabels) {
+      const btn = document.querySelector(`button[aria-label="${label}"]`);
+      if (btn) return btn;
+    }
 
+    // 2. type="submit"
+    const typeSubmit = document.querySelector('button[type="submit"]');
+    if (typeSubmit) return typeSubmit;
+
+    // 3. 텍스트 기반
+    const submitTexts = ['제출', 'Submit', '전송', 'Send'];
     const buttons = document.querySelectorAll('button');
     for (const b of buttons) {
       const text = (b.textContent || '').trim();
-      if (text === '제출' || text === 'Submit') return b;
+      if (submitTexts.includes(text)) return b;
     }
+
+    // 4. 에디터 입력 영역 근처의 화살표 아이콘 버튼 (fallback)
+    const editor = findEditor();
+    if (editor) {
+      let container = editor;
+      for (let i = 0; i < 5; i++) container = container?.parentElement;
+      if (container) {
+        const btns = Array.from(container.querySelectorAll('button'));
+        // SVG 아이콘만 있는 버튼 (텍스트 없음) — 보통 화살표 전송 버튼
+        const iconBtns = btns.filter(b => {
+          const text = (b.textContent || '').trim();
+          return text.length === 0 && b.querySelector('svg') && !b.disabled;
+        });
+        if (iconBtns.length > 0) {
+          // 마지막 아이콘 버튼이 보통 전송 버튼
+          const btn = iconBtns[iconBtns.length - 1];
+          console.log(LOG_PREFIX, `전송 버튼 (에디터 SVG fallback): aria="${btn.getAttribute('aria-label') || ''}"`);
+          return btn;
+        }
+      }
+    }
+
     return null;
   }
 
@@ -925,10 +957,26 @@
 
     // Wait for submit button to be enabled
     const btn = await waitForSubmitEnabled(5000);
-    if (!btn) return false;
+    if (!btn) {
+      // 디버그: 전송 버튼 못 찾은 이유 파악
+      console.error(LOG_PREFIX, '전송 버튼 못 찾음! 에디터 근처 버튼 목록:');
+      const editor = findEditor();
+      if (editor) {
+        let c = editor;
+        for (let i = 0; i < 5; i++) c = c?.parentElement;
+        if (c) {
+          c.querySelectorAll('button').forEach((b, i) => {
+            const text = (b.textContent || '').trim().substring(0, 20);
+            const aria = b.getAttribute('aria-label') || '';
+            console.log(LOG_PREFIX, `  btn[${i}]: "${text}" aria="${aria}" disabled=${b.disabled} type=${b.type || ''}`);
+          });
+        }
+      }
+      return false;
+    }
 
-    btn.click();
-    console.log(LOG_PREFIX, 'Submit clicked');
+    MangoDom.simulateClick(btn);
+    console.log(LOG_PREFIX, `Submit clicked: aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
     await delay(1000);
     return true;
   }
