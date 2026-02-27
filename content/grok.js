@@ -1625,7 +1625,9 @@
   }
 
   // ─── Popup Dismissal ───
+  // 작업 중에는 비활성화 (결과 페이지의 "Close" 등을 잘못 클릭하여 페이지 이동 방지)
   setInterval(() => {
+    if (isProcessing) return;
     ['Dismiss', 'Close', 'Skip', 'No thanks', 'Maybe later'].forEach(text => {
       const btn = MangoDom.findButtonByText(text);
       if (btn) { btn.click(); console.log(LOG_PREFIX, 'Dismissed:', text); }
