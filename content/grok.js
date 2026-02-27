@@ -184,46 +184,42 @@
       showToast(`Mode: ${mode} | HasImage: ${!!sourceImageDataUrl} | Prompt: ${(prompt || '').substring(0, 30)}`, 'info');
 
       // ══════════════════════════════════════════════════
-      // 프레임→영상 (image-to-video) 워크플로우
-      // 1. 메인 페이지에서 이미지 첨부 → 자동으로 결과 페이지 이동
-      // 2. 결과 페이지에서 비디오 설정 + 프롬프트 입력
-      // 3. "동영상 만들기" 클릭
+      // 프레임→영상 (image-to-video) 워크플로우 (새 UI)
+      // 1. 메인 페이지에서 이미지 첨부 → 결과 페이지 자동 이동
+      // 2. 결과 페이지 설정 패널에서 "동영상 만들기" 모드 전환
+      // 3. 프롬프트 입력 + 전송 → 영상 생성
       // ══════════════════════════════════════════════════
       if (mode === 'image-video' && sourceImageDataUrl) {
-        showToast('=== 프레임→영상 모드 시작 ===', 'info');
+        showToast('=== 프레임→영상 모드 시작 (새 UI) ===', 'info');
 
         // Step 1: 메인 페이지 확인
         showToast('Step 1: 메인 페이지 확인...', 'info');
         await ensureMainPage();
         checkStopped();
 
-        // Step 2: 비디오 설정 적용 (메인 페이지에서 - 참고자료 방식)
-        if (!videoSettingsApplied) {
-          showToast('Step 2: 비디오 설정 적용 (메인 페이지)...', 'info');
-          await applySettingsOnMainPage(settings);
-          videoSettingsApplied = true;
-          await delay(500);
-          checkStopped();
-        }
-
-        // Step 3: 이미지 첨부 (드래그 → 자동으로 결과 페이지로 이동)
-        showToast('Step 3: 이미지 첨부 중...', 'info');
+        // Step 2: 이미지 첨부 → 자동으로 결과 페이지 이동
+        showToast('Step 2: 이미지 첨부 중...', 'info');
         const attached = await attachImage(sourceImageDataUrl);
         if (!attached) throw new Error('이미지 첨부 실패');
         showToast('이미지 첨부 완료!', 'success');
         checkStopped();
 
-        // Step 4: 결과 페이지로 자동 이동 대기
-        showToast('Step 4: 결과 페이지 대기...', 'info');
+        // Step 3: 결과 페이지 대기
+        showToast('Step 3: 결과 페이지 대기...', 'info');
         await waitForResultPage(timeoutMs);
         await delay(3000);
         checkStopped();
 
-        // Step 5: 검열 확인
+        // Step 4: 검열 확인
         if (isModerated()) throw new ModerationError();
 
-        // Step 6: 결과 페이지 텍스트필드에 비디오 프롬프트 입력
-        // 새 UI는 TipTap 에디터를 사용하므로 typePrompt() 사용
+        // Step 5: 설정 패널에서 "동영상 만들기" 모드 전환
+        showToast('Step 5: 비디오 모드 전환...', 'info');
+        const switched = await switchToVideoMode();
+        if (!switched) throw new Error('비디오 모드 전환 실패');
+        checkStopped();
+
+        // Step 6: 프롬프트 입력
         if (prompt?.trim()) {
           showToast('Step 6: 비디오 프롬프트 입력...', 'info');
           await typePrompt(prompt);
@@ -231,10 +227,10 @@
         }
         checkStopped();
 
-        // Step 7: "동영상 만들기" 클릭
-        showToast('Step 7: 동영상 만들기 클릭...', 'info');
-        const videoCreated = await clickCreateVideo();
-        if (!videoCreated) throw new Error('"동영상 만들기" 버튼 클릭 실패');
+        // Step 7: 전송 버튼 클릭 → 영상 생성 시작
+        showToast('Step 7: 전송...', 'info');
+        const submitted = await tryClickSubmit();
+        if (!submitted) throw new Error('전송 실패');
         checkStopped();
 
         // Step 8: 비디오 생성 대기
@@ -248,7 +244,7 @@
 
         // Step 10: 480p면 자동 업스케일 시도
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
-          showToast('Step 10: 480p 감지 - 업스케일 시도...', 'info');
+          showToast('Step 10: 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(timeoutMs);
           if (upscaled) {
             const hdUrl = await extractVideoUrl();
@@ -266,25 +262,18 @@
         showToast('비디오 URL 전송 완료!', 'success');
 
       // ══════════════════════════════════════════════════
-      // 텍스트→영상 (text-to-video) 워크플로우
-      // 1. 메인 페이지에서 프롬프트 입력 + 제출
-      // 2. 결과 페이지에서 비디오 설정 + 동영상 만들기
+      // 텍스트→영상 (text-to-video) 워크플로우 (새 UI)
+      // 1. 메인 페이지에서 프롬프트 입력 + 제출 → 이미지 생성
+      // 2. 결과 페이지에서 설정 패널 "동영상 만들기" 모드 전환
+      // 3. 프롬프트 재입력 + 전송 → 영상 생성
       // ══════════════════════════════════════════════════
       } else if (mediaType === 'video') {
-        showToast('=== 텍스트→영상 모드 시작 ===', 'info');
+        showToast('=== 텍스트→영상 모드 시작 (새 UI) ===', 'info');
 
         await ensureMainPage();
         checkStopped();
 
-        // 비디오 설정 적용 (메인 페이지에서 - 참고자료 방식)
-        if (!videoSettingsApplied) {
-          showToast('비디오 설정 적용 (메인 페이지)...', 'info');
-          await applySettingsOnMainPage(settings);
-          videoSettingsApplied = true;
-          await delay(500);
-          checkStopped();
-        }
-
+        // Step 1: 프롬프트 입력 + 제출 → 이미지 생성
         showToast('프롬프트 입력 중...', 'info');
         await typePrompt(prompt || '');
         await delay(800 + Math.random() * 500);
@@ -298,42 +287,37 @@
 
         if (isModerated()) throw new ModerationError();
 
-        // 결과 페이지에서 비디오 프롬프트 (필요시)
-        // 새 UI는 TipTap 에디터를 사용하므로 typePrompt() 사용
+        // Step 2: 설정 패널에서 "동영상 만들기" 모드 전환
+        showToast('비디오 모드 전환...', 'info');
+        const switched = await switchToVideoMode();
+        if (!switched) throw new Error('비디오 모드 전환 실패');
+        checkStopped();
+
+        // Step 3: 비디오 프롬프트 입력 + 전송
         if (prompt?.trim()) {
           await typePrompt(prompt);
           await delay(500);
         }
 
-        const videoCreated = await clickCreateVideo();
-        if (!videoCreated) throw new Error('"동영상 만들기" 버튼 클릭 실패');
+        const videoSubmitted = await tryClickSubmit();
+        if (!videoSubmitted) throw new Error('비디오 전송 실패');
         checkStopped();
 
+        // Step 4: 비디오 생성 대기
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
 
         let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
-        // 480p면 자동 업스케일 시도
-        const isHd = videoUrl.includes('_hd');
-        const autoUpscale = settings?.grok?.autoUpscale !== false;
-        console.log(LOG_PREFIX, `업스케일 체크: URL=${videoUrl.substring(0, 60)}, isHd=${isHd}, autoUpscale=${autoUpscale}`);
-        if (autoUpscale && videoUrl && !isHd) {
+        // Step 5: 업스케일
+        if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('480p 감지 - 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(timeoutMs);
           if (upscaled) {
             const hdUrl = await extractVideoUrl();
-            if (hdUrl) {
-              console.log(LOG_PREFIX, `업스케일 성공: ${hdUrl.substring(0, 60)}`);
-              videoUrl = hdUrl;
-            }
-          } else {
-            console.warn(LOG_PREFIX, '업스케일 실패 - 480p로 진행');
-            showToast('업스케일 실패 - 480p로 다운로드', 'warn');
+            if (hdUrl) videoUrl = hdUrl;
           }
-        } else if (isHd) {
-          showToast('이미 HD 영상 - 업스케일 불필요', 'success');
         }
         checkStopped();
 
@@ -558,37 +542,177 @@
     return document.querySelector('textarea');
   }
 
-  // Create video button (참고자료 방식: aria-label 우선, text 매칭 fallback)
-  function findCreateVideoButton() {
-    // 1. aria-label 기반 (참고자료 방식)
-    let btn = document.querySelector('button[aria-label="동영상 만들기"]');
-    if (btn) return btn;
+  // ─── 결과 페이지: 비디오 모드 전환 (새 UI 워크플로우) ───
+  // 결과 페이지에서 설정 패널을 열고 "동영상 만들기" 클릭 → 비디오 모드 전환
+  // 그 후 프롬프트 입력 + 전송 버튼으로 영상 생성
+  async function switchToVideoMode() {
+    showToast('비디오 모드 전환 시작...', 'info');
 
-    // 2. 정확한 텍스트 매칭
-    const buttons = document.querySelectorAll('button');
-    for (const b of buttons) {
-      const text = (b.textContent || '').trim();
-      if (text === '동영상 만들기' || text === 'Create video') return b;
-    }
+    // Step 1: "동영상 만들기" + "비디오로 변환" 옵션이 이미 보이는지 확인
+    let videoOption = findVideoModeOption();
 
-    // 3. 부분 매칭 (설정 적용 후 버튼 텍스트가 변경되는 경우 대비)
-    for (const b of buttons) {
-      const text = (b.textContent || '').trim();
-      if (text.includes('동영상 만들기') || text.includes('Create video') ||
-          text.includes('비디오 만들기') || text.includes('Generate video') ||
-          text.includes('영상 만들기') || text.includes('Make video')) {
-        return b;
+    if (!videoOption) {
+      // Step 2: 설정 패널 열기 (텍스트필드 옆 트리거 버튼 클릭)
+      showToast('설정 패널 열기 시도...', 'info');
+      const trigger = findSettingsPanelTrigger();
+      if (trigger) {
+        const trigText = (trigger.textContent || '').trim().substring(0, 20);
+        console.log(LOG_PREFIX, `설정 패널 트리거 클릭: "${trigText}"`);
+        MangoDom.simulateClick(trigger);
+        await delay(1000);
+        videoOption = findVideoModeOption();
+      } else {
+        console.warn(LOG_PREFIX, '설정 패널 트리거 못 찾음');
+        // 디버그: 에디터 근처 모든 버튼 출력
+        const editor = findEditor();
+        if (editor) {
+          let c = editor;
+          for (let i = 0; i < 6; i++) c = c?.parentElement;
+          if (c) {
+            console.log(LOG_PREFIX, '=== 에디터 근처 버튼들 ===');
+            c.querySelectorAll('button').forEach((b, i) => {
+              const t = (b.textContent || '').trim().substring(0, 30);
+              const aria = b.getAttribute('aria-label') || '';
+              const expanded = b.getAttribute('aria-expanded');
+              console.log(LOG_PREFIX, `  btn[${i}]: text="${t}" aria="${aria}" expanded=${expanded}`);
+            });
+          }
+        }
       }
     }
 
-    // 4. "동영상"/"video" 키워드와 액션 키워드 조합 매칭
-    for (const b of buttons) {
-      const text = (b.textContent || '').trim().toLowerCase();
-      const hasVideo = text.includes('동영상') || text.includes('비디오') || text.includes('영상') || text.includes('video');
-      const hasAction = text.includes('만들기') || text.includes('생성') || text.includes('create') || text.includes('generate') || text.includes('make');
-      if (hasVideo && hasAction) return b;
+    if (!videoOption) {
+      // Step 3 fallback: 페이지 전체에서 "동영상 만들기" 텍스트 검색
+      // (오버레이 버튼 제외 — 비디오 요소 위가 아닌 것만)
+      console.log(LOG_PREFIX, '패널 옵션 못 찾음, 전체 DOM 검색...');
+      const allClickables = document.querySelectorAll('button, div[role="button"], a, [tabindex="0"]');
+      for (const el of allClickables) {
+        const text = (el.textContent || '').trim();
+        if (text.includes('동영상 만들기') && text.includes('비디오로 변환')) {
+          videoOption = el;
+          break;
+        }
+      }
     }
 
+    if (!videoOption) {
+      console.error(LOG_PREFIX, '=== "동영상 만들기" 옵션을 어디에서도 못 찾음 ===');
+      showToast('비디오 모드 전환 실패: 옵션 못 찾음', 'error');
+      return false;
+    }
+
+    // Step 4: "동영상 만들기" 클릭 → 비디오 모드 전환
+    console.log(LOG_PREFIX, `"동영상 만들기" 옵션 클릭: "${(videoOption.textContent || '').trim().substring(0, 30)}"`);
+    showToast('"동영상 만들기" 모드 전환 클릭...', 'info');
+    MangoDom.simulateClick(videoOption);
+    await delay(1500);
+
+    // 전환 확인: 텍스트필드 placeholder가 변경되었는지 체크
+    const editor = findEditor();
+    if (editor) {
+      const placeholder = editor.getAttribute('data-placeholder') || editor.textContent || '';
+      console.log(LOG_PREFIX, `모드 전환 후 placeholder: "${placeholder.substring(0, 40)}"`);
+    }
+
+    showToast('비디오 모드 전환 완료!', 'success');
+    return true;
+  }
+
+  // 설정 패널에서 "동영상 만들기" 옵션 찾기
+  // "이 이미지를 비디오로 변환" 서브텍스트로 구별 (오버레이 버튼과 구별)
+  function findVideoModeOption() {
+    // 방법 1: "비디오로 변환" 서브텍스트가 있는 요소
+    const allElements = document.querySelectorAll('div, button, a, span');
+    for (const el of allElements) {
+      const text = (el.textContent || '').trim();
+      if (text.includes('비디오로 변환') && el.children.length <= 5) {
+        // 가장 가까운 클릭 가능한 요소 찾기
+        const clickable = el.closest('button') || el.closest('[role="button"]') ||
+                          el.closest('a') || el.closest('[tabindex]') || el;
+        console.log(LOG_PREFIX, `비디오 모드 옵션 발견: "${text.substring(0, 30)}" (${clickable.tagName})`);
+        return clickable;
+      }
+    }
+
+    // 방법 2: "동영상 만들기" 텍스트가 있고, 비디오/이미지 위가 아닌 요소
+    // (이미지 위 오버레이 버튼 제외)
+    for (const el of allElements) {
+      const text = (el.textContent || '').trim();
+      if (text === '동영상 만들기' || text === 'Create video') {
+        // 비디오/이미지 요소의 직계 부모인지 확인 (오버레이이면 제외)
+        const nearMedia = el.closest('video') || el.closest('img') ||
+                          el.parentElement?.querySelector('video, img');
+        if (!nearMedia) {
+          return el.closest('button') || el.closest('[role="button"]') || el;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // 텍스트필드 옆 설정 패널 트리거 버튼 찾기
+  function findSettingsPanelTrigger() {
+    const editor = findEditor();
+    if (!editor) return null;
+
+    // 에디터의 상위 컨테이너 (입력 영역 전체)
+    let inputContainer = editor;
+    for (let i = 0; i < 6; i++) {
+      inputContainer = inputContainer?.parentElement;
+      if (!inputContainer) return null;
+    }
+
+    const allBtns = Array.from(inputContainer.querySelectorAll('button'));
+    const submitBtn = findSubmitButton();
+
+    // submit이 아닌 아이콘 버튼만 필터
+    const candidates = allBtns.filter(b => {
+      if (b === submitBtn) return false;
+      if (b.disabled) return false;
+      const text = (b.textContent || '').trim();
+      return text.length <= 20;
+    });
+
+    // 우선순위 1: aria-expanded 또는 aria-haspopup 속성이 있는 버튼
+    for (const btn of candidates) {
+      if (btn.getAttribute('aria-expanded') !== null ||
+          btn.getAttribute('aria-haspopup')) {
+        console.log(LOG_PREFIX, `설정 트리거 (aria): "${(btn.textContent || '').trim().substring(0, 15)}"`);
+        return btn;
+      }
+    }
+
+    // 우선순위 2: SVG 아이콘이 있는 버튼 (submit 제외)
+    for (const btn of candidates) {
+      if (btn.querySelector('svg')) {
+        console.log(LOG_PREFIX, `설정 트리거 (SVG): "${(btn.textContent || '').trim().substring(0, 15)}"`);
+        return btn;
+      }
+    }
+
+    // 우선순위 3: submit 바로 앞의 버튼
+    if (candidates.length > 0) {
+      const btn = candidates[candidates.length - 1];
+      console.log(LOG_PREFIX, `설정 트리거 (마지막 후보): "${(btn.textContent || '').trim().substring(0, 15)}"`);
+      return btn;
+    }
+
+    return null;
+  }
+
+  // 기존 호환: 이미지 위 오버레이 "동영상 만들기" 버튼 (fallback용)
+  function findCreateVideoButton() {
+    let btn = document.querySelector('button[aria-label="동영상 만들기"]');
+    if (btn) return btn;
+
+    const buttons = document.querySelectorAll('button');
+    for (const b of buttons) {
+      const text = (b.textContent || '').trim();
+      if (text.includes('동영상 만들기') || text.includes('Create video')) {
+        return b;
+      }
+    }
     return null;
   }
 
