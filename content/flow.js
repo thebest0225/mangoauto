@@ -75,6 +75,8 @@
       isProcessing = false;
       imageSettingsApplied = false;
       videoSettingsApplied = false;
+      // 중지 시 다이얼로그 자동처리도 멈춤
+      if (window.MangoDialogDismisser) window.MangoDialogDismisser.stop();
       sendResponse({ ok: true });
       return;
     }
@@ -108,10 +110,6 @@
 
   function checkStopped() {
     if (shouldStop) throw new Error('Stopped by user');
-    // 매 스텝마다 알림/동의 다이얼로그 자동 처리
-    if (window.MangoDialogDismisser) {
-      window.MangoDialogDismisser.tryDismiss();
-    }
   }
 
   async function handleExecutePrompt(msg) {
@@ -119,6 +117,10 @@
     isProcessing = true;
     shouldStop = false;
     lastApiResult = null;
+    // 자동화 시작 시 다이얼로그 자동처리 재개
+    if (window.MangoDialogDismisser) {
+      window.MangoDialogDismisser.disabled = false;
+    }
 
     try {
       const { prompt, mediaType, sourceImageDataUrl, settings } = msg;
@@ -273,8 +275,7 @@
   async function waitForElement(finder, timeoutMs = 10000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      // 대기 중 다이얼로그 자동 처리
-      if (window.MangoDialogDismisser) window.MangoDialogDismisser.tryDismiss();
+      // 대기 중 다이얼로그 자동 처리 (disabled 체크는 내부에서)
       const el = finder();
       if (el) return el;
       await delay(500);
@@ -679,10 +680,18 @@
     console.log(LOG_PREFIX, `[model] 새로 나타난 요소: ${newElems.length}개`);
 
     // 새 요소 중 모델명 매칭되는 것 수집 → 자식 수 적은 순 (리프 우선)
+    // 여러 모델명을 가진 컨테이너 DIV는 제외
+    const allModelKw = ['Nano Banana Pro', 'Nano Banana', 'Imagen', 'Veo 3.1', 'Veo 3'];
+    const countModelNames = (t) => {
+      const lower = t.toLowerCase();
+      return allModelKw.filter(kw => lower.includes(kw.toLowerCase())).length;
+    };
     const newMatches = [];
     for (const el of newElems) {
       const text = el.textContent?.trim() || '';
       if (text.length > 80 || text.length < 3) continue;
+      // 여러 모델명이 있는 컨테이너는 건너뛰기
+      if (countModelNames(text) > 1) continue;
       if (matchesModel(text)) {
         newMatches.push({ el, text, children: el.children.length });
       }
@@ -1360,10 +1369,7 @@
         }
       });
     }
-    // MangoDialogDismisser로도 한번 시도
-    if (window.MangoDialogDismisser) {
-      window.MangoDialogDismisser.tryDismiss();
-    }
+    // MangoDialogDismisser는 자동 interval로 처리 (별도 호출 불필요)
   }
 
   async function waitForGenerationComplete(timeoutMin) {

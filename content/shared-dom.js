@@ -429,6 +429,10 @@ if (typeof window !== 'undefined') {
 // ─── Auto Dialog Dismisser ───
 // Automatically handles popups, consent dialogs, cookie banners, etc.
 const MangoDialogDismisser = {
+  disabled: false,
+  _intervalId: null,
+  _initialTimerId: null,
+
   // Common dismiss/accept button texts across platforms
   ACCEPT_TEXTS: [
     // English
@@ -460,8 +464,24 @@ const MangoDialogDismisser = {
     '[class*="toast"] button'
   ],
 
+  // Stop periodic dismissal
+  stop() {
+    this.disabled = true;
+    if (this._intervalId) { clearInterval(this._intervalId); this._intervalId = null; }
+    if (this._initialTimerId) { clearTimeout(this._initialTimerId); this._initialTimerId = null; }
+    console.log('[MangoDialog] Stopped');
+  },
+
+  // Resume periodic dismissal
+  resume() {
+    this.disabled = false;
+    this.startAutoDismisal();
+    console.log('[MangoDialog] Resumed');
+  },
+
   // Try to find and click an accept/dismiss button
   tryDismiss() {
+    if (this.disabled) return false;
     // Strategy 1: Known dialog selectors
     for (const sel of this.DIALOG_SELECTORS) {
       const buttons = document.querySelectorAll(sel);
@@ -499,11 +519,15 @@ const MangoDialogDismisser = {
 
   // Start periodic checking
   startAutoDismisal(intervalMs = 4000) {
+    // Clear existing timers first
+    if (this._intervalId) clearInterval(this._intervalId);
+    if (this._initialTimerId) clearTimeout(this._initialTimerId);
+
     // Initial check after page load
-    setTimeout(() => this.tryDismiss(), 2000);
+    this._initialTimerId = setTimeout(() => this.tryDismiss(), 2000);
 
     // Periodic check
-    setInterval(() => this.tryDismiss(), intervalMs);
+    this._intervalId = setInterval(() => this.tryDismiss(), intervalMs);
   }
 };
 
