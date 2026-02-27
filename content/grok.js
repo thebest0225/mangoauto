@@ -22,42 +22,69 @@
   let shouldStop = false;
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
-  // ─── Navigation Guard: 작업 중 Grok SPA 페이지 이동 차단 ───
-  // 원인: Grok SPA가 영상 생성 완료 후 history.pushState로 채팅 페이지 등으로 자동 이동
-  // 대책: isProcessing 동안 /imagine 외 이동을 차단
+  // ─── Navigation Debug: 근본 원인 추적 ───
+  // URL 변경 감지 (500ms 폴링)
+  let _lastUrl = window.location.href;
+  setInterval(() => {
+    const now = window.location.href;
+    if (now !== _lastUrl) {
+      console.error(LOG_PREFIX, `🚨 URL CHANGED: ${_lastUrl} → ${now}`);
+      console.error(LOG_PREFIX, `🚨 URL변경 스택:`, new Error().stack);
+      showToast(`🚨 URL변경: ${now.substring(0, 50)}`, 'error');
+      _lastUrl = now;
+    }
+  }, 500);
+
+  // 모든 클릭 이벤트 캡처 (작업 중)
+  document.addEventListener('click', (e) => {
+    if (!isProcessing) return;
+    const el = e.target;
+    const tag = el.tagName;
+    const text = (el.textContent || '').trim().substring(0, 40);
+    const href = el.href || el.closest('a')?.href || '';
+    const ariaLabel = el.getAttribute?.('aria-label') || '';
+    const isTrusted = e.isTrusted; // true=사용자 클릭, false=코드 클릭
+
+    console.warn(LOG_PREFIX, `🖱️ CLICK [${isTrusted ? 'USER' : 'CODE'}]:`, {
+      tag, text, href, ariaLabel,
+      isLink: !!el.closest('a'),
+      path: e.composedPath().slice(0, 4).map(n =>
+        `${n.tagName || 'text'}.${(n.className || '').substring?.(0, 20) || ''}`
+      ).join(' > ')
+    });
+
+    // 스택 트레이스 (코드 클릭이면 어디서 호출했는지 추적)
+    if (!isTrusted) {
+      console.warn(LOG_PREFIX, `🖱️ CODE CLICK 스택:`, new Error().stack);
+    }
+
+    if (href && !href.includes('grok.com/imagine')) {
+      console.error(LOG_PREFIX, `🚨🚨🚨 외부 네비게이션 클릭! href=${href}`);
+      showToast(`🚨 외부 클릭: ${text.substring(0, 20)}`, 'error');
+    }
+  }, true);
+
+  // history.pushState / replaceState 감시 (차단 아닌 로그만)
   const _origPushState = history.pushState;
   const _origReplaceState = history.replaceState;
-
   history.pushState = function(...args) {
-    const url = String(args[2] || '');
-    if (isProcessing && url && !url.includes('/imagine')) {
-      console.warn(LOG_PREFIX, `🚫 작업 중 pushState 차단: ${url}`);
-      showToast(`페이지 이동 차단: ${url.substring(0, 40)}`, 'warn');
-      return; // 차단
-    }
+    console.warn(LOG_PREFIX, `🚨 pushState:`, args[2]);
+    console.warn(LOG_PREFIX, `🚨 pushState 스택:`, new Error().stack);
+    if (isProcessing) showToast(`🚨 pushState: ${args[2]}`, 'error');
     return _origPushState.apply(this, args);
   };
-
   history.replaceState = function(...args) {
-    const url = String(args[2] || '');
-    if (isProcessing && url && !url.includes('/imagine')) {
-      console.warn(LOG_PREFIX, `🚫 작업 중 replaceState 차단: ${url}`);
-      return; // 차단
+    console.warn(LOG_PREFIX, `🚨 replaceState:`, args[2]);
+    if (isProcessing) {
+      console.warn(LOG_PREFIX, `🚨 replaceState 스택:`, new Error().stack);
+      showToast(`🚨 replaceState: ${String(args[2]).substring(0, 40)}`, 'error');
     }
     return _origReplaceState.apply(this, args);
   };
-
-  // 작업 중 외부 링크 클릭 차단
-  document.addEventListener('click', (e) => {
-    if (!isProcessing) return;
-    const link = e.target.closest('a');
-    if (link && link.href && !link.href.includes('/imagine')) {
-      e.preventDefault();
-      e.stopPropagation();
-      console.warn(LOG_PREFIX, `🚫 작업 중 링크 클릭 차단: ${link.href.substring(0, 60)}`);
-      showToast(`링크 클릭 차단`, 'warn');
-    }
-  }, true);
+  window.addEventListener('popstate', () => {
+    console.warn(LOG_PREFIX, `🚨 popstate → ${window.location.href}`);
+    if (isProcessing) showToast(`🚨 popstate: ${window.location.href.substring(0, 50)}`, 'error');
+  });
 
   // ─── Visual Debug Toast (화면에 직접 보이는 디버그) ───
   function showToast(message, type = 'info') {
