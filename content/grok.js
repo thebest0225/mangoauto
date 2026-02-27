@@ -149,15 +149,11 @@
         if (isModerated()) throw new ModerationError();
 
         // Step 6: 결과 페이지 텍스트필드에 비디오 프롬프트 입력
+        // 새 UI는 TipTap 에디터를 사용하므로 typePrompt() 사용
         if (prompt?.trim()) {
           showToast('Step 6: 비디오 프롬프트 입력...', 'info');
-          const resultTextarea = findResultPageTextarea();
-          if (resultTextarea) {
-            await typeOnResultTextarea(resultTextarea, prompt);
-            await delay(500);
-          } else {
-            showToast('결과 페이지 텍스트필드 없음!', 'warn');
-          }
+          await typePrompt(prompt);
+          await delay(500);
         }
         checkStopped();
 
@@ -229,9 +225,9 @@
         if (isModerated()) throw new ModerationError();
 
         // 결과 페이지에서 비디오 프롬프트 (필요시)
-        const resultTextarea = findResultPageTextarea();
-        if (resultTextarea && prompt?.trim()) {
-          await typeOnResultTextarea(resultTextarea, prompt);
+        // 새 UI는 TipTap 에디터를 사용하므로 typePrompt() 사용
+        if (prompt?.trim()) {
+          await typePrompt(prompt);
           await delay(500);
         }
 
@@ -1060,9 +1056,24 @@
       await delay(200);
     }
 
-    // Step 8: 패널 닫기
-    document.body.click();
+    // Step 8: 패널 닫기 (여러 방법 시도)
+    // 방법1: Escape 키
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await delay(300);
+
+    // 방법2: 패널이 아직 열려있으면 트리거 버튼 재클릭 (토글)
+    if (findFloatingContainer()) {
+      console.log(LOG_PREFIX, '패널 아직 열림 → 트리거 버튼 재클릭');
+      MangoDom.simulateClick(modelBtn);
+      await delay(300);
+    }
+
+    // 방법3: 그래도 열려있으면 body 클릭
+    if (findFloatingContainer()) {
+      console.log(LOG_PREFIX, '패널 아직 열림 → body 클릭');
+      document.body.click();
+      await delay(300);
+    }
 
     showToast('비디오 설정 적용 완료!', 'success');
     console.log(LOG_PREFIX, `설정 적용 완료: ${videoDuration}, ${videoResolution}, ${aspectRatio}`);
