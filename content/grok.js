@@ -307,12 +307,13 @@
         });
       }
 
-      // 다음 아이템을 위해 메인 페이지로 복귀 (실패해도 에러 전파 안 함)
+      // 다음 아이템을 위해 메인 페이지로 복귀
+      // goBack()이 /imagine으로 직접 이동 → 페이지 리로드 → content script 재시작
       try {
         await delay(2000);
         if (!shouldStop) {
           await goBack();
-          await waitForMainPage(15000);
+          // goBack()이 location.href 변경하므로 여기까지 올 수도 있고 안 올 수도 있음
         }
       } catch (navErr) {
         console.warn(LOG_PREFIX, 'Post-complete navigation failed (ignored):', navErr.message);
@@ -556,8 +557,11 @@
   }
 
   async function goBack() {
-    window.history.back();
-    await delay(1000);
+    // history.back()은 채팅(/c/...) 또는 프로젝트 페이지로 갈 수 있으므로
+    // /imagine으로 직접 이동
+    console.log(LOG_PREFIX, 'goBack: /imagine으로 직접 이동');
+    window.location.href = 'https://grok.com/imagine';
+    await delay(2000);
   }
 
   async function waitForMainPage(timeout = 15000) {
