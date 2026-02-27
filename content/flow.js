@@ -1768,6 +1768,23 @@
     return false;
   }
 
+  // ─── Ensure inject.js (MAIN world) is loaded ───
+  // background의 tabs.onUpdated로만 주입하면 서비스 워커 비활성 시 누락될 수 있음
+  // content script에서 직접 <script> 태그로 주입하면 확실하게 로딩됨
+  function ensureInjectScript() {
+    if (document.querySelector('script[data-mangoauto-inject]')) return;
+    try {
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('content/inject.js');
+      script.dataset.mangoautoInject = 'true';
+      (document.head || document.documentElement).appendChild(script);
+      console.log(LOG_PREFIX, 'inject.js (MAIN world) 주입 완료');
+    } catch (e) {
+      console.warn(LOG_PREFIX, 'inject.js 주입 실패:', e.message);
+    }
+  }
+  ensureInjectScript();
+
   // Snapshot existing media on load
   setTimeout(() => snapshotExistingMedia(), 2000);
 
