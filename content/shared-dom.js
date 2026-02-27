@@ -432,6 +432,7 @@ const MangoDialogDismisser = {
   disabled: false,
   _intervalId: null,
   _initialTimerId: null,
+  _dismissed: new WeakSet(), // 이미 클릭한 버튼 추적 (재클릭 방지)
 
   // Common dismiss/accept button texts across platforms
   ACCEPT_TEXTS: [
@@ -486,12 +487,14 @@ const MangoDialogDismisser = {
     for (const sel of this.DIALOG_SELECTORS) {
       const buttons = document.querySelectorAll(sel);
       for (const btn of buttons) {
+        if (this._dismissed.has(btn)) continue; // 이미 클릭한 버튼 건너뛰기
         const text = btn.textContent.trim();
         if (text.length > 0 && text.length < 30) {
           for (const acceptText of this.ACCEPT_TEXTS) {
             if (text.toLowerCase() === acceptText.toLowerCase() ||
                 text.toLowerCase().includes(acceptText.toLowerCase())) {
               btn.click();
+              this._dismissed.add(btn);
               console.log('[MangoDialog] Dismissed:', text);
               return true;
             }
@@ -507,8 +510,10 @@ const MangoDialogDismisser = {
       '[class*="close-btn"], [class*="dismiss"]'
     );
     for (const btn of closeButtons) {
+      if (this._dismissed.has(btn)) continue;
       if (btn.offsetParent !== null) { // visible
         btn.click();
+        this._dismissed.add(btn);
         console.log('[MangoDialog] Closed via aria-label/class');
         return true;
       }
