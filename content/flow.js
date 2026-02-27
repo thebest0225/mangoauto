@@ -791,10 +791,16 @@
 
     console.log(LOG_PREFIX, `[settings] mode=${mode}, isImage=${isImageOutput}, already=${already}, relevant=${JSON.stringify(relevant)?.substring(0, 100)}`);
 
+    // Step 1: 모드 드롭다운 전환 (탭 + 드롭다운 → 실제 생성 모드 결정)
+    // 설정 패널의 Image/Video 버튼은 패널 내 설정 표시용이고,
+    // 실제 생성 모드는 모드 드롭다운(combobox)으로 전환해야 함
+    await switchMode(mode);
+    await delay(300);
+
+    // Step 2: 설정 패널 열기 및 세부 설정 적용
     const opened = await openSettingsPanel();
     if (!opened) {
-      console.warn(LOG_PREFIX, '[settings] 패널 못열음 → legacy fallback');
-      await switchMode(mode);
+      console.warn(LOG_PREFIX, '[settings] 패널 못열음 → legacy settings fallback');
       if (!already && relevant) {
         if (isImageOutput) { await applyImageSettings(settings); imageSettingsApplied = true; }
         else { await applyVideoSettings(settings); videoSettingsApplied = true; }
