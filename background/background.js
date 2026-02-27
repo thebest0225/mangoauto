@@ -762,7 +762,12 @@ async function sendNextPipelineItem() {
         activeTasks.delete(freeTabId);
         sm.currentIndex = sm.results.length;
         broadcastState(getExtendedSnapshot());
-        await sendNextPipelineItem();
+        if (pipelineNextIdx < sm.queue.length) {
+          const d = Math.max(3000, promptDelay);
+          broadcastLog(`다음 전송까지 ${Math.round(d/1000)}초 대기...`, 'info');
+          await MangoUtils.sleep(d);
+          await sendNextPipelineItem();
+        }
         checkPipelineCompletion();
       }
     }, timeoutMs);
@@ -1255,8 +1260,13 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   sm.currentIndex = sm.results.length;
   broadcastState(getExtendedSnapshot());
 
-  // 빈 슬롯에 다음 항목 즉시 전송
-  await sendNextPipelineItem();
+  // 빈 슬롯에 다음 항목 전송 (전송 간격 적용)
+  if (pipelineNextIdx < sm.queue.length) {
+    const delay = Math.max(3000, promptDelay);
+    broadcastLog(`다음 전송까지 ${Math.round(delay/1000)}초 대기...`, 'info');
+    await MangoUtils.sleep(delay);
+    await sendNextPipelineItem();
+  }
   checkPipelineCompletion();
 }
 
