@@ -1,10 +1,11 @@
 /**
- * MangoAuto - Flow Fetch Interceptor + Prompt Injector (v4)
+ * MangoAuto - Flow Fetch Interceptor + Prompt Injector (v4.1)
  * Injected into MAIN world to intercept native window.fetch
  *
- * v4: Slate.js 에디터 API 직접 접근
- * - React fiber 트리에서 Slate editor 인스턴스를 찾아 직접 텍스트 설정
- * - clipboard/포커스 불필요 → MangoHub 모드에서도 안정 동작
+ * v4.1: Slate.js 고수준 API 사용
+ * - editor.insertText() / editor.deleteFragment() 로 React 상태까지 업데이트
+ * - v4의 editor.apply()는 저수준이라 onChange 파이프라인을 트리거하지 않음
+ * - MAIN world execCommand 폴백 추가 (Slate의 onDOMBeforeInput 자연 트리거)
  * - fetch 인터셉션은 안전망으로 유지
  */
 
@@ -118,7 +119,19 @@
     return null;
   }
 
-  // ─── Set text in Slate editor directly ───
+  // ─── Helper: get end point of Slate document ───
+  function getEndPoint(editor) {
+    if (!editor.children || editor.children.length === 0) return null;
+    const lastIdx = editor.children.length - 1;
+    const lastChild = editor.children[lastIdx];
+    const lastTextChildren = lastChild?.children || [];
+    const lastTextIdx = Math.max(0, lastTextChildren.length - 1);
+    const lastText = lastTextChildren[lastTextIdx];
+    const lastOffset = lastText?.text?.length || 0;
+    return { path: [lastIdx, lastTextIdx], offset: lastOffset };
+  }
+
+  // ─── Set text in Slate editor ───
   function trySetSlateText(text) {
     const el = findSlateElement();
     if (!el) {
@@ -127,91 +140,105 @@
     }
 
     const editor = findSlateEditor(el);
-    if (!editor) return false;
 
-    try {
-      console.log(LOG_PREFIX, `📊 Slate state: ${editor.children.length} children, selection=${!!editor.selection}`);
-
-      // Step 1: Remove all existing content via Slate operations
-      while (editor.children.length > 0) {
-        editor.apply({
-          type: 'remove_node',
-          path: [editor.children.length - 1],
-          node: editor.children[editor.children.length - 1]
-        });
-      }
-
-      // Step 2: Insert new paragraph with our text
-      editor.apply({
-        type: 'insert_node',
-        path: [0],
-        node: {
-          type: 'paragraph',
-          children: [{ text: text }]
-        }
-      });
-
-      // Step 3: Set selection at end of text
-      editor.apply({
-        type: 'set_selection',
-        properties: editor.selection,
-        newProperties: {
-          anchor: { path: [0, 0], offset: text.length },
-          focus: { path: [0, 0], offset: text.length }
-        }
-      });
-
-      // Step 4: Trigger Slate onChange
-      if (typeof editor.onChange === 'function') {
-        editor.onChange();
-      }
-
-      console.log(LOG_PREFIX, `✅ Slate text set: "${text.substring(0, 40)}..." (${editor.children.length} children)`);
-      return true;
-    } catch (e) {
-      console.warn(LOG_PREFIX, `Slate API method 1 failed: ${e.message}`);
-
-      // Fallback: try simpler approach
+    // ─── Method 1: Slate 고수준 API (insertText pipeline) ───
+    // editor.deleteFragment() + editor.insertText()는 Slate의 전체 파이프라인을 통과
+    // → normalizations → onChange → React state update
+    if (editor && typeof editor.insertText === 'function') {
       try {
-        // Direct children replacement
-        editor.children.length = 0;
-        editor.children.push({
-          type: 'paragraph',
-          children: [{ text: text }]
+        console.log(LOG_PREFIX, `📊 Slate state: ${editor.children.length} children, selection=${!!editor.selection}`);
+
+        // Step 1: Select all content
+        const endPoint = getEndPoint(editor);
+        if (endPoint) {
+          editor.selection = {
+            anchor: { path: [0, 0], offset: 0 },
+            focus: endPoint
+          };
+          console.log(LOG_PREFIX, `📊 Selection set: [0,0]:0 → [${endPoint.path}]:${endPoint.offset}`);
+        }
+
+        // Step 2: Delete selection via high-level API
+        if (typeof editor.deleteFragment === 'function') {
+          editor.deleteFragment('forward');
+          console.log(LOG_PREFIX, `📊 deleteFragment done: ${editor.children.length} children`);
+        } else if (typeof editor.delete === 'function') {
+          editor.delete();
+          console.log(LOG_PREFIX, `📊 delete done: ${editor.children.length} children`);
+        }
+
+        // Step 3: Insert text via high-level API (goes through full Slate pipeline)
+        editor.insertText(text);
+        console.log(LOG_PREFIX, `✅ Method 1 (insertText): "${text.substring(0, 40)}..." (${editor.children.length} children)`);
+
+        // Verify: check if text actually got into the model
+        const firstText = editor.children?.[0]?.children?.[0]?.text || '';
+        if (firstText.includes(text.substring(0, 20))) {
+          console.log(LOG_PREFIX, '✅ Verified: text is in Slate model');
+          return true;
+        }
+        console.log(LOG_PREFIX, `⚠️ Model text mismatch: "${firstText.substring(0, 40)}"`);
+      } catch (e) {
+        console.warn(LOG_PREFIX, `Method 1 failed: ${e.message}`);
+      }
+    }
+
+    // ─── Method 2: MAIN world execCommand (Slate onDOMBeforeInput 자연 트리거) ───
+    // MAIN world에서 실행되므로 Slate의 이벤트 핸들러가 정상 처리
+    try {
+      console.log(LOG_PREFIX, '🔄 Method 2: execCommand from MAIN world');
+      el.focus();
+      document.execCommand('selectAll', false, null);
+      const ok = document.execCommand('insertText', false, text);
+      console.log(LOG_PREFIX, `📊 execCommand insertText: ${ok}`);
+
+      if (ok) {
+        // execCommand는 비동기로 Slate를 업데이트하므로 잠깐 대기 후 검증
+        // (여기서는 즉시 검증하지 않고 성공으로 간주)
+        console.log(LOG_PREFIX, '✅ Method 2 (execCommand insertText)');
+        return true;
+      }
+    } catch (e) {
+      console.warn(LOG_PREFIX, `Method 2 failed: ${e.message}`);
+    }
+
+    // ─── Method 3: editor.apply() 저수준 + 수동 onChange (최후 수단) ───
+    if (editor) {
+      try {
+        console.log(LOG_PREFIX, '🔄 Method 3: editor.apply() low-level');
+
+        while (editor.children.length > 0) {
+          editor.apply({
+            type: 'remove_node',
+            path: [editor.children.length - 1],
+            node: editor.children[editor.children.length - 1]
+          });
+        }
+        editor.apply({
+          type: 'insert_node',
+          path: [0],
+          node: { type: 'paragraph', children: [{ text: text }] }
         });
-        editor.selection = {
-          anchor: { path: [0, 0], offset: text.length },
-          focus: { path: [0, 0], offset: text.length }
-        };
+        editor.apply({
+          type: 'set_selection',
+          properties: editor.selection,
+          newProperties: {
+            anchor: { path: [0, 0], offset: text.length },
+            focus: { path: [0, 0], offset: text.length }
+          }
+        });
         if (typeof editor.onChange === 'function') {
           editor.onChange();
         }
-        console.log(LOG_PREFIX, '✅ Slate text set (fallback method)');
+        console.log(LOG_PREFIX, `✅ Method 3 (apply+onChange): "${text.substring(0, 40)}..."`);
         return true;
-      } catch (e2) {
-        console.warn(LOG_PREFIX, `Slate fallback also failed: ${e2.message}`);
-
-        // Last resort: try insertText with select-all
-        try {
-          if (editor.children.length > 0) {
-            const lastChild = editor.children[editor.children.length - 1];
-            const lastTextNode = lastChild.children?.[lastChild.children.length - 1];
-            const lastOffset = lastTextNode?.text?.length || 0;
-
-            editor.selection = {
-              anchor: { path: [0, 0], offset: 0 },
-              focus: { path: [editor.children.length - 1, lastChild.children.length - 1], offset: lastOffset }
-            };
-          }
-          editor.insertText(text);
-          console.log(LOG_PREFIX, '✅ Slate text set (insertText method)');
-          return true;
-        } catch (e3) {
-          console.warn(LOG_PREFIX, `All Slate methods failed: ${e3.message}`);
-          return false;
-        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, `Method 3 failed: ${e.message}`);
       }
     }
+
+    console.warn(LOG_PREFIX, '❌ All Slate methods failed');
+    return false;
   }
 
   // ─── Fetch Interceptor ───
@@ -385,5 +412,5 @@
     }
   };
 
-  console.log(LOG_PREFIX, 'Fetch interceptor installed (v4 Slate API)');
+  console.log(LOG_PREFIX, 'Fetch interceptor installed (v4.1 high-level Slate API)');
 })();
