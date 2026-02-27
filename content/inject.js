@@ -1,13 +1,14 @@
 /**
- * MangoAuto - Flow Fetch Interceptor + Prompt Injector
+ * MangoAuto - Flow Fetch Interceptor + Prompt Injector (v3)
  * Injected into MAIN world to intercept native window.fetch
  *
- * This script:
- * 1. Intercepts batchGenerate/batchAsyncGenerateVideo/batchCheckAsyncVideo
- * 2. Handles SET_FLOW_PROMPT: sets prompt in framework's internal state
- *    (bypasses Lit framework contenteditable desync)
- * 3. Overrides prompt element getters as additional safety net
- * 4. Injects prompt into outgoing API request body as final backup
+ * v3 changes:
+ * - Don't destroy DOM state when text is already present (clipboard paste fix)
+ * - Find and call __reactProps$ event handlers directly
+ * - Use React queue.dispatch() instead of direct state assignment
+ * - Use InputEvent (not plain Event) with proper inputType/data
+ * - Remove getter overrides (interferes with React DOM diffing)
+ * - Dispatch beforeinput + input event sequence for framework notification
  */
 
 (() => {
@@ -18,16 +19,15 @@
 
   // ─── Prompt Injection State ───
   let pendingPrompt = null;
-  let promptOverrideActive = false;
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   // ─── Listen for SET_FLOW_PROMPT from content script ───
-  window.addEventListener('message', (event) => {
+  window.addEventListener('message', async (event) => {
     if (event.data?.type === 'SET_FLOW_PROMPT') {
       pendingPrompt = event.data.text;
       console.log(LOG_PREFIX, '📝 Prompt received:', pendingPrompt?.substring(0, 60));
-      setPromptInFramework(event.data.text);
+      await setPromptInFramework(event.data.text);
       window.postMessage({ type: 'SET_FLOW_PROMPT_RESULT', ok: true }, '*');
     }
   });
@@ -70,269 +70,319 @@
     return null;
   }
 
-  // ─── Main prompt setting function ───
+  // ─── Main prompt setting function (v3) ───
   async function setPromptInFramework(text) {
     const el = findPromptElement();
     if (!el) {
       console.warn(LOG_PREFIX, '❌ Prompt element not found');
       return;
     }
-    console.log(LOG_PREFIX, `🔍 Prompt element: <${el.tagName}> id="${el.id || ''}" ce=${el.contentEditable}`);
 
-    // Strategy 1: Walk up DOM, find framework components, set properties
-    const litResult = walkDOMAndSetProperties(el, text);
+    const currentText = (el.textContent || '').trim();
+    const textAlreadyPresent = currentText.length > 10 && currentText.includes(text.substring(0, 20));
 
-    // Strategy 2: execCommand selectAll + insertText in MAIN world
-    try {
+    console.log(LOG_PREFIX, `🔍 Element: <${el.tagName}> ce=${el.contentEditable}`);
+    console.log(LOG_PREFIX, `📋 Text in DOM: ${textAlreadyPresent ? 'YES' : 'NO'} ("${currentText.substring(0, 40)}")`);
+
+    // Strategy 1: Find __reactProps$ handlers on element and parents
+    const propsFound = tryReactPropsHandlers(el, text);
+
+    // Strategy 2: If text NOT in DOM, insert via execCommand (don't use selectAll+delete)
+    if (!textAlreadyPresent) {
+      console.log(LOG_PREFIX, '📝 Text not in DOM, inserting...');
       el.focus();
       await sleep(50);
-      // Select all content
-      const sel = window.getSelection();
-      if (sel) {
-        sel.removeAllRanges();
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        sel.addRange(range);
-      }
-      // Delete selected, then insert
-      document.execCommand('delete', false, null);
-      await sleep(30);
+      // Use insertText which is less destructive than selectAll+delete
+      document.execCommand('selectAll', false, null);
       document.execCommand('insertText', false, text);
-      console.log(LOG_PREFIX, `📝 execCommand insertText done, content="${(el.textContent || '').substring(0, 40)}"`);
-    } catch (e) {
-      console.warn(LOG_PREFIX, 'execCommand failed:', e.message);
+      console.log(LOG_PREFIX, `📝 Inserted, content="${(el.textContent || '').substring(0, 40)}"`);
+    } else {
+      console.log(LOG_PREFIX, '📋 Text already in DOM, skipping re-insert');
     }
 
-    // Strategy 3: Override textContent/innerText/value getters
-    overrideElementGetters(el, text);
+    // Strategy 3: Dispatch proper InputEvent sequence
+    await dispatchInputEvents(el, text);
 
-    // Strategy 4: Dispatch comprehensive events
-    try {
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.blur();
-      await sleep(100);
-      el.focus();
-    } catch (e) {}
+    // Strategy 4: React state dispatch via queue.dispatch()
+    tryReactStateDispatch(el, text);
+
+    // Strategy 5: Try calling Angular/Wiz change detection
+    tryAngularChangeDetection(el);
   }
 
-  // ─── Walk DOM tree and set framework properties ───
-  function walkDOMAndSetProperties(el, text) {
-    let node = el;
+  // ─── Strategy 1: Find __reactProps$ and call event handlers ───
+  function tryReactPropsHandlers(el, text) {
     let found = false;
+    let node = el;
 
-    for (let depth = 0; depth < 40 && node; depth++) {
-      const tag = node.tagName || '';
-
-      // Check for framework internals on EVERY element (not just custom)
-      const hasLit = (typeof node.requestUpdate === 'function');
-      const hasReactiveValues = (node.__reactiveValues instanceof Map);
-      const isCustom = tag.includes('-');
-
-      // Check for React fiber
-      let reactFiberKey = null;
-      for (const key of Object.getOwnPropertyNames(node)) {
-        if (key.startsWith('__reactFiber') || key.startsWith('__reactInternalInstance')) {
-          reactFiberKey = key;
-          break;
+    for (let depth = 0; depth < 8 && node; depth++) {
+      // Find __reactProps$ key
+      let propsKey = null;
+      try {
+        for (const key of Object.getOwnPropertyNames(node)) {
+          if (key.startsWith('__reactProps$')) { propsKey = key; break; }
         }
-      }
+      } catch (e) {}
 
-      if (isCustom || hasLit || hasReactiveValues || reactFiberKey) {
-        console.log(LOG_PREFIX, `🏗️ Depth ${depth}: <${tag}> custom=${isCustom} lit=${hasLit} reactive=${hasReactiveValues} react=${!!reactFiberKey}`);
-
-        // Enumerate ALL string properties (own + prototype chain)
-        const stringProps = enumerateStringProps(node);
-        if (stringProps.length > 0) {
-          console.log(LOG_PREFIX, `  String props (${stringProps.length}):`);
-          for (const p of stringProps) {
-            const gs = (p.getter ? 'G' : '') + (p.setter ? 'S' : '');
-            console.log(LOG_PREFIX, `    ${p.key} = "${p.val}" ${gs ? '[' + gs + ']' : ''}`);
+      if (propsKey) {
+        const props = node[propsKey];
+        const handlers = [];
+        try {
+          for (const k of Object.keys(props)) {
+            if (typeof props[k] === 'function') handlers.push(k);
           }
-        }
+        } catch (e) {}
 
-        // SET properties: empty reactive props + known prompt names
-        for (const p of stringProps) {
-          const lower = p.key.toLowerCase();
-          const isPromptLike = lower.includes('prompt') || lower.includes('query') ||
-                              lower.includes('userinput') || lower.includes('textinput') ||
-                              (lower === 'value' && isCustom) || lower === 'text';
-          const isEmptyReactive = (p.val === '' && (p.getter || p.setter));
+        console.log(LOG_PREFIX, `⚛️ __reactProps$ depth ${depth} <${node.tagName}>: [${handlers.join(', ')}]`);
 
-          if (isPromptLike || isEmptyReactive) {
-            console.log(LOG_PREFIX, `  ✏️ Setting <${tag}>.${p.key}`);
-            try {
-              node[p.key] = text;
-              found = true;
-            } catch (e) {
-              console.warn(LOG_PREFIX, `  ✏️ Failed: ${e.message}`);
+        // Log non-function props too (for debugging)
+        try {
+          for (const k of Object.keys(props)) {
+            if (typeof props[k] === 'string' && props[k].length < 100) {
+              console.log(LOG_PREFIX, `  prop.${k} = "${props[k].substring(0, 50)}"`);
             }
           }
-        }
+        } catch (e) {}
 
-        // Lit __reactiveValues (Map)
-        if (hasReactiveValues) {
-          console.log(LOG_PREFIX, `  📦 __reactiveValues:`);
-          for (const [k, v] of node.__reactiveValues) {
-            const vStr = String(v).substring(0, 40);
-            console.log(LOG_PREFIX, `    ${k} = ${JSON.stringify(v)?.substring(0, 50)}`);
-            if (typeof v === 'string' && (v === '' || v.length < 3)) {
-              console.log(LOG_PREFIX, `    → Setting ${k}`);
-              node.__reactiveValues.set(k, text);
-              found = true;
-            }
+        // Create a synthetic-ish event
+        const makeInputEvent = (type, inputType) => {
+          try {
+            return new InputEvent(type, {
+              bubbles: true,
+              cancelable: type === 'beforeinput',
+              composed: true,
+              inputType: inputType || 'insertText',
+              data: text
+            });
+          } catch (e) {
+            return new Event(type, { bubbles: true });
           }
+        };
+
+        // Call handlers directly
+        if (props.onBeforeInput) {
+          console.log(LOG_PREFIX, `  → Calling onBeforeInput`);
+          try { props.onBeforeInput(makeInputEvent('beforeinput', 'insertText')); } catch (e) {
+            console.log(LOG_PREFIX, `  → onBeforeInput error: ${e.message}`);
+          }
+          found = true;
+        }
+        if (props.onInput) {
+          console.log(LOG_PREFIX, `  → Calling onInput`);
+          try { props.onInput(makeInputEvent('input', 'insertText')); } catch (e) {
+            console.log(LOG_PREFIX, `  → onInput error: ${e.message}`);
+          }
+          found = true;
+        }
+        if (props.onChange) {
+          console.log(LOG_PREFIX, `  → Calling onChange`);
+          try { props.onChange(makeInputEvent('input', 'insertText')); } catch (e) {
+            console.log(LOG_PREFIX, `  → onChange error: ${e.message}`);
+          }
+          found = true;
+        }
+        if (props.onCompositionEnd) {
+          console.log(LOG_PREFIX, `  → Calling onCompositionEnd`);
+          try {
+            props.onCompositionEnd(new CompositionEvent('compositionend', {
+              data: text, bubbles: true
+            }));
+          } catch (e) {}
+          found = true;
+        }
+        if (props.onPaste) {
+          console.log(LOG_PREFIX, `  → Calling onPaste`);
+          try { props.onPaste({ clipboardData: { getData: () => text } }); } catch (e) {
+            console.log(LOG_PREFIX, `  → onPaste error: ${e.message}`);
+          }
+          found = true;
         }
 
-        // Trigger Lit re-render
-        if (hasLit) {
-          try { node.requestUpdate(); } catch (e) {}
-        }
-
-        // React fiber: try to find and set state
-        if (reactFiberKey) {
-          trySetReactState(node, reactFiberKey, text);
-        }
+        // For the element itself (depth 0), we care the most
+        if (depth === 0 && found) break;
       }
 
-      // Move to parent (exit shadow root if needed)
+      // Also check __reactEvents$ (React 18+)
+      try {
+        for (const key of Object.getOwnPropertyNames(node)) {
+          if (key.startsWith('__reactEvents$')) {
+            console.log(LOG_PREFIX, `⚛️ __reactEvents$ found on <${node.tagName}> depth ${depth}`);
+          }
+        }
+      } catch (e) {}
+
       node = node.parentElement;
-      if (!node) {
-        const root = el.getRootNode();
-        if (root && root !== document && root.host) {
-          node = root.host;
-          console.log(LOG_PREFIX, `  ↑ Exiting shadow root to <${node.tagName}>`);
-        }
-      }
     }
 
     if (!found) {
-      console.warn(LOG_PREFIX, '⚠️ No framework properties found in DOM ancestry');
+      console.log(LOG_PREFIX, '⚛️ No __reactProps$ handlers found');
     }
     return found;
   }
 
-  // ─── Enumerate string properties including prototype chain ───
-  function enumerateStringProps(node) {
-    const results = [];
-    const visited = new Set();
+  // ─── Strategy 3: Dispatch proper InputEvent sequence ───
+  async function dispatchInputEvents(el, text) {
+    console.log(LOG_PREFIX, '📤 Dispatching InputEvent sequence');
 
-    let proto = node;
-    for (let p = 0; p < 5 && proto && proto !== HTMLElement.prototype && proto !== Element.prototype && proto !== Object.prototype; p++) {
+    el.focus();
+    await sleep(30);
+
+    // beforeinput
+    try {
+      el.dispatchEvent(new InputEvent('beforeinput', {
+        inputType: 'insertText',
+        data: text,
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      }));
+    } catch (e) {}
+
+    // input with insertText
+    try {
+      el.dispatchEvent(new InputEvent('input', {
+        inputType: 'insertText',
+        data: text,
+        bubbles: true,
+        composed: true
+      }));
+    } catch (e) {}
+
+    // input with insertFromPaste (some frameworks check this)
+    try {
+      el.dispatchEvent(new InputEvent('input', {
+        inputType: 'insertFromPaste',
+        data: text,
+        bubbles: true,
+        composed: true
+      }));
+    } catch (e) {}
+
+    // compositionend (used by some frameworks including CJK handling)
+    try {
+      el.dispatchEvent(new CompositionEvent('compositionstart', {
+        data: '', bubbles: true
+      }));
+      el.dispatchEvent(new CompositionEvent('compositionend', {
+        data: text, bubbles: true
+      }));
+    } catch (e) {}
+
+    // Plain events as fallback
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Blur + refocus can trigger some frameworks' validation
+    el.blur();
+    await sleep(50);
+    el.focus();
+  }
+
+  // ─── Strategy 4: React state dispatch via queue.dispatch() ───
+  function tryReactStateDispatch(el, text) {
+    let node = el;
+    let dispatched = false;
+
+    for (let depth = 0; depth < 3 && node; depth++) {
+      // Find React fiber key
+      let fiberKey = null;
       try {
-        for (const key of Object.getOwnPropertyNames(proto)) {
-          if (visited.has(key)) continue;
-          if (key.startsWith('_') && key.startsWith('__')) continue; // skip double underscore internals
-          visited.add(key);
-
-          try {
-            const desc = Object.getOwnPropertyDescriptor(proto, key);
-            const val = node[key];
-            if (typeof val === 'string' && val.length < 500) {
-              results.push({
-                key,
-                val: val.substring(0, 60),
-                getter: !!desc?.get,
-                setter: !!desc?.set
-              });
-            }
-          } catch (e) {}
+        for (const key of Object.getOwnPropertyNames(node)) {
+          if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+            fiberKey = key;
+            break;
+          }
         }
       } catch (e) {}
-      proto = Object.getPrototypeOf(proto);
+
+      if (!fiberKey) { node = node.parentElement; continue; }
+
+      try {
+        const fiber = node[fiberKey];
+        let current = fiber;
+
+        // Walk up fiber tree (more levels than before)
+        for (let level = 0; level < 20 && current; level++) {
+          if (current.memoizedState) {
+            let hook = current.memoizedState;
+            let hookIdx = 0;
+
+            while (hook) {
+              // Check: has queue.dispatch AND is a string state
+              if (hook.queue?.dispatch) {
+                const stateType = typeof hook.memoizedState;
+                const stateVal = stateType === 'string' ? hook.memoizedState : null;
+
+                if (stateType === 'string') {
+                  console.log(LOG_PREFIX,
+                    `⚛️ Hook[${hookIdx}] fiber-level ${level}: ` +
+                    `"${(stateVal || '').substring(0, 30)}" (dispatch=✓)`
+                  );
+
+                  // Dispatch if empty or very short (likely the prompt state)
+                  if (stateVal === '' || stateVal.length < 3) {
+                    console.log(LOG_PREFIX, `  → dispatch("${text.substring(0, 30)}")`);
+                    try {
+                      hook.queue.dispatch(text);
+                      dispatched = true;
+                    } catch (e) {
+                      console.log(LOG_PREFIX, `  → dispatch error: ${e.message}`);
+                      // Fallback: direct assignment
+                      hook.memoizedState = text;
+                      hook.baseState = text;
+                    }
+                  }
+                }
+              }
+
+              hook = hook.next;
+              hookIdx++;
+            }
+          }
+          current = current.return;
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, `⚛️ Fiber walk error: ${e.message}`);
+      }
+
+      break; // Only process first element with fiber
     }
-    return results;
+
+    if (!dispatched) {
+      console.log(LOG_PREFIX, '⚛️ No React useState dispatch targets found');
+    }
   }
 
-  // ─── Try to set React component state ───
-  function trySetReactState(node, fiberKey, text) {
+  // ─── Strategy 5: Angular/Wiz change detection ───
+  function tryAngularChangeDetection(el) {
+    // Google's apps sometimes use Angular or Wiz framework
+    // Try to trigger change detection
+
+    // Angular: find ngZone on window
     try {
-      const fiber = node[fiberKey];
-      if (!fiber) return;
-      // Walk up fiber tree to find state
-      let current = fiber;
-      for (let i = 0; i < 10 && current; i++) {
-        if (current.memoizedState) {
-          console.log(LOG_PREFIX, `  ⚛️ React memoizedState found at level ${i}`);
-          // Try to find and update prompt in state
-          let state = current.memoizedState;
-          while (state) {
-            if (state.queue && typeof state.memoizedState === 'string' && state.memoizedState === '') {
-              console.log(LOG_PREFIX, `  ⚛️ Setting React state`);
-              state.memoizedState = text;
-              state.baseState = text;
-            }
-            state = state.next;
-          }
+      if (window.ng) {
+        const component = window.ng.getComponent(el) || window.ng.getComponent(el.parentElement);
+        if (component) {
+          console.log(LOG_PREFIX, '🔧 Angular component found');
         }
-        if (current.memoizedProps) {
-          const props = current.memoizedProps;
-          for (const key of Object.keys(props)) {
-            if (typeof props[key] === 'string' && props[key] === '' &&
-                key.toLowerCase().includes('prompt')) {
-              console.log(LOG_PREFIX, `  ⚛️ React prop: ${key} (empty) → setting`);
-              props[key] = text;
-            }
-          }
+      }
+    } catch (e) {}
+
+    // Wiz: look for jscontroller/jsaction attributes
+    let node = el;
+    for (let i = 0; i < 10 && node; i++) {
+      const jsc = node.getAttribute?.('jscontroller');
+      const jsa = node.getAttribute?.('jsaction');
+      if (jsc || jsa) {
+        console.log(LOG_PREFIX, `🔧 Wiz element found: jscontroller="${jsc}" jsaction="${(jsa || '').substring(0, 60)}"`);
+        // Try triggering Wiz action
+        if (jsa && jsa.includes('input')) {
+          console.log(LOG_PREFIX, '  → Dispatching for Wiz input action');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
         }
-        current = current.return;
+        break;
       }
-    } catch (e) {
-      console.warn(LOG_PREFIX, '  ⚛️ React state access failed:', e.message);
-    }
-  }
-
-  // ─── Override element getters so framework reads our prompt ───
-  function overrideElementGetters(el, text) {
-    if (promptOverrideActive) return;
-    promptOverrideActive = true;
-
-    try {
-      const origTC = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')?.get;
-      const origIT = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText')?.get;
-
-      if (origTC) {
-        Object.defineProperty(el, 'textContent', {
-          get() {
-            const actual = origTC.call(this);
-            if (pendingPrompt && (!actual || actual.trim() === '')) {
-              console.log(LOG_PREFIX, '🔄 textContent getter override returning prompt');
-              return pendingPrompt;
-            }
-            return actual;
-          },
-          configurable: true
-        });
-      }
-
-      if (origIT) {
-        Object.defineProperty(el, 'innerText', {
-          get() {
-            const actual = origIT.call(this);
-            if (pendingPrompt && (!actual || actual.trim() === '')) {
-              console.log(LOG_PREFIX, '🔄 innerText getter override returning prompt');
-              return pendingPrompt;
-            }
-            return actual;
-          },
-          configurable: true
-        });
-      }
-
-      // Also override .value for textarea-like elements
-      Object.defineProperty(el, 'value', {
-        get() {
-          return pendingPrompt || el.textContent || '';
-        },
-        set(v) {
-          el.textContent = v;
-        },
-        configurable: true
-      });
-
-      console.log(LOG_PREFIX, '✅ Getter overrides installed');
-    } catch (e) {
-      console.warn(LOG_PREFIX, 'Getter override failed:', e.message);
+      node = node.parentElement;
     }
   }
 
@@ -353,6 +403,8 @@
     const currentSeq = batchSeq++;
     let requestPrompt = '';
 
+    console.log(LOG_PREFIX, `🌐 Fetch intercepted: ${url.substring(0, 80)}`);
+
     // Extract prompt from request body
     try {
       const body = args[1]?.body;
@@ -361,6 +413,7 @@
         requestPrompt = parsed.requests?.[0]?.prompt ||
                        parsed.requests?.[0]?.textInput?.prompt ||
                        parsed.request?.prompt || '';
+        console.log(LOG_PREFIX, `🌐 Request prompt: "${(requestPrompt || '(empty)').substring(0, 40)}"`);
       }
     } catch (e) {}
 
@@ -371,10 +424,23 @@
         if (typeof body === 'string') {
           const parsed = JSON.parse(body);
 
-          console.log(LOG_PREFIX, `⚡ Request intercepted. Current prompt: "${(requestPrompt || '').substring(0, 40)}"`);
-          console.log(LOG_PREFIX, `⚡ Pending prompt: "${pendingPrompt.substring(0, 40)}"`);
+          console.log(LOG_PREFIX, `⚡ Injecting prompt: "${pendingPrompt.substring(0, 40)}"`);
 
-          // Inject prompt into all known locations
+          // Deep inject: walk the entire request object and fill empty prompt fields
+          const injectPrompt = (obj) => {
+            if (!obj || typeof obj !== 'object') return;
+            for (const key of Object.keys(obj)) {
+              if (key.toLowerCase().includes('prompt') && typeof obj[key] === 'string' &&
+                  (obj[key] === '' || obj[key].length < 3)) {
+                console.log(LOG_PREFIX, `  → ${key}: "${obj[key]}" → injected`);
+                obj[key] = pendingPrompt;
+              }
+              if (typeof obj[key] === 'object') injectPrompt(obj[key]);
+            }
+          };
+          injectPrompt(parsed);
+
+          // Also set known locations explicitly
           if (parsed.requests?.[0]) {
             parsed.requests[0].prompt = pendingPrompt;
             if (parsed.requests[0].textInput) {
@@ -393,7 +459,6 @@
         console.warn(LOG_PREFIX, 'Prompt injection failed:', e.message);
       }
       pendingPrompt = null;
-      promptOverrideActive = false;
     }
 
     try {
@@ -524,5 +589,5 @@
     }
   };
 
-  console.log(LOG_PREFIX, 'Fetch interceptor + prompt injector installed (v2)');
+  console.log(LOG_PREFIX, 'Fetch interceptor + prompt injector installed (v3)');
 })();
