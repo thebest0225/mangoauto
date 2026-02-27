@@ -902,27 +902,76 @@
       return;
     }
 
-    // Try 1: TipTap/ProseMirror editor
+    // Try 1: TipTap/ProseMirror editor (contenteditable)
     const editor = findEditor();
     if (editor) {
       console.log(LOG_PREFIX, 'Editor found:', editor.className);
       editor.focus();
       await delay(100);
+
+      // ── 방법 1: execCommand insertText (TipTap 입력 파이프라인 경유) ──
       document.execCommand('selectAll', false);
       document.execCommand('delete', false);
       await delay(100);
       document.execCommand('insertText', false, text);
       await delay(200);
       if (editor.textContent?.includes(text.substring(0, 20))) {
-        console.log(LOG_PREFIX, 'Prompt typed via editor');
+        console.log(LOG_PREFIX, 'Prompt typed via execCommand insertText');
         return;
       }
-      // DOM fallback for editor
+      console.log(LOG_PREFIX, 'execCommand insertText 실패, 클립보드 방식 시도');
+
+      // ── 방법 2: 클립보드 copy → paste (크롬 버전 호환성 높음) ──
+      try {
+        const tmp = document.createElement('textarea');
+        tmp.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+        tmp.value = text;
+        document.body.appendChild(tmp);
+        tmp.focus();
+        tmp.select();
+        document.execCommand('copy');
+        document.body.removeChild(tmp);
+
+        editor.focus();
+        await delay(100);
+        document.execCommand('selectAll', false);
+        await delay(50);
+        const pasted = document.execCommand('paste');
+        if (pasted && editor.textContent?.includes(text.substring(0, 20))) {
+          console.log(LOG_PREFIX, 'Prompt typed via clipboard paste');
+          return;
+        }
+        console.log(LOG_PREFIX, `clipboard paste=${pasted}, content="${(editor.textContent||'').substring(0,30)}"`);
+      } catch (e) {
+        console.log(LOG_PREFIX, 'clipboard paste 에러:', e.message);
+      }
+
+      // ── 방법 3: Selection API + insertText ──
+      try {
+        editor.focus();
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          sel.addRange(range);
+        }
+        document.execCommand('insertText', false, text);
+        await delay(200);
+        if (editor.textContent?.includes(text.substring(0, 20))) {
+          console.log(LOG_PREFIX, 'Prompt typed via Selection API + insertText');
+          return;
+        }
+      } catch (e) {
+        console.log(LOG_PREFIX, 'Selection API 에러:', e.message);
+      }
+
+      // ── 방법 4: DOM 직접 + InputEvent (최후 수단, TipTap 인식 불확실) ──
       const p = editor.querySelector('p');
       if (p) p.textContent = text;
       else editor.innerHTML = `<p>${text}</p>`;
-      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
-      console.log(LOG_PREFIX, 'Prompt typed via editor DOM fallback');
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      console.log(LOG_PREFIX, 'Prompt typed via DOM fallback (TipTap 인식 불확실)');
       return;
     }
 
