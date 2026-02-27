@@ -22,6 +22,55 @@
   let shouldStop = false;
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
+  // ─── Navigation Debug: URL 변경 감지 ───
+  let _lastUrl = window.location.href;
+  const _urlChecker = setInterval(() => {
+    const now = window.location.href;
+    if (now !== _lastUrl) {
+      console.warn(LOG_PREFIX, `🚨 URL CHANGED: ${_lastUrl} → ${now}`);
+      showToast(`🚨 URL변경: ${now.substring(0, 50)}`, 'error');
+      _lastUrl = now;
+    }
+  }, 500);
+
+  // ─── Navigation Debug: 클릭 이벤트 추적 ───
+  document.addEventListener('click', (e) => {
+    if (!isProcessing) return;
+    const el = e.target;
+    const tag = el.tagName;
+    const text = (el.textContent || '').trim().substring(0, 40);
+    const href = el.href || el.closest('a')?.href || '';
+    const classes = (el.className || '').substring?.(0, 50) || '';
+    const ariaLabel = el.getAttribute?.('aria-label') || '';
+    console.warn(LOG_PREFIX, `🖱️ CLICK during processing:`, {
+      tag, text, href, classes, ariaLabel,
+      isLink: !!el.closest('a'),
+      path: e.composedPath().slice(0, 3).map(n => `${n.tagName || 'text'}.${(n.className || '').substring?.(0, 20) || ''}`).join(' > ')
+    });
+    if (href && !href.includes('grok.com/imagine')) {
+      console.error(LOG_PREFIX, `🚨🚨🚨 NAVIGATION CLICK DETECTED: ${href}`);
+      showToast(`🚨 잘못된 클릭: ${href.substring(0, 50)}`, 'error');
+    }
+  }, true); // capture phase
+
+  // ─── Navigation Debug: history 조작 감지 ───
+  const _origPushState = history.pushState;
+  const _origReplaceState = history.replaceState;
+  history.pushState = function(...args) {
+    console.warn(LOG_PREFIX, `🚨 history.pushState:`, args[2]);
+    if (isProcessing) showToast(`🚨 pushState: ${args[2]}`, 'error');
+    return _origPushState.apply(this, args);
+  };
+  history.replaceState = function(...args) {
+    console.warn(LOG_PREFIX, `🚨 history.replaceState:`, args[2]);
+    if (isProcessing) showToast(`🚨 replaceState: ${args[2]}`, 'error');
+    return _origReplaceState.apply(this, args);
+  };
+  window.addEventListener('popstate', () => {
+    console.warn(LOG_PREFIX, `🚨 popstate event → ${window.location.href}`);
+    if (isProcessing) showToast(`🚨 popstate: ${window.location.href.substring(0, 50)}`, 'error');
+  });
+
   // ─── Visual Debug Toast (화면에 직접 보이는 디버그) ───
   function showToast(message, type = 'info') {
     console.log(LOG_PREFIX, `[${type}]`, message);
