@@ -1437,157 +1437,109 @@
   }
 
   // ─── 480p → 720p Upscale (... 메뉴 → 동영상 업스케일) ───
+  // 결과 페이지 구조: 비디오 오른쪽에 세로 아이콘 버튼들, 맨 아래가 "..." 버튼
+  // "..." 클릭 → 팝업 메뉴: 좋아요 / 싫어요 / 동영상 업스케일
   async function tryUpscaleVideo(timeout = 300000) {
     const upscaleKeywords = ['업스케일', 'upscale', 'enhance'];
 
-    // Step 1: ... (점 세 개) 메뉴 버튼 찾기
+    // Step 1: 비디오 요소 기준으로 "..." 버튼 찾기
+    // (전체 페이지에서 찾으면 사이드바의 "..." 버튼을 잘못 클릭함)
     let moreBtn = null;
+    const video = document.querySelector('video');
 
-    // 방법 1: aria-label로 찾기
-    const ariaLabels = ['더보기', 'More', 'More options', '옵션', 'More actions', '기타'];
-    for (const label of ariaLabels) {
-      const btn = document.querySelector(`button[aria-label="${label}"]`);
-      if (btn) {
-        console.log(LOG_PREFIX, `More button found by aria-label: "${label}"`);
-        moreBtn = btn;
+    if (!video) {
+      console.warn(LOG_PREFIX, '업스케일: 비디오 요소 없음');
+      showToast('업스케일 실패: 비디오 요소 없음', 'warn');
+      return false;
+    }
+
+    // 비디오 부모를 올라가며 아이콘 버튼 그룹이 있는 컨테이너 찾기
+    let container = video.parentElement;
+    for (let depth = 0; depth < 10 && container; depth++) {
+      const btns = Array.from(container.querySelectorAll('button'));
+      // 아이콘 버튼: 텍스트 짧고 textarea/input 없는 버튼
+      const iconBtns = btns.filter(b => {
+        const t = (b.textContent || '').trim();
+        return t.length <= 20 && !b.querySelector('textarea, input');
+      });
+
+      if (iconBtns.length >= 5) {
+        // 비디오 영역 버튼 그룹 발견 — 마지막 버튼이 "..."
+        moreBtn = iconBtns[iconBtns.length - 1];
+        const btnTexts = iconBtns.map(b => `"${(b.textContent || '').trim().substring(0, 15)}"`).join(', ');
+        console.log(LOG_PREFIX, `비디오 컨테이너 발견 (depth=${depth}, 버튼 ${iconBtns.length}개): [${btnTexts}]`);
+        console.log(LOG_PREFIX, `"..." 버튼 후보: "${(moreBtn.textContent || '').trim().substring(0, 20)}"`);
         break;
       }
+      container = container.parentElement;
     }
 
-    // 방법 2: Material Icon 텍스트 (more_vert, more_horiz 등)
+    // 못 찾으면 디버그
     if (!moreBtn) {
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        const text = (btn.textContent || '').trim();
-        if (/^more_(vert|horiz)/.test(text) || text === 'more_vert' || text === 'more_horiz') {
-          console.log(LOG_PREFIX, `More button found by material icon: "${text}"`);
-          moreBtn = btn;
-          break;
-        }
-      }
-    }
-
-    // 방법 3: "..." 텍스트 또는 SVG 3-dot 아이콘 버튼
-    if (!moreBtn) {
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        const text = (btn.textContent || '').trim();
-        if (text === '...' || text === '⋯' || text === '⋮') {
-          moreBtn = btn;
-          break;
-        }
-        // SVG 3-dot 패턴: circle 이 3개인 SVG
-        const svg = btn.querySelector('svg');
-        if (svg && svg.querySelectorAll('circle').length >= 3 && !btn.textContent?.trim()) {
-          moreBtn = btn;
-          break;
-        }
-      }
-    }
-
-    // 방법 4: 비디오 근처 버튼 그룹에서 마지막 아이콘 버튼
-    if (!moreBtn) {
-      const video = document.querySelector('video');
-      if (video) {
-        let container = video.parentElement;
-        for (let depth = 0; depth < 8 && container; depth++) {
-          const btns = Array.from(container.querySelectorAll('button'));
-          // 아이콘 버튼만 필터 (텍스트가 짧거나 SVG만 있는 버튼)
-          const iconBtns = btns.filter(b => {
-            const t = (b.textContent || '').trim();
-            return t.length <= 20 && !b.querySelector('textarea, input');
+      console.warn(LOG_PREFIX, '=== UPSCALE: 비디오 근처 "..." 버튼 못 찾음 ===');
+      // 비디오 주변 버튼들 로그
+      let dbgContainer = video.parentElement;
+      for (let d = 0; d < 10 && dbgContainer; d++) {
+        const btns = dbgContainer.querySelectorAll('button');
+        if (btns.length > 0) {
+          console.log(LOG_PREFIX, `  depth=${d}: 버튼 ${btns.length}개`);
+          btns.forEach((b, i) => {
+            const t = (b.textContent || '').trim().substring(0, 30);
+            console.log(LOG_PREFIX, `    [${i}] "${t}"`);
           });
-          if (iconBtns.length >= 4) {
-            // 마지막 버튼이 "..." 메뉴일 가능성 높음
-            moreBtn = iconBtns[iconBtns.length - 1];
-            const t = (moreBtn.textContent || '').trim().substring(0, 20);
-            console.log(LOG_PREFIX, `More button found as last icon btn in video container (depth=${depth}): "${t}"`);
-            break;
-          }
-          container = container.parentElement;
         }
+        dbgContainer = dbgContainer.parentElement;
       }
-    }
-
-    // 못 찾으면 디버그 로그 출력
-    if (!moreBtn) {
-      console.warn(LOG_PREFIX, '=== UPSCALE DEBUG: "..." 버튼 못 찾음 - 모든 버튼 ===');
-      document.querySelectorAll('button').forEach((btn, i) => {
-        const text = (btn.textContent || '').trim().substring(0, 40);
-        const aria = btn.getAttribute('aria-label') || '';
-        const title = btn.getAttribute('title') || '';
-        if (text.length <= 30) { // 아이콘 버튼만 로그
-          console.log(LOG_PREFIX, `  btn[${i}]: text="${text}" aria="${aria}" title="${title}"`);
-        }
-      });
       showToast('업스케일 실패: "..." 버튼 못 찾음', 'warn');
       return false;
     }
 
-    // Step 2: 메뉴 열기
-    console.log(LOG_PREFIX, 'Opening more menu...');
-    showToast('더보기 메뉴 열기...', 'info');
+    // Step 2: "..." 메뉴 열기
+    console.log(LOG_PREFIX, '"..." 메뉴 열기...');
+    showToast('"..." 메뉴 열기...', 'info');
     MangoDom.simulateClick(moreBtn);
     await delay(1000);
 
     // Step 3: "동영상 업스케일" 메뉴 항목 찾기
+    // 팝업 메뉴는 DOM 상 비디오 컨테이너 밖에 렌더링될 수 있으므로 전체 검색
     let upscaleItem = null;
 
-    // 메뉴 팝오버/드롭다운에서 검색 (role=menu, role=listbox, popover 등)
-    const menuSelectors = [
-      '[role="menu"] [role="menuitem"]',
-      '[role="listbox"] [role="option"]',
-      '[data-radix-popper-content-wrapper] button',
-      '[data-radix-popper-content-wrapper] div',
-      'div[class*="popover"] button',
-      'div[class*="popover"] div',
-      'div[class*="dropdown"] button',
-      'div[class*="dropdown"] div',
-      'div[class*="menu"] button',
-      'div[class*="menu"] div[role]',
-    ];
-
-    for (const sel of menuSelectors) {
-      const items = document.querySelectorAll(sel);
-      for (const el of items) {
-        const text = (el.textContent || '').trim().toLowerCase();
-        for (const kw of upscaleKeywords) {
-          if (text.includes(kw)) {
-            upscaleItem = el.closest('button') || el.closest('[role="menuitem"]') || el;
-            console.log(LOG_PREFIX, `Upscale item found via "${sel}": "${text.substring(0, 30)}"`);
-            break;
-          }
+    // 모든 클릭 가능한 요소에서 "업스케일" 텍스트 검색
+    const clickables = document.querySelectorAll(
+      'button, [role="menuitem"], [role="option"], a, div[tabindex], span[role="button"], div[role="button"]'
+    );
+    for (const el of clickables) {
+      const text = (el.textContent || '').trim().toLowerCase();
+      for (const kw of upscaleKeywords) {
+        if (text.includes(kw)) {
+          upscaleItem = el;
+          console.log(LOG_PREFIX, `업스케일 메뉴 항목 발견: "${text.substring(0, 30)}" (${el.tagName})`);
+          break;
         }
-        if (upscaleItem) break;
       }
       if (upscaleItem) break;
     }
 
-    // fallback: 전체 DOM에서 업스케일 텍스트 검색
     if (!upscaleItem) {
-      const allElements = document.querySelectorAll('button, [role="menuitem"], [role="option"], a, div[tabindex], span[tabindex]');
-      for (const el of allElements) {
-        const text = (el.textContent || '').trim().toLowerCase();
-        for (const kw of upscaleKeywords) {
-          if (text.includes(kw)) {
-            upscaleItem = el.closest('button') || el.closest('[role="menuitem"]') || el;
-            console.log(LOG_PREFIX, `Upscale item found (fallback): "${text.substring(0, 30)}"`);
-            break;
-          }
-        }
-        if (upscaleItem) break;
+      // 메뉴가 열렸지만 업스케일 항목이 없음 → 메뉴 내용 로그
+      console.warn(LOG_PREFIX, '=== 업스케일 메뉴 항목 못 찾음 ===');
+      // 새로 나타난 팝업/메뉴 요소 찾기
+      const popups = document.querySelectorAll(
+        '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper], div[class*="popover"], div[class*="dropdown"], div[class*="tooltip"]'
+      );
+      if (popups.length > 0) {
+        popups.forEach((popup, pi) => {
+          console.log(LOG_PREFIX, `  popup[${pi}]: ${popup.tagName}.${(popup.className || '').substring(0, 30)}`);
+          popup.querySelectorAll('*').forEach((el, ei) => {
+            const t = (el.textContent || '').trim();
+            if (t && t.length < 40 && el.children.length === 0) {
+              console.log(LOG_PREFIX, `    [${ei}] ${el.tagName}: "${t}"`);
+            }
+          });
+        });
+      } else {
+        console.log(LOG_PREFIX, '  팝업/메뉴 요소도 없음 — "..." 클릭이 안 먹힌듯');
       }
-    }
-
-    if (!upscaleItem) {
-      console.warn(LOG_PREFIX, '=== UPSCALE DEBUG: 메뉴 항목 못 찾음 ===');
-      // 현재 열린 메뉴의 모든 항목 로그
-      const visibleItems = document.querySelectorAll('[role="menuitem"], [role="option"], div[class*="menu"] > *, div[class*="popover"] > *');
-      visibleItems.forEach((el, i) => {
-        const text = (el.textContent || '').trim().substring(0, 50);
-        console.log(LOG_PREFIX, `  menu[${i}]: "${text}"`);
-      });
-      // 메뉴 닫기
       document.body.click();
       await delay(300);
       showToast('업스케일 실패: 메뉴 항목 못 찾음', 'warn');
