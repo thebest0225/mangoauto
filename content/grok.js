@@ -544,23 +544,74 @@
       duration: videoDuration, resolution: videoResolution, aspectRatio
     });
 
-    // Step 1: 설정 패널 트리거 버튼 찾기 (applySettingsOnMainPage와 동일)
-    const modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
-                     findButtonByTextInArea('이미지') ||
-                     findButtonByTextInArea('비디오') ||
-                     findButtonByTextInArea('Image') ||
-                     findButtonByTextInArea('Video');
+    // Step 1: 설정 패널 트리거 버튼 찾기
+    // 방법 1: 메인 페이지 (aria-label="모델 선택" / 텍스트 "비디오"/"이미지")
+    let modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
+                   findButtonByTextInArea('이미지') ||
+                   findButtonByTextInArea('비디오') ||
+                   findButtonByTextInArea('Image') ||
+                   findButtonByTextInArea('Video');
+
+    // 방법 2: 결과 페이지 (aria-label 기반, 하단 250px 이내)
+    if (!modelBtn) {
+      const ariaKeywords = ['설정', 'setting', '모드', 'mode', '모델'];
+      const allBtns = document.querySelectorAll('button[aria-label]');
+      for (const btn of allBtns) {
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (ariaKeywords.some(kw => aria.includes(kw))) {
+          const rect = btn.getBoundingClientRect();
+          if (rect.top > window.innerHeight - 250) {
+            modelBtn = btn;
+            console.log(LOG_PREFIX, `트리거 (aria): "${btn.getAttribute('aria-label')}" top=${Math.round(rect.top)}`);
+            break;
+          }
+        }
+      }
+    }
+
+    // 방법 3: 에디터 컨테이너 내 드롭다운 트리거 버튼
+    if (!modelBtn) {
+      const editor = findEditor();
+      if (editor) {
+        let container = editor;
+        for (let i = 0; i < 6; i++) container = container?.parentElement;
+        if (container) {
+          const submitBtn = findSubmitButton();
+          const candidates = Array.from(container.querySelectorAll('button'))
+            .filter(b => b !== submitBtn && !b.disabled && (b.textContent || '').trim().length <= 10);
+
+          // aria-expanded / aria-haspopup 버튼 우선
+          for (const btn of candidates) {
+            if (btn.getAttribute('aria-expanded') !== null || btn.getAttribute('aria-haspopup')) {
+              modelBtn = btn;
+              console.log(LOG_PREFIX, `트리거 (에디터 aria-expanded): "${(btn.textContent || '').trim()}"`);
+              break;
+            }
+          }
+          // SVG 아이콘 버튼 fallback
+          if (!modelBtn) {
+            for (const btn of candidates) {
+              if (btn.querySelector('svg')) {
+                modelBtn = btn;
+                console.log(LOG_PREFIX, `트리거 (에디터 SVG): "${(btn.textContent || '').trim()}"`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
 
     if (!modelBtn) {
-      console.error(LOG_PREFIX, '설정 패널 트리거 버튼 못 찾음');
+      console.error(LOG_PREFIX, '설정 패널 트리거 버튼 못 찾음 (모든 방법 실패)');
       showToast('모달 트리거 버튼 없음', 'error');
-      // 디버그: 하단 200px 이내 모든 버튼 출력
+      // 디버그: 하단 250px 이내 모든 버튼 출력
       const allBtns = document.querySelectorAll('button');
       console.log(LOG_PREFIX, '=== 하단바 버튼 디버그 ===');
       allBtns.forEach((b, i) => {
         const rect = b.getBoundingClientRect();
-        if (rect.top > window.innerHeight - 200) {
-          console.log(LOG_PREFIX, `  btn[${i}]: "${(b.textContent || '').trim().substring(0, 30)}" aria="${b.getAttribute('aria-label') || ''}" top=${Math.round(rect.top)}`);
+        if (rect.top > window.innerHeight - 250) {
+          console.log(LOG_PREFIX, `  btn[${i}]: "${(b.textContent || '').trim().substring(0, 30)}" aria="${b.getAttribute('aria-label') || ''}" expanded=${b.getAttribute('aria-expanded')} top=${Math.round(rect.top)}`);
         }
       });
       return false;
