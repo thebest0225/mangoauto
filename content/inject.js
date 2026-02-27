@@ -1,13 +1,11 @@
 /**
- * MangoAuto - Flow Fetch Interceptor + Prompt Injector (v3.1)
+ * MangoAuto - Flow Fetch Interceptor + Prompt Injector (v4)
  * Injected into MAIN world to intercept native window.fetch
  *
- * v3.1: Slate.js 호환
- * - 프레임워크 조작 완전 제거 (Slate.js DOM 상태 파괴 방지)
- * - SET_FLOW_PROMPT 수신 → 프롬프트 저장만 (DOM 건드리지 않음)
- * - fetch 인터셉션에서 빈 프롬프트를 pendingPrompt로 교체
- * - flow.js의 clipboard paste가 DOM에 텍스트 넣고,
- *   이 스크립트가 API 요청에 프롬프트를 주입하는 역할 분담
+ * v4: Slate.js 에디터 API 직접 접근
+ * - React fiber 트리에서 Slate editor 인스턴스를 찾아 직접 텍스트 설정
+ * - clipboard/포커스 불필요 → MangoHub 모드에서도 안정 동작
+ * - fetch 인터셉션은 안전망으로 유지
  */
 
 (() => {
@@ -23,13 +21,198 @@
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'SET_FLOW_PROMPT') {
       pendingPrompt = event.data.text;
-      console.log(LOG_PREFIX, '📝 Prompt stored for fetch injection:', pendingPrompt?.substring(0, 60));
-      // Slate.js 에디터이므로 DOM/프레임워크 조작하지 않음
-      // flow.js의 clipboard paste가 Slate-safe 방식으로 DOM에 텍스트를 넣고
-      // 이 스크립트가 fetch 인터셉션으로 API 요청에 프롬프트를 주입함
-      window.postMessage({ type: 'SET_FLOW_PROMPT_RESULT', ok: true }, '*');
+      console.log(LOG_PREFIX, '📝 Prompt received:', pendingPrompt?.substring(0, 60));
+
+      // Slate 에디터에 직접 텍스트 설정 시도
+      const slateOk = trySetSlateText(pendingPrompt);
+      console.log(LOG_PREFIX, slateOk ? '✅ Slate API 성공' : '⚠️ Slate API 실패, fetch 인터셉션으로 대체');
+
+      window.postMessage({ type: 'SET_FLOW_PROMPT_RESULT', ok: true, slateOk }, '*');
     }
   });
+
+  // ─── Find Slate editor element ───
+  function findSlateElement() {
+    // data-slate-node="value" 는 Slate의 Editable 컴포넌트
+    const el = document.querySelector('[data-slate-node="value"]');
+    if (el) return el;
+
+    // Fallback: contenteditable near generate button
+    for (const ce of document.querySelectorAll('[contenteditable="true"]')) {
+      if (ce.offsetHeight > 10 && ce.offsetWidth > 100) return ce;
+    }
+    return null;
+  }
+
+  // ─── Find Slate editor instance from React fiber tree ───
+  function findSlateEditor(el) {
+    if (!el) return null;
+
+    // Find React fiber key
+    let fiberKey = null;
+    try {
+      for (const key of Object.getOwnPropertyNames(el)) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+          fiberKey = key;
+          break;
+        }
+      }
+    } catch (e) {}
+
+    if (!fiberKey) {
+      console.log(LOG_PREFIX, '🔍 No React fiber on Slate element');
+      return null;
+    }
+
+    const fiber = el[fiberKey];
+    let current = fiber;
+
+    // Walk up fiber tree
+    for (let level = 0; level < 30 && current; level++) {
+      if (current.memoizedState) {
+        let hook = current.memoizedState;
+        let hookIdx = 0;
+
+        while (hook) {
+          const state = hook.memoizedState;
+
+          if (state && typeof state === 'object' && state !== null) {
+            // Check: is this a Slate editor? (has insertText, apply, children)
+            if (typeof state.insertText === 'function' &&
+                typeof state.apply === 'function' &&
+                Array.isArray(state.children)) {
+              console.log(LOG_PREFIX, `🎯 Slate editor found at fiber level ${level}, hook ${hookIdx}`);
+              return state;
+            }
+
+            // Check ref: { current: editor }
+            if (state.current &&
+                typeof state.current.insertText === 'function' &&
+                typeof state.current.apply === 'function' &&
+                Array.isArray(state.current.children)) {
+              console.log(LOG_PREFIX, `🎯 Slate editor ref found at fiber level ${level}, hook ${hookIdx}`);
+              return state.current;
+            }
+          }
+
+          hook = hook.next;
+          hookIdx++;
+        }
+      }
+
+      // Also check memoizedProps for editor
+      if (current.memoizedProps) {
+        const props = current.memoizedProps;
+        if (props.editor &&
+            typeof props.editor.insertText === 'function' &&
+            Array.isArray(props.editor.children)) {
+          console.log(LOG_PREFIX, `🎯 Slate editor in props at fiber level ${level}`);
+          return props.editor;
+        }
+      }
+
+      current = current.return;
+    }
+
+    console.log(LOG_PREFIX, '🔍 Slate editor not found in fiber tree');
+    return null;
+  }
+
+  // ─── Set text in Slate editor directly ───
+  function trySetSlateText(text) {
+    const el = findSlateElement();
+    if (!el) {
+      console.log(LOG_PREFIX, '🔍 Slate element not found');
+      return false;
+    }
+
+    const editor = findSlateEditor(el);
+    if (!editor) return false;
+
+    try {
+      console.log(LOG_PREFIX, `📊 Slate state: ${editor.children.length} children, selection=${!!editor.selection}`);
+
+      // Step 1: Remove all existing content via Slate operations
+      while (editor.children.length > 0) {
+        editor.apply({
+          type: 'remove_node',
+          path: [editor.children.length - 1],
+          node: editor.children[editor.children.length - 1]
+        });
+      }
+
+      // Step 2: Insert new paragraph with our text
+      editor.apply({
+        type: 'insert_node',
+        path: [0],
+        node: {
+          type: 'paragraph',
+          children: [{ text: text }]
+        }
+      });
+
+      // Step 3: Set selection at end of text
+      editor.apply({
+        type: 'set_selection',
+        properties: editor.selection,
+        newProperties: {
+          anchor: { path: [0, 0], offset: text.length },
+          focus: { path: [0, 0], offset: text.length }
+        }
+      });
+
+      // Step 4: Trigger Slate onChange
+      if (typeof editor.onChange === 'function') {
+        editor.onChange();
+      }
+
+      console.log(LOG_PREFIX, `✅ Slate text set: "${text.substring(0, 40)}..." (${editor.children.length} children)`);
+      return true;
+    } catch (e) {
+      console.warn(LOG_PREFIX, `Slate API method 1 failed: ${e.message}`);
+
+      // Fallback: try simpler approach
+      try {
+        // Direct children replacement
+        editor.children.length = 0;
+        editor.children.push({
+          type: 'paragraph',
+          children: [{ text: text }]
+        });
+        editor.selection = {
+          anchor: { path: [0, 0], offset: text.length },
+          focus: { path: [0, 0], offset: text.length }
+        };
+        if (typeof editor.onChange === 'function') {
+          editor.onChange();
+        }
+        console.log(LOG_PREFIX, '✅ Slate text set (fallback method)');
+        return true;
+      } catch (e2) {
+        console.warn(LOG_PREFIX, `Slate fallback also failed: ${e2.message}`);
+
+        // Last resort: try insertText with select-all
+        try {
+          if (editor.children.length > 0) {
+            const lastChild = editor.children[editor.children.length - 1];
+            const lastTextNode = lastChild.children?.[lastChild.children.length - 1];
+            const lastOffset = lastTextNode?.text?.length || 0;
+
+            editor.selection = {
+              anchor: { path: [0, 0], offset: 0 },
+              focus: { path: [editor.children.length - 1, lastChild.children.length - 1], offset: lastOffset }
+            };
+          }
+          editor.insertText(text);
+          console.log(LOG_PREFIX, '✅ Slate text set (insertText method)');
+          return true;
+        } catch (e3) {
+          console.warn(LOG_PREFIX, `All Slate methods failed: ${e3.message}`);
+          return false;
+        }
+      }
+    }
+  }
 
   // ─── Fetch Interceptor ───
   window.fetch = async function (...args) {
@@ -71,13 +254,12 @@
 
           console.log(LOG_PREFIX, `⚡ Injecting prompt: "${pendingPrompt.substring(0, 40)}"`);
 
-          // Deep inject: walk the entire request object and fill empty prompt fields
+          // Deep inject
           const injectPrompt = (obj) => {
             if (!obj || typeof obj !== 'object') return;
             for (const key of Object.keys(obj)) {
               if (key.toLowerCase().includes('prompt') && typeof obj[key] === 'string' &&
                   (obj[key] === '' || obj[key].length < 3)) {
-                console.log(LOG_PREFIX, `  → ${key}: "${obj[key]}" → injected`);
                 obj[key] = pendingPrompt;
               }
               if (typeof obj[key] === 'object') injectPrompt(obj[key]);
@@ -85,7 +267,6 @@
           };
           injectPrompt(parsed);
 
-          // Also set known locations explicitly
           if (parsed.requests?.[0]) {
             parsed.requests[0].prompt = pendingPrompt;
             if (parsed.requests[0].textInput) {
@@ -114,44 +295,28 @@
         const clone = response.clone();
         clone.json().then((data) => {
           if (!data.operations) return;
-
           for (const op of data.operations) {
             const opName = op.operation?.name;
             const pending = pendingVideoOps.get(opName);
             if (!pending) continue;
-
             if (op.status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') {
               const videoUrl = op.operation?.metadata?.video?.fifeUrl ||
                               op.operation?.metadata?.video?.videoUri;
-
               pendingVideoOps.delete(opName);
               console.log(LOG_PREFIX, 'Video ready:', videoUrl?.substring(0, 60));
-
               window.postMessage({
-                type: 'VEO3_API_RESULT',
-                seq: pending.seq,
-                prompt: pending.prompt,
-                status: 200,
-                ok: true,
-                hasMedia: !!videoUrl,
-                mediaUrls: videoUrl ? [videoUrl] : [],
-                isVideo: true
+                type: 'VEO3_API_RESULT', seq: pending.seq, prompt: pending.prompt,
+                status: 200, ok: true, hasMedia: !!videoUrl,
+                mediaUrls: videoUrl ? [videoUrl] : [], isVideo: true
               }, '*');
-
             } else if (op.status === 'MEDIA_GENERATION_STATUS_FAILED') {
               pendingVideoOps.delete(opName);
               const failReason = op.operation?.error?.message || op.failureReason || '';
               console.log(LOG_PREFIX, 'Video failed:', opName, failReason);
-
               window.postMessage({
-                type: 'VEO3_API_RESULT',
-                seq: pending.seq,
-                prompt: pending.prompt,
-                status: 400,
-                ok: false,
-                error: failReason || 'Video generation failed',
-                errorCode: op.operation?.error?.code || op.status,
-                isVideo: true
+                type: 'VEO3_API_RESULT', seq: pending.seq, prompt: pending.prompt,
+                status: 400, ok: false, error: failReason || 'Video generation failed',
+                errorCode: op.operation?.error?.code || op.status, isVideo: true
               }, '*');
             }
           }
@@ -166,23 +331,16 @@
           if (response.ok && data.operations) {
             for (const op of data.operations) {
               if (op.operation?.name) {
-                pendingVideoOps.set(op.operation.name, {
-                  seq: currentSeq,
-                  prompt: requestPrompt
-                });
+                pendingVideoOps.set(op.operation.name, { seq: currentSeq, prompt: requestPrompt });
                 console.log(LOG_PREFIX, 'Video started:', op.operation.name);
               }
             }
           } else if (!response.ok) {
             window.postMessage({
-              type: 'VEO3_API_RESULT',
-              seq: currentSeq,
-              prompt: requestPrompt,
-              status: response.status,
-              ok: false,
+              type: 'VEO3_API_RESULT', seq: currentSeq, prompt: requestPrompt,
+              status: response.status, ok: false,
               error: data.error?.message || 'Video start failed',
-              errorCode: data.error?.code,
-              isVideo: true
+              errorCode: data.error?.code, isVideo: true
             }, '*');
           }
         }).catch(() => {});
@@ -194,16 +352,10 @@
         const clone = response.clone();
         clone.json().then((data) => {
           const result = {
-            type: 'VEO3_API_RESULT',
-            seq: currentSeq,
-            prompt: requestPrompt,
-            status: response.status,
-            ok: response.ok,
-            hasMedia: false,
-            mediaUrls: [],
-            isVideo: false
+            type: 'VEO3_API_RESULT', seq: currentSeq, prompt: requestPrompt,
+            status: response.status, ok: response.ok,
+            hasMedia: false, mediaUrls: [], isVideo: false
           };
-
           if (response.ok && data.media) {
             result.mediaUrls = data.media
               .map(m => m.image?.generatedImage?.fifeUrl || m.fifeUrl || '')
@@ -220,7 +372,6 @@
             result.error = data.error?.message || 'Image generation failed';
             result.errorCode = data.error?.code;
           }
-
           console.log(LOG_PREFIX, 'Image result:', result.ok, result.mediaUrls.length, 'urls');
           window.postMessage(result, '*');
         }).catch(() => {});
@@ -234,5 +385,5 @@
     }
   };
 
-  console.log(LOG_PREFIX, 'Fetch interceptor installed (v3.1 Slate-safe)');
+  console.log(LOG_PREFIX, 'Fetch interceptor installed (v4 Slate API)');
 })();
