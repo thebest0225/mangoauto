@@ -1278,7 +1278,7 @@ function generateFilename(index, platform, mediaType) {
   const item = sm.queue[index];
   let displayIndex;
   if (sm.mode === 'mangohub' && item?.segmentIndex !== undefined) {
-    displayIndex = item.segmentIndex + 1;
+    displayIndex = item.segmentIndex;  // seg.index는 이미 1-based
   } else if (sm._useOriginalIndex && item?._originalIndex !== undefined) {
     displayIndex = item._originalIndex + 1;
   } else {
