@@ -921,27 +921,22 @@
   }
 
   async function typeIntoContentEditable(input, text) {
-    // contenteditable에 플레이스홀더 자식이 있을 수 있음 → 먼저 활성화
+    // Slate.js 에디터: 직접 DOM 조작(firstChild.remove()) 금지!
+    // Slate가 추적하는 노드를 직접 삭제하면 React 재렌더 시 removeChild 크래시 발생
+    // 반드시 execCommand 또는 clipboard API를 통해 Slate의 이벤트 핸들러 경유
+
     input.click();
     await delay(300);
     input.focus();
     await delay(200);
 
-    // 플레이스홀더 자식 요소 제거 (있으면)
-    const placeholders = input.querySelectorAll('[data-placeholder], [class*="placeholder"]');
-    for (const ph of placeholders) {
-      console.log(LOG_PREFIX, `[prompt] 플레이스홀더 제거: "${ph.textContent?.substring(0, 30)}"`);
-      ph.remove();
-    }
+    // ── Slate-safe: execCommand로 기존 내용 선택 ──
+    document.execCommand('selectAll', false, null);
+    await delay(50);
 
-    // 기존 내용 모두 삭제 (DOM 직접 조작 → 프레임워크가 빈 상태로 인식)
-    while (input.firstChild) input.firstChild.remove();
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await delay(100);
+    console.log(LOG_PREFIX, `[prompt] Slate 에디터 감지, execCommand 방식 사용`);
 
-    console.log(LOG_PREFIX, `[prompt] 클리어 후 textContent: "${input.textContent}"`);
-
-    // ── 방법 1: 클립보드 copy → paste ──
+    // ── 방법 1: 클립보드 copy → paste (Slate-safe) ──
     try {
       const tmp = document.createElement('textarea');
       tmp.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
@@ -954,9 +949,12 @@
 
       input.focus();
       await delay(100);
+      // selectAll again (focus change might have deselected)
+      document.execCommand('selectAll', false, null);
+      await delay(50);
       const pasted = document.execCommand('paste');
       if (pasted && (input.textContent || '').includes(text.substring(0, 15))) {
-        console.log(LOG_PREFIX, '[prompt] ✓ 방법1 성공 (clipboard paste)');
+        console.log(LOG_PREFIX, '[prompt] ✓ 방법1 성공 (Slate-safe clipboard paste)');
         return;
       }
       console.log(LOG_PREFIX, `[prompt] 방법1 paste=${pasted}, content="${(input.textContent||'').substring(0,30)}"`);
@@ -964,49 +962,35 @@
       console.log(LOG_PREFIX, `[prompt] 방법1 에러: ${e.message}`);
     }
 
-    // ── 방법 2: InputEvent insertFromPaste (가짜 붙여넣기) ──
+    // ── 방법 2: execCommand insertText (Slate-safe) ──
     try {
       input.focus();
-      while (input.firstChild) input.firstChild.remove();
-
-      const dt = new DataTransfer();
-      dt.setData('text/plain', text);
-      input.dispatchEvent(new InputEvent('beforeinput', {
-        bubbles: true, cancelable: true,
-        inputType: 'insertFromPaste', dataTransfer: dt
-      }));
-
-      // 텍스트 노드 삽입
-      input.appendChild(document.createTextNode(text));
-
-      input.dispatchEvent(new InputEvent('input', {
-        bubbles: true, inputType: 'insertFromPaste', dataTransfer: dt
-      }));
-
+      await delay(50);
+      document.execCommand('selectAll', false, null);
+      await delay(50);
+      document.execCommand('insertText', false, text);
       await delay(200);
-      console.log(LOG_PREFIX, `[prompt] 방법2 insertFromPaste 완료, content="${(input.textContent||'').substring(0,30)}"`);
-
-      // blur → focus (프레임워크 change 감지)
-      input.blur();
-      await delay(150);
-      input.focus();
-      return;
+      if ((input.textContent || '').includes(text.substring(0, 15))) {
+        console.log(LOG_PREFIX, '[prompt] ✓ 방법2 성공 (Slate-safe insertText)');
+        return;
+      }
+      console.log(LOG_PREFIX, `[prompt] 방법2 content="${(input.textContent||'').substring(0,30)}"`);
     } catch (e) {
       console.log(LOG_PREFIX, `[prompt] 방법2 에러: ${e.message}`);
     }
 
-    // ── 방법 3: execCommand insertText ──
+    // ── 방법 3: Selection API + insertText (최후 수단) ──
     try {
       input.focus();
-      while (input.firstChild) input.firstChild.remove();
-      await delay(50);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        const range = document.createRange();
+        range.selectNodeContents(input);
+        sel.addRange(range);
+      }
       document.execCommand('insertText', false, text);
-      await delay(200);
-      input.blur();
-      await delay(100);
-      input.focus();
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      console.log(LOG_PREFIX, '[prompt] 방법3 완료 (execCommand insertText)');
+      console.log(LOG_PREFIX, '[prompt] 방법3 완료 (Selection API + insertText)');
     } catch (e) {
       console.log(LOG_PREFIX, `[prompt] 방법3 에러: ${e.message}`);
     }
