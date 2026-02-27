@@ -623,41 +623,9 @@
     MangoDom.simulateClick(modelBtn);
     await delay(800);
 
-    // Step 3: "동영상 만들기" 모드 선택 (findDropdownItem 재사용)
-    const videoItem = findDropdownItem('동영상 만들기') ||
-                      findDropdownItem('비디오') ||
-                      findDropdownItem('Video');
-    if (videoItem) {
-      const itemText = (videoItem.textContent || '').trim().substring(0, 30);
-      showToast(`"${itemText}" 클릭`, 'info');
-      MangoDom.simulateClick(videoItem);
-      await delay(800);
-    } else {
-      console.warn(LOG_PREFIX, '동영상 만들기 옵션 못 찾음');
-      showToast('동영상 만들기 옵션 없음', 'error');
-      // 디버그: 현재 열린 패널 내용 출력
-      const panel = findFloatingContainer();
-      if (panel) {
-        const panelBtns = panel.querySelectorAll('button, [role="menuitem"], [role="option"]');
-        console.log(LOG_PREFIX, `=== 패널 내 항목 ${panelBtns.length}개 ===`);
-        panelBtns.forEach((b, i) => {
-          console.log(LOG_PREFIX, `  [${i}]: "${(b.textContent || '').trim().substring(0, 40)}"`);
-        });
-      }
-      await closeSettingsPanel(modelBtn);
-      return false;
-    }
-
-    // Step 4: 패널이 닫혔으면 다시 열기 (설정 적용을 위해)
+    // Step 3: 설정 먼저 적용 (패널이 열린 상태에서)
+    // "동영상 만들기"를 누르면 패널이 닫히므로, 설정을 먼저 적용해야 함
     let dropdownBtns = findDropdownButtons();
-    if (dropdownBtns.length === 0) {
-      showToast('패널 닫힘 → 다시 열기', 'info');
-      MangoDom.simulateClick(modelBtn);
-      await delay(800);
-      dropdownBtns = findDropdownButtons();
-    }
-
-    // Step 5: 비디오 설정 적용 (duration, resolution, aspectRatio)
     if (dropdownBtns.length > 0) {
       const btnTexts = dropdownBtns.map(b => (b.textContent || '').trim()).filter(t => t.length < 20);
       showToast(`패널 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
@@ -681,8 +649,29 @@
       }
     }
 
-    // Step 6: 패널 닫기
-    await closeSettingsPanel(modelBtn);
+    // Step 4: "동영상 만들기" 모드 선택 (마지막에 — 클릭하면 패널이 자동으로 닫힘)
+    const videoItem = findDropdownItem('동영상 만들기') ||
+                      findDropdownItem('비디오') ||
+                      findDropdownItem('Video');
+    if (videoItem) {
+      const itemText = (videoItem.textContent || '').trim().substring(0, 30);
+      showToast(`"${itemText}" 클릭`, 'info');
+      MangoDom.simulateClick(videoItem);
+      await delay(1000); // 모드 전환 대기
+    } else {
+      console.warn(LOG_PREFIX, '동영상 만들기 옵션 못 찾음');
+      showToast('동영상 만들기 옵션 없음', 'error');
+      const panel = findFloatingContainer();
+      if (panel) {
+        const panelBtns = panel.querySelectorAll('button, [role="menuitem"], [role="option"]');
+        console.log(LOG_PREFIX, `=== 패널 내 항목 ${panelBtns.length}개 ===`);
+        panelBtns.forEach((b, i) => {
+          console.log(LOG_PREFIX, `  [${i}]: "${(b.textContent || '').trim().substring(0, 40)}"`);
+        });
+      }
+      await closeSettingsPanel(modelBtn);
+      return false;
+    }
 
     // 전환 확인: 텍스트필드 placeholder 변경 체크
     const editor = findEditor();
@@ -1372,11 +1361,19 @@
     for (const sel of selectors) {
       const els = document.querySelectorAll(sel);
       for (const el of els) {
+        // 사이드바 제외 (사이드바를 패널로 착각하는 문제 방지)
+        if (el.closest('[data-variant="sidebar"]') ||
+            el.closest('[data-side]') ||
+            (el.className || '').toLowerCase().includes('sidebar')) {
+          continue;
+        }
+
         // 보이는 요소만
         if (el.offsetParent !== null || el.style.display !== 'none') {
           const rect = el.getBoundingClientRect();
-          if (rect.width > 50 && rect.height > 50) {
-            console.log(LOG_PREFIX, `Floating container found: ${sel}`);
+          // 팝업/드롭다운은 보통 뷰포트 절반보다 작음 (사이드바 = 넓음)
+          if (rect.width > 50 && rect.height > 50 && rect.width < window.innerWidth * 0.6) {
+            console.log(LOG_PREFIX, `Floating container found: ${sel} (${Math.round(rect.width)}x${Math.round(rect.height)})`);
             return el;
           }
         }
@@ -1528,7 +1525,7 @@
   // 결과 페이지 구조: 비디오 오른쪽에 세로 아이콘 버튼들, 맨 아래가 "..." 버튼
   // "..." 클릭 → 팝업 메뉴: 좋아요 / 싫어요 / 동영상 업스케일
   async function tryUpscaleVideo(timeout = 300000) {
-    const upscaleKeywords = ['업스케일', 'upscale', 'enhance'];
+    const upscaleKeywords = ['업스케일', 'upscale'];
 
     // Step 1: 비디오 요소 기준으로 "..." 버튼 찾기
     // (전체 페이지에서 찾으면 사이드바의 "..." 버튼을 잘못 클릭함)
@@ -1589,23 +1586,54 @@
     await delay(1000);
 
     // Step 3: "동영상 업스케일" 메뉴 항목 찾기
-    // 팝업 메뉴는 DOM 상 비디오 컨테이너 밖에 렌더링될 수 있으므로 전체 검색
+    // "..." 클릭 후 열린 팝업 메뉴 내에서만 검색 (사이드바 링크 클릭 방지)
     let upscaleItem = null;
 
-    // 모든 클릭 가능한 요소에서 "업스케일" 텍스트 검색
-    const clickables = document.querySelectorAll(
-      'button, [role="menuitem"], [role="option"], a, div[tabindex], span[role="button"], div[role="button"]'
-    );
-    for (const el of clickables) {
-      const text = (el.textContent || '').trim().toLowerCase();
-      for (const kw of upscaleKeywords) {
-        if (text.includes(kw)) {
-          upscaleItem = el;
-          console.log(LOG_PREFIX, `업스케일 메뉴 항목 발견: "${text.substring(0, 30)}" (${el.tagName})`);
-          break;
-        }
-      }
+    // 방법 1: 팝업/메뉴 컨테이너 내에서 검색
+    const menuSelectors = [
+      '[role="menu"]',
+      '[role="listbox"]',
+      '[data-radix-popper-content-wrapper]',
+      '[class*="popover" i]:not([class*="sidebar" i])',
+      '[class*="dropdown" i]:not([class*="sidebar" i])'
+    ];
+    for (const sel of menuSelectors) {
       if (upscaleItem) break;
+      const menus = document.querySelectorAll(sel);
+      for (const menu of menus) {
+        // 사이드바 내부 제외
+        if (menu.closest('[data-variant="sidebar"]') || menu.closest('[data-side]')) continue;
+        const items = menu.querySelectorAll('button, [role="menuitem"], [role="option"], div[role="button"], span');
+        for (const el of items) {
+          const text = (el.textContent || '').trim().toLowerCase();
+          if (text.length > 30) continue; // 긴 텍스트 제외
+          for (const kw of upscaleKeywords) {
+            if (text.includes(kw)) {
+              upscaleItem = el;
+              console.log(LOG_PREFIX, `업스케일 항목 발견 (메뉴 내): "${text.substring(0, 30)}" (${el.tagName})`);
+              break;
+            }
+          }
+          if (upscaleItem) break;
+        }
+        if (upscaleItem) break;
+      }
+    }
+
+    // 방법 2: 전체에서 [role="menuitem"]만 (안전)
+    if (!upscaleItem) {
+      const menuItems = document.querySelectorAll('[role="menuitem"]');
+      for (const el of menuItems) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        for (const kw of upscaleKeywords) {
+          if (text.includes(kw)) {
+            upscaleItem = el;
+            console.log(LOG_PREFIX, `업스케일 항목 발견 (menuitem): "${text.substring(0, 30)}"`);
+            break;
+          }
+        }
+        if (upscaleItem) break;
+      }
     }
 
     if (!upscaleItem) {
