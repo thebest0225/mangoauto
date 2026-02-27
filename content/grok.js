@@ -22,54 +22,16 @@
   let shouldStop = false;
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
-  // ─── Navigation Debug: URL 변경 감지 ───
-  let _lastUrl = window.location.href;
-  const _urlChecker = setInterval(() => {
-    const now = window.location.href;
-    if (now !== _lastUrl) {
-      console.warn(LOG_PREFIX, `🚨 URL CHANGED: ${_lastUrl} → ${now}`);
-      showToast(`🚨 URL변경: ${now.substring(0, 50)}`, 'error');
-      _lastUrl = now;
-    }
-  }, 500);
-
-  // ─── Navigation Debug: 클릭 이벤트 추적 ───
+  // ─── Navigation Debug: 작업 중 잘못된 네비게이션 감지 ───
   document.addEventListener('click', (e) => {
     if (!isProcessing) return;
     const el = e.target;
-    const tag = el.tagName;
-    const text = (el.textContent || '').trim().substring(0, 40);
     const href = el.href || el.closest('a')?.href || '';
-    const classes = (el.className || '').substring?.(0, 50) || '';
-    const ariaLabel = el.getAttribute?.('aria-label') || '';
-    console.warn(LOG_PREFIX, `🖱️ CLICK during processing:`, {
-      tag, text, href, classes, ariaLabel,
-      isLink: !!el.closest('a'),
-      path: e.composedPath().slice(0, 3).map(n => `${n.tagName || 'text'}.${(n.className || '').substring?.(0, 20) || ''}`).join(' > ')
-    });
     if (href && !href.includes('grok.com/imagine')) {
-      console.error(LOG_PREFIX, `🚨🚨🚨 NAVIGATION CLICK DETECTED: ${href}`);
-      showToast(`🚨 잘못된 클릭: ${href.substring(0, 50)}`, 'error');
+      const text = (el.textContent || '').trim().substring(0, 30);
+      console.error(LOG_PREFIX, `🚨 잘못된 네비게이션 클릭: href=${href}, text="${text}"`);
     }
-  }, true); // capture phase
-
-  // ─── Navigation Debug: history 조작 감지 ───
-  const _origPushState = history.pushState;
-  const _origReplaceState = history.replaceState;
-  history.pushState = function(...args) {
-    console.warn(LOG_PREFIX, `🚨 history.pushState:`, args[2]);
-    if (isProcessing) showToast(`🚨 pushState: ${args[2]}`, 'error');
-    return _origPushState.apply(this, args);
-  };
-  history.replaceState = function(...args) {
-    console.warn(LOG_PREFIX, `🚨 history.replaceState:`, args[2]);
-    if (isProcessing) showToast(`🚨 replaceState: ${args[2]}`, 'error');
-    return _origReplaceState.apply(this, args);
-  };
-  window.addEventListener('popstate', () => {
-    console.warn(LOG_PREFIX, `🚨 popstate event → ${window.location.href}`);
-    if (isProcessing) showToast(`🚨 popstate: ${window.location.href.substring(0, 50)}`, 'error');
-  });
+  }, true);
 
   // ─── Visual Debug Toast (화면에 직접 보이는 디버그) ───
   function showToast(message, type = 'info') {
@@ -301,13 +263,24 @@
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
         // 480p면 자동 업스케일 시도
-        if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
+        const isHd = videoUrl.includes('_hd');
+        const autoUpscale = settings?.grok?.autoUpscale !== false;
+        console.log(LOG_PREFIX, `업스케일 체크: URL=${videoUrl.substring(0, 60)}, isHd=${isHd}, autoUpscale=${autoUpscale}`);
+        if (autoUpscale && videoUrl && !isHd) {
           showToast('480p 감지 - 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(timeoutMs);
           if (upscaled) {
             const hdUrl = await extractVideoUrl();
-            if (hdUrl) videoUrl = hdUrl;
+            if (hdUrl) {
+              console.log(LOG_PREFIX, `업스케일 성공: ${hdUrl.substring(0, 60)}`);
+              videoUrl = hdUrl;
+            }
+          } else {
+            console.warn(LOG_PREFIX, '업스케일 실패 - 480p로 진행');
+            showToast('업스케일 실패 - 480p로 다운로드', 'warn');
           }
+        } else if (isHd) {
+          showToast('이미 HD 영상 - 업스케일 불필요', 'success');
         }
         checkStopped();
 
@@ -1412,25 +1385,40 @@
 
   // ─── 480p → 720p Upscale (... 메뉴 → 동영상 업스케일) ───
   async function tryUpscaleVideo(timeout = 300000) {
-    const upscaleKeywords = ['업스케일', 'upscale'];
+    const upscaleKeywords = ['업스케일', 'upscale', 'enhance'];
 
     // Step 1: ... (점 세 개) 메뉴 버튼 찾기
-    // 이미지 위 오버레이 영역에서 마지막 아이콘 버튼 (보통 ...)
     let moreBtn = null;
 
-    // aria-label로 찾기
-    const ariaLabels = ['더보기', 'More', 'More options', '옵션'];
+    // 방법 1: aria-label로 찾기
+    const ariaLabels = ['더보기', 'More', 'More options', '옵션', 'More actions', '기타'];
     for (const label of ariaLabels) {
       const btn = document.querySelector(`button[aria-label="${label}"]`);
-      if (btn) { moreBtn = btn; break; }
+      if (btn) {
+        console.log(LOG_PREFIX, `More button found by aria-label: "${label}"`);
+        moreBtn = btn;
+        break;
+      }
     }
 
-    // 못 찾으면 "..." 텍스트 또는 SVG 3-dot 아이콘 버튼 찾기
+    // 방법 2: Material Icon 텍스트 (more_vert, more_horiz 등)
     if (!moreBtn) {
       const buttons = document.querySelectorAll('button');
       for (const btn of buttons) {
         const text = (btn.textContent || '').trim();
-        // "..." 또는 "⋯" 또는 SVG만 있는 작은 버튼
+        if (/^more_(vert|horiz)/.test(text) || text === 'more_vert' || text === 'more_horiz') {
+          console.log(LOG_PREFIX, `More button found by material icon: "${text}"`);
+          moreBtn = btn;
+          break;
+        }
+      }
+    }
+
+    // 방법 3: "..." 텍스트 또는 SVG 3-dot 아이콘 버튼
+    if (!moreBtn) {
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim();
         if (text === '...' || text === '⋯' || text === '⋮') {
           moreBtn = btn;
           break;
@@ -1444,36 +1432,112 @@
       }
     }
 
+    // 방법 4: 비디오 근처 버튼 그룹에서 마지막 아이콘 버튼
     if (!moreBtn) {
-      console.log(LOG_PREFIX, 'More (...) button not found');
+      const video = document.querySelector('video');
+      if (video) {
+        let container = video.parentElement;
+        for (let depth = 0; depth < 8 && container; depth++) {
+          const btns = Array.from(container.querySelectorAll('button'));
+          // 아이콘 버튼만 필터 (텍스트가 짧거나 SVG만 있는 버튼)
+          const iconBtns = btns.filter(b => {
+            const t = (b.textContent || '').trim();
+            return t.length <= 20 && !b.querySelector('textarea, input');
+          });
+          if (iconBtns.length >= 4) {
+            // 마지막 버튼이 "..." 메뉴일 가능성 높음
+            moreBtn = iconBtns[iconBtns.length - 1];
+            const t = (moreBtn.textContent || '').trim().substring(0, 20);
+            console.log(LOG_PREFIX, `More button found as last icon btn in video container (depth=${depth}): "${t}"`);
+            break;
+          }
+          container = container.parentElement;
+        }
+      }
+    }
+
+    // 못 찾으면 디버그 로그 출력
+    if (!moreBtn) {
+      console.warn(LOG_PREFIX, '=== UPSCALE DEBUG: "..." 버튼 못 찾음 - 모든 버튼 ===');
+      document.querySelectorAll('button').forEach((btn, i) => {
+        const text = (btn.textContent || '').trim().substring(0, 40);
+        const aria = btn.getAttribute('aria-label') || '';
+        const title = btn.getAttribute('title') || '';
+        if (text.length <= 30) { // 아이콘 버튼만 로그
+          console.log(LOG_PREFIX, `  btn[${i}]: text="${text}" aria="${aria}" title="${title}"`);
+        }
+      });
+      showToast('업스케일 실패: "..." 버튼 못 찾음', 'warn');
       return false;
     }
 
     // Step 2: 메뉴 열기
     console.log(LOG_PREFIX, 'Opening more menu...');
+    showToast('더보기 메뉴 열기...', 'info');
     MangoDom.simulateClick(moreBtn);
-    await delay(800);
+    await delay(1000);
 
     // Step 3: "동영상 업스케일" 메뉴 항목 찾기
     let upscaleItem = null;
-    const menuItems = document.querySelectorAll('[role="menuitem"], [role="option"], button, div[class*="menu"] span, div[class*="menu"] div');
-    for (const el of menuItems) {
-      const text = (el.textContent || '').trim().toLowerCase();
-      for (const kw of upscaleKeywords) {
-        if (text.includes(kw)) {
-          // 가장 클릭 가능한 요소 찾기 (자신이 버튼이거나 부모가 버튼)
-          upscaleItem = el.closest('button') || el.closest('[role="menuitem"]') || el;
-          break;
+
+    // 메뉴 팝오버/드롭다운에서 검색 (role=menu, role=listbox, popover 등)
+    const menuSelectors = [
+      '[role="menu"] [role="menuitem"]',
+      '[role="listbox"] [role="option"]',
+      '[data-radix-popper-content-wrapper] button',
+      '[data-radix-popper-content-wrapper] div',
+      'div[class*="popover"] button',
+      'div[class*="popover"] div',
+      'div[class*="dropdown"] button',
+      'div[class*="dropdown"] div',
+      'div[class*="menu"] button',
+      'div[class*="menu"] div[role]',
+    ];
+
+    for (const sel of menuSelectors) {
+      const items = document.querySelectorAll(sel);
+      for (const el of items) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        for (const kw of upscaleKeywords) {
+          if (text.includes(kw)) {
+            upscaleItem = el.closest('button') || el.closest('[role="menuitem"]') || el;
+            console.log(LOG_PREFIX, `Upscale item found via "${sel}": "${text.substring(0, 30)}"`);
+            break;
+          }
         }
+        if (upscaleItem) break;
       }
       if (upscaleItem) break;
     }
 
+    // fallback: 전체 DOM에서 업스케일 텍스트 검색
     if (!upscaleItem) {
-      console.log(LOG_PREFIX, 'Upscale menu item not found, closing menu');
+      const allElements = document.querySelectorAll('button, [role="menuitem"], [role="option"], a, div[tabindex], span[tabindex]');
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        for (const kw of upscaleKeywords) {
+          if (text.includes(kw)) {
+            upscaleItem = el.closest('button') || el.closest('[role="menuitem"]') || el;
+            console.log(LOG_PREFIX, `Upscale item found (fallback): "${text.substring(0, 30)}"`);
+            break;
+          }
+        }
+        if (upscaleItem) break;
+      }
+    }
+
+    if (!upscaleItem) {
+      console.warn(LOG_PREFIX, '=== UPSCALE DEBUG: 메뉴 항목 못 찾음 ===');
+      // 현재 열린 메뉴의 모든 항목 로그
+      const visibleItems = document.querySelectorAll('[role="menuitem"], [role="option"], div[class*="menu"] > *, div[class*="popover"] > *');
+      visibleItems.forEach((el, i) => {
+        const text = (el.textContent || '').trim().substring(0, 50);
+        console.log(LOG_PREFIX, `  menu[${i}]: "${text}"`);
+      });
       // 메뉴 닫기
       document.body.click();
       await delay(300);
+      showToast('업스케일 실패: 메뉴 항목 못 찾음', 'warn');
       return false;
     }
 
@@ -1490,7 +1554,6 @@
     document.querySelectorAll('video[src]').forEach(v => {
       if (v.src && v.src.startsWith('http')) beforeUrls.add(v.src);
     });
-    // currentSrc도 기록
     document.querySelectorAll('video').forEach(v => {
       if (v.currentSrc && v.currentSrc.startsWith('http')) beforeUrls.add(v.currentSrc);
     });
