@@ -569,8 +569,9 @@
   async function setModelNew(model) {
     const defs = {
       'imagen4':          { match: ['Imagen 4'], exclude: [] },
-      'nano-banana-pro':  { match: ['Nano Banana Pro'], exclude: [] },
-      'nano-banana':      { match: ['Nano Banana'], exclude: ['Pro'] },
+      'nano-banana-pro':  { match: ['Nano Banana Pro'], exclude: ['2'] },
+      'nano-banana-2':    { match: ['Nano Banana 2'], exclude: [] },
+      'nano-banana':      { match: ['Nano Banana'], exclude: ['Pro', '2'] },
       'veo-3':            { match: ['Veo 3'], exclude: ['3.1'] },
       'veo-3.1-fast':     { match: ['Veo 3.1', 'Fast'], exclude: [] },
       'veo-3.1-quality':  { match: ['Veo 3.1', 'Quality'], exclude: [] }
@@ -681,7 +682,7 @@
 
     // 새 요소 중 모델명 매칭되는 것 수집 → 자식 수 적은 순 (리프 우선)
     // 여러 모델명을 가진 컨테이너 DIV는 제외
-    const allModelKw = ['Nano Banana Pro', 'Nano Banana', 'Imagen', 'Veo 3.1', 'Veo 3'];
+    const allModelKw = ['Nano Banana Pro', 'Nano Banana 2', 'Nano Banana', 'Imagen', 'Veo 3.1', 'Veo 3'];
     const countModelNames = (t) => {
       const lower = t.toLowerCase();
       return allModelKw.filter(kw => lower.includes(kw.toLowerCase())).length;
@@ -1593,8 +1594,9 @@
     // 모델명 매칭 정의 (참고자료 방식)
     const modelDefs = {
       'imagen4':          { match: ['Imagen 4', 'imagen4', 'Imagen4'] },
-      'nano-banana-pro':  { match: ['Nano Banana Pro', 'nano-banana-pro'] },
-      'nano-banana':      { match: ['Nano Banana', 'nano-banana'], exclude: ['Pro'] }
+      'nano-banana-pro':  { match: ['Nano Banana Pro', 'nano-banana-pro'], exclude: ['2'] },
+      'nano-banana-2':    { match: ['Nano Banana 2', 'nano-banana-2'] },
+      'nano-banana':      { match: ['Nano Banana', 'nano-banana'], exclude: ['Pro', '2'] }
     };
     const def = modelDefs[model] || { match: [model] };
 
