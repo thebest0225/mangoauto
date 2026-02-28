@@ -22,6 +22,44 @@
   let shouldStop = false;
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
+  // ─── MAIN world: upload-file 400 인터셉터 ───
+  // Grok Imagine에서 chatUploadFile이 /rest/app-chat/upload-file로 요청하면 400 반환
+  // → 페이지 롤백 방지를 위해 fetch 인터셉트하여 mock success 반환
+  function injectUploadInterceptor() {
+    if (document.querySelector('script[data-mangoauto-grok-intercept]')) return;
+    try {
+      const script = document.createElement('script');
+      script.dataset.mangoautoGrokIntercept = 'true';
+      script.textContent = `(function(){
+        const _origFetch = window.fetch;
+        window.fetch = async function(url, opts) {
+          const u = (typeof url === 'string' ? url : url?.url) || '';
+          if (u.includes('/rest/app-chat/upload-file')) {
+            console.log('[MangoAuto:Inject] upload-file 요청 인터셉트');
+            try {
+              const resp = await _origFetch.apply(this, arguments);
+              if (resp.ok) { console.log('[MangoAuto:Inject] upload-file 성공 (원본)'); return resp; }
+              console.log('[MangoAuto:Inject] upload-file 실패:', resp.status, '→ mock success 반환');
+            } catch(e) {
+              console.log('[MangoAuto:Inject] upload-file 에러:', e.message, '→ mock success 반환');
+            }
+            return new Response(JSON.stringify({
+              fileMetadata:{id:crypto.randomUUID(),mimeType:'image/png',fileName:'image.png',size:0}
+            }), {status:200, headers:{'Content-Type':'application/json'}});
+          }
+          return _origFetch.apply(this, arguments);
+        };
+        console.log('[MangoAuto:Inject] Grok upload interceptor 설치 완료');
+      })();`;
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+      console.log(LOG_PREFIX, 'Upload interceptor 주입 완료');
+    } catch(e) {
+      console.warn(LOG_PREFIX, 'Upload interceptor 주입 실패:', e.message);
+    }
+  }
+  injectUploadInterceptor();
+
   // ─── Navigation Debug: 근본 원인 추적 ───
   // URL 변경 감지 (500ms 폴링)
   let _lastUrl = window.location.href;
@@ -1066,9 +1104,9 @@
       console.log(LOG_PREFIX, `파일 생성: ${file.name}, 크기: ${file.size}`);
 
       // ── Strategy 1: Clipboard Paste on TipTap editor ──
-      // Grok Imagine 페이지는 TipTap 에디터의 paste 핸들러를 통해 이미지 업로드 처리
-      // file input onChange → chatUploadFile API는 400을 반환하므로 paste 방식 우선 사용
-      console.log(LOG_PREFIX, 'Strategy 1: Clipboard Paste (에디터 붙여넣기)');
+      // MAIN world의 upload interceptor가 chatUploadFile 400을 mock success로 처리
+      // → synthetic paste로 이미지 첨부하면 페이지 롤백 없이 /imagine/post/{uuid}로 이동
+      console.log(LOG_PREFIX, 'Strategy 1: Clipboard Paste (에디터 붙여넣기 + upload interceptor)');
       try {
         const editor = findEditor();
         if (editor) {
@@ -1083,8 +1121,8 @@
             clipboardData: dt
           });
           editor.dispatchEvent(pasteEvent);
-          console.log(LOG_PREFIX, 'Paste 이벤트 디스패치 완료');
-          await delay(4000);
+          console.log(LOG_PREFIX, 'Paste 이벤트 디스패치 완료 (interceptor가 400 처리)');
+          await delay(5000);
 
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ Clipboard Paste로 첨부 성공');
@@ -1104,86 +1142,14 @@
         return true;
       }
 
-      // ── Strategy 2: Real Clipboard Write + Paste ──
-      // 실제 시스템 클립보드에 이미지를 쓴 후 paste 이벤트 발생
-      console.log(LOG_PREFIX, 'Strategy 2: 시스템 클립보드 Write + Paste');
+      // ── Strategy 2: Drag-and-drop on editor ──
+      console.log(LOG_PREFIX, 'Strategy 2: Drag-and-drop');
       try {
         const editor = findEditor();
         if (editor) {
-          // data URL → Blob
-          const arr = imageDataUrl.split(',');
-          const mime = arr[0].match(/:(.*?);/)[1];
-          const bstr = atob(arr[1]);
-          const u8arr = new Uint8Array(bstr.length);
-          for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-          const blob = new Blob([u8arr], { type: mime });
-
-          // 시스템 클립보드에 이미지 쓰기
-          await navigator.clipboard.write([
-            new ClipboardItem({ [mime]: blob })
-          ]);
-          console.log(LOG_PREFIX, '시스템 클립보드에 이미지 기록 완료');
-
-          editor.focus();
-          await delay(300);
-
-          // 클립보드에서 읽어서 paste 이벤트 생성
-          const clipItems = await navigator.clipboard.read();
-          if (clipItems.length > 0) {
-            const dt2 = new DataTransfer();
-            for (const item of clipItems) {
-              for (const type of item.types) {
-                if (type.startsWith('image/')) {
-                  const b = await item.getType(type);
-                  const f = new File([b], `image-${Date.now()}.png`, { type });
-                  dt2.items.add(f);
-                }
-              }
-            }
-            const pasteEvent2 = new ClipboardEvent('paste', {
-              bubbles: true,
-              cancelable: true,
-              clipboardData: dt2
-            });
-            editor.dispatchEvent(pasteEvent2);
-            console.log(LOG_PREFIX, '시스템 클립보드 paste 이벤트 디스패치 완료');
-            await delay(4000);
-          }
-
-          if (checkImageAttached() || !isOnMainPage()) {
-            console.log(LOG_PREFIX, '✅ 시스템 클립보드 Paste로 첨부 성공');
-            return true;
-          }
-        }
-      } catch (e) {
-        console.warn(LOG_PREFIX, '시스템 클립보드 Paste 실패:', e.message);
-      }
-
-      // 이미 첨부됐으면 중단
-      if (checkImageAttached() || !isOnMainPage()) {
-        console.log(LOG_PREFIX, '✅ Strategy 2 이후 첨부 확인됨');
-        return true;
-      }
-
-      // ── Strategy 3: Drag-and-drop on editor ──
-      console.log(LOG_PREFIX, 'Strategy 3: Drag-and-drop');
-      try {
-        const dropTargets = [
-          findEditor(),
-          document.querySelector('.tiptap'),
-          document.querySelector('[contenteditable]'),
-          document.querySelector('main'),
-          document.body
-        ].filter(Boolean);
-
-        for (const target of dropTargets) {
-          if (checkImageAttached() || !isOnMainPage()) {
-            console.log(LOG_PREFIX, '✅ Drag-and-drop 중 첨부 확인됨');
-            return true;
-          }
-          console.log(LOG_PREFIX, `드래그 대상: ${target.tagName}.${target.className?.substring?.(0, 30) || ''}`);
-          await MangoDom.dropFileOnElement(target, file);
-          await delay(4000);
+          console.log(LOG_PREFIX, '드래그 대상: 에디터');
+          await MangoDom.dropFileOnElement(editor, file);
+          await delay(5000);
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ Drag-and-drop 첨부 성공');
             return true;
@@ -1195,12 +1161,12 @@
 
       // 이미 첨부됐으면 중단
       if (checkImageAttached() || !isOnMainPage()) {
-        console.log(LOG_PREFIX, '✅ Strategy 3 이후 첨부 확인됨');
+        console.log(LOG_PREFIX, '✅ Strategy 2 이후 첨부 확인됨');
         return true;
       }
 
-      // ── Strategy 4: DataTransfer on file input (레거시 폴백) ──
-      console.log(LOG_PREFIX, 'Strategy 4: DataTransfer (file input, 레거시)');
+      // ── Strategy 3: DataTransfer on file input (레거시 폴백) ──
+      console.log(LOG_PREFIX, 'Strategy 3: DataTransfer (file input, 레거시)');
       try {
         const fileInput = findFileInput();
         if (fileInput) {
@@ -1210,7 +1176,7 @@
           fileInput.files = dt.files;
           fileInput.dispatchEvent(new Event('change', { bubbles: true }));
           fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-          await delay(3000);
+          await delay(4000);
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ DataTransfer 레거시 방식 첨부 성공');
             return true;
