@@ -15,9 +15,9 @@
       console.log('[MangoAuto:Inject] URL:', u);
       console.log('[MangoAuto:Inject] Method:', opts?.method || 'GET');
 
-      // FormData 내용 로깅
+      // 요청 본문 로깅
       if (opts?.body instanceof FormData) {
-        console.log('[MangoAuto:Inject] FormData 내용:');
+        console.log('[MangoAuto:Inject] Body: FormData');
         for (const [key, value] of opts.body.entries()) {
           if (value instanceof File) {
             console.log(`  ${key}: File(name=${value.name}, size=${value.size}, type=${value.type})`);
@@ -27,6 +27,23 @@
             console.log(`  ${key}: ${String(value).substring(0, 200)}`);
           }
         }
+      } else if (typeof opts?.body === 'string') {
+        // JSON body인 경우 (base64 데이터가 길 수 있으므로 앞부분만)
+        console.log('[MangoAuto:Inject] Body (JSON string):', opts.body.substring(0, 500));
+        try {
+          const parsed = JSON.parse(opts.body);
+          console.log('[MangoAuto:Inject] JSON 필드:', Object.keys(parsed));
+          // 각 필드의 값 타입/길이 로깅
+          for (const [k, v] of Object.entries(parsed)) {
+            if (typeof v === 'string' && v.length > 100) {
+              console.log(`  ${k}: string(길이=${v.length}) "${v.substring(0, 80)}..."`);
+            } else {
+              console.log(`  ${k}:`, v);
+            }
+          }
+        } catch(e) {}
+      } else {
+        console.log('[MangoAuto:Inject] Body 타입:', typeof opts?.body, opts?.body);
       }
 
       // Headers 로깅
