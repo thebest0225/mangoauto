@@ -22,44 +22,6 @@
   let shouldStop = false;
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
-  // ─── MAIN world: upload-file 400 인터셉터 ───
-  // Grok Imagine에서 chatUploadFile이 /rest/app-chat/upload-file로 요청하면 400 반환
-  // → 페이지 롤백 방지를 위해 fetch 인터셉트하여 mock success 반환
-  function injectUploadInterceptor() {
-    if (document.querySelector('script[data-mangoauto-grok-intercept]')) return;
-    try {
-      const script = document.createElement('script');
-      script.dataset.mangoautoGrokIntercept = 'true';
-      script.textContent = `(function(){
-        const _origFetch = window.fetch;
-        window.fetch = async function(url, opts) {
-          const u = (typeof url === 'string' ? url : url?.url) || '';
-          if (u.includes('/rest/app-chat/upload-file')) {
-            console.log('[MangoAuto:Inject] upload-file 요청 인터셉트');
-            try {
-              const resp = await _origFetch.apply(this, arguments);
-              if (resp.ok) { console.log('[MangoAuto:Inject] upload-file 성공 (원본)'); return resp; }
-              console.log('[MangoAuto:Inject] upload-file 실패:', resp.status, '→ mock success 반환');
-            } catch(e) {
-              console.log('[MangoAuto:Inject] upload-file 에러:', e.message, '→ mock success 반환');
-            }
-            return new Response(JSON.stringify({
-              fileMetadata:{id:crypto.randomUUID(),mimeType:'image/png',fileName:'image.png',size:0}
-            }), {status:200, headers:{'Content-Type':'application/json'}});
-          }
-          return _origFetch.apply(this, arguments);
-        };
-        console.log('[MangoAuto:Inject] Grok upload interceptor 설치 완료');
-      })();`;
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
-      console.log(LOG_PREFIX, 'Upload interceptor 주입 완료');
-    } catch(e) {
-      console.warn(LOG_PREFIX, 'Upload interceptor 주입 실패:', e.message);
-    }
-  }
-  injectUploadInterceptor();
-
   // ─── Navigation Debug: 근본 원인 추적 ───
   // URL 변경 감지 (500ms 폴링)
   let _lastUrl = window.location.href;

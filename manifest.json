@@ -39,6 +39,12 @@
   "content_scripts": [
     {
       "matches": ["https://grok.com/*"],
+      "js": ["content/grok-inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://grok.com/*"],
       "js": ["lib/utils.js", "content/shared-dom.js", "content/grok.js"],
       "run_at": "document_idle"
     },
