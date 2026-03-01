@@ -155,7 +155,10 @@
       <!-- Queue List -->
       <div id="queueSection" class="section">
         <div class="queue-header">
-          <span class="label" style="margin:0">대기열</span>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="queueSelectAll" class="queue-check" checked>
+            <span class="label" style="margin:0">대기열</span>
+          </div>
           <span id="queueCount" class="queue-count">0개</span>
         </div>
         <div id="queueList" class="queue-list"></div>

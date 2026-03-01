@@ -366,7 +366,7 @@ async function handleMessage(msg, sender) {
 // ─── Start Automation ───
 async function startAutomation(config) {
   const { source, platform, mode, settings, projectId, prompts, images,
-          useExistingImages, skipCompleted, contentType } = config;
+          useExistingImages, skipCompleted, contentType, selectedIndices } = config;
 
   broadcastLog(`자동화 시작: source=${source}, platform=${platform}, mode=${mode}, contentType=${contentType || 'segments'}`, 'info');
 
@@ -481,6 +481,14 @@ async function startAutomation(config) {
         text: MangoUtils.truncate(p, 50)
       }));
     }
+  }
+
+  // 선택된 항목만 필터링
+  if (selectedIndices && Array.isArray(selectedIndices)) {
+    const selectedSet = new Set(selectedIndices);
+    const beforeCount = queue.length;
+    queue = queue.filter(item => selectedSet.has(item.segmentIndex));
+    broadcastLog(`선택 필터: ${beforeCount}개 → ${queue.length}개 (선택 ${selectedIndices.length}개)`, 'info');
   }
 
   if (queue.length === 0) {

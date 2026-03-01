@@ -295,6 +295,19 @@ function bindEvents() {
     }
   });
 
+  // 대기열 전체선택 토글
+  $('#queueSelectAll').addEventListener('change', (e) => {
+    $$('.queue-select').forEach(cb => { cb.checked = e.target.checked; });
+    updateQueueSelectedCount();
+  });
+
+  // 대기열 개별 체크 → 전체선택 동기화 (이벤트 위임)
+  $('#queueList').addEventListener('change', (e) => {
+    if (e.target.classList.contains('queue-select')) {
+      updateQueueSelectedCount();
+    }
+  });
+
   // Save settings
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
 
@@ -545,14 +558,38 @@ function updateQueuePreview() {
     if (item.imageUrl) {
       thumbHtml = `<img class="queue-thumb" src="${escapeHtml(item.imageUrl)}" title="${escapeHtml(item.imageName || '')}">`;
     }
+    const displayIdx = item._isThumbnail ? item.idx + 1 : (item._isMangoHub ? item.idx : item.idx + 1);
     div.innerHTML = `
-      <span class="queue-idx">${String(item._isThumbnail ? item.idx + 1 : (item._isMangoHub ? item.idx : item.idx + 1)).padStart(3, '0')}</span>
+      <input type="checkbox" class="queue-check queue-select" data-idx="${item.idx}" checked>
+      <span class="queue-idx">${String(displayIdx).padStart(3, '0')}</span>
       ${thumbHtml}
       <span class="queue-text">${escapeHtml(item.text)}</span>
       <span class="queue-status qs-pending">대기</span>
     `;
     queueList.appendChild(div);
   }
+
+  // 전체선택 체크박스 초기 상태
+  const selectAll = $('#queueSelectAll');
+  if (selectAll) selectAll.checked = true;
+  updateQueueSelectedCount();
+}
+
+// ─── Queue Selection Helpers ───
+function updateQueueSelectedCount() {
+  const all = $$('.queue-select');
+  const checked = $$('.queue-select:checked');
+  const queueCount = $('#queueCount');
+  if (all.length === 0) {
+    queueCount.textContent = '0개';
+  } else if (checked.length === all.length) {
+    queueCount.textContent = `${all.length}개`;
+  } else {
+    queueCount.textContent = `${checked.length}/${all.length}개`;
+  }
+  // 전체선택 동기화
+  const selectAll = $('#queueSelectAll');
+  if (selectAll) selectAll.checked = all.length > 0 && checked.length === all.length;
 }
 
 // ─── Image Upload Handler (append, sort, delete) ───
@@ -685,6 +722,17 @@ async function startAutomation() {
     config.contentType = currentContentType;
     config.useExistingImages = $('#useExistingImages').checked;
     config.skipCompleted = $('#skipCompleted').checked;
+
+    // 선택된 항목만 전송 (체크된 인덱스 수집)
+    const checkedBoxes = $$('.queue-select:checked');
+    const allBoxes = $$('.queue-select');
+    if (checkedBoxes.length === 0) {
+      addLog('변환할 항목을 선택해주세요', 'error');
+      return;
+    }
+    if (checkedBoxes.length < allBoxes.length) {
+      config.selectedIndices = [...checkedBoxes].map(cb => parseInt(cb.dataset.idx));
+    }
 
     // 썸네일 모드: 기존 이미지가 있으면 확인
     if (currentContentType === 'thumbnail') {
@@ -898,13 +946,19 @@ function updateQueueListFromState(state) {
       statusEl.className = 'queue-status qs-pending';
     }
 
-    // 완료 상태에서 체크박스 표시
-    if (isCompleted && !item.querySelector('.queue-check')) {
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.className = 'queue-check';
-      cb.dataset.index = i;
-      item.insertBefore(cb, item.firstChild);
+    // 완료 상태에서 체크박스 표시 (queue-select 이미 있으면 재사용)
+    if (isCompleted && !item.querySelector('.queue-check:not(.queue-select)')) {
+      const existing = item.querySelector('.queue-select');
+      if (existing) {
+        // 프리뷰 체크박스를 재시도용으로 전환
+        existing.dataset.index = i;
+      } else {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'queue-check';
+        cb.dataset.index = i;
+        item.insertBefore(cb, item.firstChild);
+      }
     }
   });
 }
