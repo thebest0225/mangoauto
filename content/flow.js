@@ -1340,7 +1340,8 @@
   function dismissVisibleErrors() {
     const selectors = [
       '[role="alert"]', '[class*="snackbar"]', '[class*="snack"]',
-      'mat-snack-bar', '[class*="toast"]'
+      'mat-snack-bar', '[class*="toast"]',
+      '[class*="error"]', '[class*="warning"]'
     ];
     for (const sel of selectors) {
       document.querySelectorAll(sel).forEach(el => {
@@ -1392,21 +1393,23 @@
         }
       }
 
-      // Check for errors (API result보다 후순위)
-      const err = checkForErrors();
-      if (err) throw new Error(`Generation error: ${err}`);
-
-      // Check progress indicators
+      // Check progress indicators FIRST (생성 진행 중이면 DOM 에러 무시)
       const generating = countGeneratingItems();
       if (generating > 0) {
         const elapsed = Math.round((Date.now() - start) / 1000);
         console.log(LOG_PREFIX, `Generating... ${elapsed}s (${generating} items in progress)`);
-      } else if (Date.now() - start > 10000) {
-        // No progress indicators and no API result - check for new videos/images
-        const hasNewMedia = checkForNewMedia();
-        if (hasNewMedia) {
-          console.log(LOG_PREFIX, 'Generation complete (media detected)');
-          return;
+      } else {
+        // 진행 표시 없을 때만 DOM 에러 체크 (API result보다 후순위)
+        const err = checkForErrors();
+        if (err) throw new Error(`Generation error: ${err}`);
+
+        if (Date.now() - start > 10000) {
+          // No progress indicators and no API result - check for new videos/images
+          const hasNewMedia = checkForNewMedia();
+          if (hasNewMedia) {
+            console.log(LOG_PREFIX, 'Generation complete (media detected)');
+            return;
+          }
         }
       }
 
