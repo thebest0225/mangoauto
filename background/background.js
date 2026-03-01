@@ -655,10 +655,13 @@ async function runSequentialLoop() {
       const llmCfg = automationSettings?.llm;
       const llmMaxAttempts = llmCfg?.retryCount || 2;
       const llmAttemptsSoFar = item._llmRewriteCount || 0;
+      const isCensorship = isCensorshipError(resp.error, resp.errorCode);
+
+      broadcastLog(`LLM 조건 체크: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(resp.error||'').substring(0,80)}"`, 'info');
 
       if (llmCfg?.enabled && llmCfg?.kieApiKey &&
           !item._isThumbnail &&
-          isCensorshipError(resp.error, resp.errorCode) &&
+          isCensorship &&
           llmAttemptsSoFar < llmMaxAttempts) {
         broadcastLog(`검열 에러 감지 → LLM 프롬프트 수정 시도 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
         // 매번 원본 프롬프트 기준으로 LLM에 요청 (다른 수정본을 받기 위해)
@@ -1232,10 +1235,13 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     const llmCfg = automationSettings?.llm;
     const llmMaxAttempts = llmCfg?.retryCount || 2;
     const llmAttemptsSoFar = item._llmRewriteCount || 0;
+    const isCensorship = isCensorshipError(errorMsg, '');
+
+    broadcastLog(`[파이프라인] LLM 조건: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(errorMsg||'').substring(0,80)}"`, 'info');
 
     if (llmCfg?.enabled && llmCfg?.kieApiKey &&
         !item._isThumbnail &&
-        isCensorshipError(errorMsg, '') &&
+        isCensorship &&
         llmAttemptsSoFar < llmMaxAttempts) {
       broadcastLog(`검열 에러 [${itemIndex + 1}] → LLM 프롬프트 수정 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
       const originalPrompt = item._originalPrompt || item.prompt;
