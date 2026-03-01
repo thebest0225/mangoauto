@@ -202,6 +202,27 @@
         const attached = await attachImage(sourceImageDataUrl);
         if (!attached) throw new Error('이미지 첨부 실패');
         showToast('이미지 첨부 완료!', 'success');
+
+        // ═══ DEBUG: 첨부 후 상태 로깅 ═══
+        console.log(LOG_PREFIX, '═══ DEBUG: 이미지 첨부 후 상태 ═══');
+        console.log(LOG_PREFIX, 'DEBUG URL:', window.location.href);
+        console.log(LOG_PREFIX, 'DEBUG isOnMainPage:', isOnMainPage());
+        console.log(LOG_PREFIX, 'DEBUG isOnResultPage:', isOnResultPage());
+        const debugImgs = document.querySelectorAll('img[src]');
+        console.log(LOG_PREFIX, 'DEBUG 페이지 내 img 태그 수:', debugImgs.length);
+        debugImgs.forEach((img, i) => {
+          if (img.src && (img.src.includes('blob:') || img.src.includes('assets.grok') || img.width > 100)) {
+            console.log(LOG_PREFIX, `DEBUG img[${i}]: ${img.src.substring(0, 80)} (${img.width}x${img.height})`);
+          }
+        });
+        const debugAttach = document.querySelector('[data-testid*="attach"], [data-testid*="image"], [data-testid*="upload"]');
+        console.log(LOG_PREFIX, 'DEBUG 첨부 요소:', debugAttach ? debugAttach.outerHTML.substring(0, 200) : '없음');
+        console.log(LOG_PREFIX, 'DEBUG checkImageAttached:', checkImageAttached());
+        showToast('DEBUG: 30초 대기 - 페이지 상태 확인하세요', 'warn');
+        await delay(30000);
+        console.log(LOG_PREFIX, '═══ DEBUG 대기 끝, 계속 진행 ═══');
+        // ═══ DEBUG END ═══
+
         checkStopped();
 
         // Step 3: 결과 페이지 대기

@@ -1,49 +1,13 @@
 /**
  * MangoAuto - Grok MAIN world injector
- * 1) addEventListener Proxy: paste/drop 이벤트의 isTrusted를 true로 위장
- *    → Grok 커스텀 핸들러가 untrusted 이벤트도 처리하도록
- * 2) fetch interceptor: /rest/app-chat/upload-file → mock success (폴백)
- * 3) history/navigation 차단: upload 후 /imagine 롤백 방지
+ * 1) fetch interceptor: /rest/app-chat/upload-file → mock success
+ * 2) history/navigation 차단: upload 후 /imagine 롤백 방지
+ * 3) popstate 차단: 뒤로가기 이벤트 방지
  * CSP 우회를 위해 manifest.json에서 world: "MAIN"으로 등록
  */
 (function() {
   // ═══════════════════════════════════════════════════
-  // ─── 1. addEventListener Proxy: isTrusted 위장 ───
-  // ═══════════════════════════════════════════════════
-  const _origAddEventListener = EventTarget.prototype.addEventListener;
-  const TRUST_EVENTS = new Set(['paste', 'drop']);
-
-  EventTarget.prototype.addEventListener = function(type, handler, options) {
-    if (TRUST_EVENTS.has(type) && typeof handler === 'function') {
-      const wrappedHandler = function(event) {
-        const proxy = new Proxy(event, {
-          get(target, prop) {
-            if (prop === 'isTrusted') return true;
-            const val = Reflect.get(target, prop);
-            return typeof val === 'function' ? val.bind(target) : val;
-          }
-        });
-        return handler.call(this, proxy);
-      };
-      // 원본 핸들러 참조 저장 (removeEventListener 대응)
-      wrappedHandler._origHandler = handler;
-      return _origAddEventListener.call(this, type, wrappedHandler, options);
-    }
-    return _origAddEventListener.call(this, type, handler, options);
-  };
-
-  // removeEventListener도 대응
-  const _origRemoveEventListener = EventTarget.prototype.removeEventListener;
-  EventTarget.prototype.removeEventListener = function(type, handler, options) {
-    // 원본 핸들러와 매칭되는 wrapped 핸들러를 찾아야 하지만,
-    // 단순 구현으로는 어려우므로 원본 그대로 전달 (대부분 케이스에서 충분)
-    return _origRemoveEventListener.call(this, type, handler, options);
-  };
-
-  console.log('[MangoAuto:Inject] addEventListener Proxy 설치 (paste/drop isTrusted=true)');
-
-  // ═══════════════════════════════════════════════════
-  // ─── 2. fetch interceptor (폴백) ───
+  // ─── 1. fetch interceptor ───
   // ═══════════════════════════════════════════════════
   const _origFetch = window.fetch;
 
@@ -98,7 +62,7 @@
   };
 
   // ═══════════════════════════════════════════════════
-  // ─── 3. History/Navigation 차단 ───
+  // ─── 2. History/Navigation 차단 ───
   // ═══════════════════════════════════════════════════
   const _origPushState = History.prototype.pushState;
   const _origReplaceState = History.prototype.replaceState;
@@ -159,5 +123,5 @@
     }
   }, true);
 
-  console.log('[MangoAuto:Inject] Grok isTrusted proxy + upload interceptor + nav blocker 설치 완료');
+  console.log('[MangoAuto:Inject] Grok upload interceptor + nav blocker 설치 완료');
 })();
