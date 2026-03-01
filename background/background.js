@@ -128,6 +128,7 @@ const CENSORSHIP_PATTERNS = [
   'prohibited', 'not allowed', 'content filter', 'moderat',
   'responsible ai', 'generation failed', 'MEDIA_GENERATION_STATUS_FAILED',
   'could not generate', 'unable to generate', 'error generating',
+  'invalid argument',
   '생성 실패', '생성에 실패', '생성할 수 없', '안전', '차단', '정책', '부적절'
 ];
 
