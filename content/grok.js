@@ -197,18 +197,11 @@
         await ensureMainPage();
         checkStopped();
 
-        // Step 2: 이미지 첨부 (디버그: 여기서 멈춤)
-        showToast('Step 2: 이미지 첨부 중 (디버그: paste만 테스트)...', 'info');
+        // Step 2: 이미지 첨부 → 자동으로 결과 페이지 이동
+        showToast('Step 2: 이미지 첨부 중...', 'info');
         const attached = await attachImage(sourceImageDataUrl);
-        showToast(`이미지 첨부 결과: ${attached ? '성공' : '실패'} — 디버그 모드, 여기서 멈춤`, attached ? 'success' : 'error');
-
-        // ═══ DEBUG: Step 2 이후 완전 정지 ═══
-        console.log(LOG_PREFIX, '═══ DEBUG: Step 2 완료, 여기서 완전 정지합니다 ═══');
-        console.log(LOG_PREFIX, 'DEBUG 최종 URL:', window.location.href);
-        isProcessing = false;
-        return; // 더 이상 진행하지 않음
-        // ═══ DEBUG END ═══
-
+        if (!attached) throw new Error('이미지 첨부 실패');
+        showToast('이미지 첨부 완료!', 'success');
         checkStopped();
 
         // Step 3: 결과 페이지 대기
@@ -1063,7 +1056,7 @@
   // ═══════════════════════════════════════════════════
   async function attachImage(imageDataUrl) {
     try {
-      console.log(LOG_PREFIX, '=== 이미지 첨부 시작 (디버그: paste만 테스트) ===');
+      console.log(LOG_PREFIX, '=== 이미지 첨부 시작 ===');
 
       // Remove any existing attachment first
       await removeExistingAttachment();
@@ -1072,46 +1065,163 @@
       const file = MangoDom.dataUrlToFile(imageDataUrl, `image-${Date.now()}.png`);
       console.log(LOG_PREFIX, `파일 생성: ${file.name}, 크기: ${file.size}`);
 
-      // ── 디버그: Clipboard Paste만 시도 후 즉시 리턴 ──
-      console.log(LOG_PREFIX, '[DEBUG] Clipboard Paste만 시도합니다');
-      const editor = findEditor();
-      if (!editor) {
-        console.error(LOG_PREFIX, '[DEBUG] 에디터를 찾을 수 없음!');
-        return false;
+      // ── Strategy 1: Clipboard Paste on TipTap editor ──
+      // Grok Imagine 페이지는 TipTap 에디터의 paste 핸들러를 통해 이미지 업로드 처리
+      // file input onChange → chatUploadFile API는 400을 반환하므로 paste 방식 우선 사용
+      console.log(LOG_PREFIX, 'Strategy 1: Clipboard Paste (에디터 붙여넣기)');
+      try {
+        const editor = findEditor();
+        if (editor) {
+          editor.focus();
+          await delay(200);
+
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          const pasteEvent = new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt
+          });
+          editor.dispatchEvent(pasteEvent);
+          console.log(LOG_PREFIX, 'Paste 이벤트 디스패치 완료');
+          await delay(4000);
+
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ Clipboard Paste로 첨부 성공');
+            return true;
+          }
+          console.log(LOG_PREFIX, 'Paste 디스패치했으나 미확인, 다음 방식 시도');
+        } else {
+          console.log(LOG_PREFIX, '에디터 없음, 다음 방식 시도');
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, 'Clipboard Paste 실패:', e.message);
       }
 
-      console.log(LOG_PREFIX, '[DEBUG] 에디터 발견, focus 시도...');
-      editor.focus();
-      await delay(200);
-
-      console.log(LOG_PREFIX, '[DEBUG] DataTransfer 생성 중...');
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      console.log(LOG_PREFIX, '[DEBUG] DataTransfer files:', dt.files.length, 'items:', dt.items.length);
-
-      const pasteEvent = new ClipboardEvent('paste', {
-        bubbles: true,
-        cancelable: true,
-        clipboardData: dt
-      });
-      console.log(LOG_PREFIX, '[DEBUG] ClipboardEvent 생성 완료, 디스패치 직전 URL:', window.location.href);
-
-      editor.dispatchEvent(pasteEvent);
-      console.log(LOG_PREFIX, '[DEBUG] ✅ Paste 이벤트 디스패치 완료!');
-      console.log(LOG_PREFIX, '[DEBUG] 디스패치 직후 URL:', window.location.href);
-
-      // 여기서 멈춤 — 아무것도 더 하지 않고 상태만 관찰
-      console.log(LOG_PREFIX, '[DEBUG] === 60초간 상태 관찰 시작 (아무것도 안 함) ===');
-      for (let i = 0; i < 12; i++) {
-        await delay(5000);
-        console.log(LOG_PREFIX, `[DEBUG] ${(i+1)*5}초 경과 | URL: ${window.location.href} | 이미지첨부: ${checkImageAttached()} | 메인페이지: ${isOnMainPage()}`);
+      // 이미 첨부됐으면 중단
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 1 이후 첨부 확인됨');
+        return true;
       }
-      console.log(LOG_PREFIX, '[DEBUG] === 60초 관찰 끝 ===');
 
-      // 최종 상태로 리턴
-      const success = checkImageAttached() || !isOnMainPage();
-      console.log(LOG_PREFIX, `[DEBUG] 최종 판단: ${success ? '성공' : '실패'}`);
-      return success;
+      // ── Strategy 2: Real Clipboard Write + Paste ──
+      // 실제 시스템 클립보드에 이미지를 쓴 후 paste 이벤트 발생
+      console.log(LOG_PREFIX, 'Strategy 2: 시스템 클립보드 Write + Paste');
+      try {
+        const editor = findEditor();
+        if (editor) {
+          // data URL → Blob
+          const arr = imageDataUrl.split(',');
+          const mime = arr[0].match(/:(.*?);/)[1];
+          const bstr = atob(arr[1]);
+          const u8arr = new Uint8Array(bstr.length);
+          for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+          const blob = new Blob([u8arr], { type: mime });
+
+          // 시스템 클립보드에 이미지 쓰기
+          await navigator.clipboard.write([
+            new ClipboardItem({ [mime]: blob })
+          ]);
+          console.log(LOG_PREFIX, '시스템 클립보드에 이미지 기록 완료');
+
+          editor.focus();
+          await delay(300);
+
+          // 클립보드에서 읽어서 paste 이벤트 생성
+          const clipItems = await navigator.clipboard.read();
+          if (clipItems.length > 0) {
+            const dt2 = new DataTransfer();
+            for (const item of clipItems) {
+              for (const type of item.types) {
+                if (type.startsWith('image/')) {
+                  const b = await item.getType(type);
+                  const f = new File([b], `image-${Date.now()}.png`, { type });
+                  dt2.items.add(f);
+                }
+              }
+            }
+            const pasteEvent2 = new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt2
+            });
+            editor.dispatchEvent(pasteEvent2);
+            console.log(LOG_PREFIX, '시스템 클립보드 paste 이벤트 디스패치 완료');
+            await delay(4000);
+          }
+
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ 시스템 클립보드 Paste로 첨부 성공');
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, '시스템 클립보드 Paste 실패:', e.message);
+      }
+
+      // 이미 첨부됐으면 중단
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 2 이후 첨부 확인됨');
+        return true;
+      }
+
+      // ── Strategy 3: Drag-and-drop on editor ──
+      console.log(LOG_PREFIX, 'Strategy 3: Drag-and-drop');
+      try {
+        const dropTargets = [
+          findEditor(),
+          document.querySelector('.tiptap'),
+          document.querySelector('[contenteditable]'),
+          document.querySelector('main'),
+          document.body
+        ].filter(Boolean);
+
+        for (const target of dropTargets) {
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ Drag-and-drop 중 첨부 확인됨');
+            return true;
+          }
+          console.log(LOG_PREFIX, `드래그 대상: ${target.tagName}.${target.className?.substring?.(0, 30) || ''}`);
+          await MangoDom.dropFileOnElement(target, file);
+          await delay(4000);
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ Drag-and-drop 첨부 성공');
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, 'Drag-and-drop 실패:', e.message);
+      }
+
+      // 이미 첨부됐으면 중단
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 3 이후 첨부 확인됨');
+        return true;
+      }
+
+      // ── Strategy 4: DataTransfer on file input (레거시 폴백) ──
+      console.log(LOG_PREFIX, 'Strategy 4: DataTransfer (file input, 레거시)');
+      try {
+        const fileInput = findFileInput();
+        if (fileInput) {
+          fileInput.value = '';
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+          fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+          await delay(3000);
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ DataTransfer 레거시 방식 첨부 성공');
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, 'DataTransfer 레거시 실패:', e.message);
+      }
+
+      console.error(LOG_PREFIX, '❌ 모든 이미지 첨부 방식 실패');
+      return false;
     } catch (e) {
       console.error(LOG_PREFIX, '❌ 이미지 첨부 에러:', e);
       return false;
