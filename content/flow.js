@@ -174,7 +174,7 @@
       const timeoutMin = isImageOutput ? (settings?.flowTimeout || 3) : (settings?.flowVideo?.frameDuration || settings?.veo?.frameDuration || 10);
       await waitForGenerationComplete(timeoutMin);
 
-      // Step 8: Extract result
+      // Step 8: Extract result + Download
       if (mediaType === 'video' || mode.includes('video')) {
         // 비디오: URL 직접 전달 (dataUrl 변환 시 50MB+ 메모리 이슈 방지)
         let videoUrl;
@@ -185,6 +185,16 @@
           videoUrl = await getVideoUrl();
           if (!videoUrl) throw new Error('Cannot find video URL');
         }
+
+        // UI 다운로드: ⋮ → 다운로드 → 1080p (브라우저 네이티브 다운로드)
+        console.log(LOG_PREFIX, '1080p UI 다운로드 시도...');
+        const downloaded = await downloadVideoViaMenu();
+        if (downloaded) {
+          console.log(LOG_PREFIX, '✓ 1080p 다운로드 트리거됨');
+        } else {
+          console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패, URL 방식으로 진행');
+        }
+
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
           mediaUrl: videoUrl,
@@ -1698,33 +1708,111 @@
     return null;
   }
 
-  // ─── Download via UI (alternative to direct URL fetch) ───
-  async function clickDownloadButton() {
-    const dlBtns = MangoDom.getAllByXPath(SELECTORS.DOWNLOAD_BUTTON_XPATH);
-    if (dlBtns.length === 0) return false;
-
-    // Click the last download button (most recent result)
-    const btn = dlBtns[dlBtns.length - 1];
-    MangoDom.simulateClick(btn);
-    await delay(500);
-
-    // Look for "다운로드 1K" menu item
-    const menuItems = document.querySelectorAll('[role="menuitem"]');
-    for (const item of menuItems) {
-      if (item.textContent.includes('다운로드 1K') || item.textContent.includes('Download 1K')) {
-        MangoDom.simulateClick(item);
-        console.log(LOG_PREFIX, 'Download 1K clicked');
-        return true;
-      }
+  // ─── Download via UI: ⋮ → 다운로드 → 1080p (New UI Mar 2026) ───
+  async function downloadVideoViaMenu() {
+    // 생성된 비디오/이미지 중 가장 최근 것 찾기
+    // 갤러리에서 마지막 미디어 요소에 호버 → ⋮ 클릭
+    const mediaElements = findGeneratedMediaElements();
+    if (mediaElements.length === 0) {
+      console.warn(LOG_PREFIX, '[download] 생성된 미디어 없음');
+      return false;
     }
 
-    // Click first menu item as fallback
-    if (menuItems.length > 0) {
-      MangoDom.simulateClick(menuItems[0]);
+    const target = mediaElements[mediaElements.length - 1];
+    console.log(LOG_PREFIX, `[download] 대상: ${target.tagName}, src=${(target.src || '').substring(0, 60)}`);
+
+    // 컨테이너 찾기 (호버 시 ⋮ 버튼이 나타나는 래퍼)
+    let container = target;
+    for (let i = 0; i < 8; i++) {
+      container = container.parentElement;
+      if (!container) break;
+      if (container.querySelector('button')) break;
+    }
+
+    // 호버 이벤트
+    const rect = target.getBoundingClientRect();
+    const hoverOpts = { bubbles: true, clientX: rect.right - 10, clientY: rect.top + 10 };
+    (container || target).dispatchEvent(new MouseEvent('mouseenter', hoverOpts));
+    (container || target).dispatchEvent(new MouseEvent('mouseover', hoverOpts));
+    (container || target).dispatchEvent(new MouseEvent('mousemove', hoverOpts));
+    await delay(500);
+
+    // ⋮ 버튼 클릭
+    const moreBtn = findMoreButton(container || target.parentElement);
+    if (!moreBtn) {
+      console.warn(LOG_PREFIX, '[download] ⋮ 버튼 못찾음');
+      return false;
+    }
+    console.log(LOG_PREFIX, '[download] ⋮ 클릭');
+    moreBtn.click();
+    await delay(500);
+
+    // "다운로드" 메뉴 아이템에 호버 → 서브메뉴 열기
+    const downloadItem = findMenuItemByText(['다운로드', 'Download']);
+    if (!downloadItem) {
+      console.warn(LOG_PREFIX, '[download] 다운로드 메뉴 못찾음');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return false;
+    }
+    console.log(LOG_PREFIX, '[download] "다운로드" 호버');
+    downloadItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    downloadItem.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    await delay(500);
+
+    // 서브메뉴에서 "1080p" 선택
+    const quality1080 = findMenuItemByText(['1080p', '1080']);
+    if (quality1080) {
+      console.log(LOG_PREFIX, '[download] 1080p 선택');
+      quality1080.click();
+      await delay(500);
       return true;
     }
 
+    // 1080p 못찾으면 720p 폴백
+    const quality720 = findMenuItemByText(['720p', '720']);
+    if (quality720) {
+      console.log(LOG_PREFIX, '[download] 720p 폴백');
+      quality720.click();
+      await delay(500);
+      return true;
+    }
+
+    console.warn(LOG_PREFIX, '[download] 품질 옵션 못찾음');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     return false;
+  }
+
+  function findGeneratedMediaElements() {
+    const results = [];
+    // 비디오 요소
+    document.querySelectorAll('video').forEach(v => {
+      if (v.offsetParent !== null && v.offsetWidth > 50) results.push(v);
+    });
+    // 갤러리 이미지 (storage.googleapis.com)
+    document.querySelectorAll('img[src]').forEach(img => {
+      if (img.offsetParent !== null && img.offsetWidth > 100 &&
+          (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com'))) {
+        results.push(img);
+      }
+    });
+    return results;
+  }
+
+  function findMenuItemByText(texts) {
+    // role="menuitem" 또는 일반 클릭 가능 요소에서 텍스트 매칭
+    const candidates = document.querySelectorAll(
+      '[role="menuitem"], [role="option"], li, button, a, div[tabindex]'
+    );
+    for (const el of candidates) {
+      const elText = el.textContent?.trim() || '';
+      if (el.offsetParent === null) continue;
+      for (const text of texts) {
+        if (elText.includes(text) && elText.length < text.length + 30) {
+          return el;
+        }
+      }
+    }
+    return null;
   }
 
   // ─── Ensure inject.js (MAIN world) is loaded ───
