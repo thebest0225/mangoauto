@@ -407,8 +407,10 @@
       if (btn === genBtn) continue;
       const text = btn.textContent || '';
       if (text.length > 80 || text.length < 3) continue;
-      // 모델명 + x숫자 패턴 (배지)
-      if (modelKw.some(kw => text.includes(kw)) && /x[1-4]/.test(text)) {
+      // 모델명 + x숫자 패턴 (배지), 또는 Video/Image + x숫자 패턴
+      const hasModelOrMedia = modelKw.some(kw => text.includes(kw)) ||
+                              /^(Video|Image|video|image)/.test(text.trim());
+      if (hasModelOrMedia && /x[1-4]/.test(text)) {
         console.log(LOG_PREFIX, `[trigger] 배지 발견: "${text.trim().substring(0, 50)}"`);
         return btn;
       }
@@ -1148,13 +1150,20 @@
     return false;
   }
 
+  function isGalleryImage(img) {
+    const src = img.src || '';
+    // Google Storage 업로드 이미지
+    if (src.includes('storage.googleapis.com')) return true;
+    // Google 호스팅 이미지 (아바타 제외: /a/ 경로는 계정 프로필 사진)
+    if (src.includes('lh3.googleusercontent.com') && !src.includes('/a/')) return true;
+    return false;
+  }
+
   function countGalleryImages() {
-    // 갤러리 영역의 이미지 수 (Google Storage 이미지만 카운트)
+    // 갤러리 영역의 이미지 수 (Google Storage 이미지만 카운트, 아바타 제외)
     let count = 0;
     document.querySelectorAll('img[src]').forEach(img => {
-      if (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com')) {
-        count++;
-      }
+      if (isGalleryImage(img)) count++;
     });
     return count;
   }
@@ -1164,7 +1173,7 @@
     const galleryImages = [];
     const allGalleryImages = [];  // 가시성 무관 폴백용
     document.querySelectorAll('img[src]').forEach(img => {
-      if (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com')) {
+      if (isGalleryImage(img)) {
         allGalleryImages.push(img);
         if (img.offsetParent !== null && img.offsetWidth > 50) {
           galleryImages.push(img);
