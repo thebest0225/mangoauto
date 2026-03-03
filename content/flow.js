@@ -1054,63 +1054,13 @@
     throw new Error('Cannot find or click generate button');
   }
 
-  // ─── Frame Upload (Image-to-Video) ───
-  function findFrameContainer() {
-    // Look for the frame area by finding swap_horiz icon and walking up
-    const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      const icon = btn.querySelector('i');
-      if (icon?.textContent?.trim() === 'swap_horiz') {
-        let container = btn.parentElement;
-        for (let level = 0; level < 10 && container; level++) {
-          const icons = container.querySelectorAll('button i');
-          let hasAddIcon = false;
-          for (const icn of icons) {
-            if (icn.textContent?.trim() === 'add') {
-              hasAddIcon = true;
-              break;
-            }
-          }
-          if (hasAddIcon) return container;
-          container = container.parentElement;
-        }
-      }
-    }
-    return null;
-  }
-
-  function findAddButton(position) {
-    const container = findFrameContainer();
-    const searchRoot = container || document;
-    const buttons = searchRoot.querySelectorAll('button');
-    const addButtons = [];
-
-    for (const btn of buttons) {
-      const icon = btn.querySelector('i');
-      if (icon?.textContent?.trim() === 'add') {
-        addButtons.push(btn);
-      }
-    }
-
-    if (addButtons.length === 0) return null;
-    return position === 'first' ? addButtons[0] : addButtons[addButtons.length - 1];
-  }
-
-  function findUploadButton() {
-    const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      const icon = btn.querySelector('i');
-      if (icon?.textContent?.trim() === 'upload') return btn;
-      const text = (btn.textContent || '').trim();
-      if (text.includes('업로드') || text.includes('Upload')) return btn;
-    }
-    return null;
-  }
+  // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
+  // 새 워크플로우: 이미지를 프로젝트에 드래그-드롭 업로드 → 갤러리에서 ⋮ 메뉴 → "프롬프트에 추가"
 
   async function uploadFrame(imageDataUrl, position = 'first') {
     // HTTP URL → dataUrl 변환 (MangoHub 이미지)
     if (imageDataUrl.startsWith('http')) {
-      console.log(LOG_PREFIX, 'HTTP URL → dataURL 변환');
+      console.log(LOG_PREFIX, '[frame] HTTP URL → dataURL 변환');
       try {
         const resp = await fetch(imageDataUrl);
         const blob = await resp.blob();
@@ -1120,210 +1070,197 @@
           reader.readAsDataURL(blob);
         });
       } catch (e) {
-        console.error(LOG_PREFIX, 'URL→dataURL 변환 실패:', e);
+        console.error(LOG_PREFIX, '[frame] URL→dataURL 변환 실패:', e);
         return false;
       }
     }
 
-    // 기존 이미지 제거
-    if (isFrameAttached(position)) {
-      console.log(LOG_PREFIX, '기존 이미지 제거 중...');
-      await removeAttachedImage(position);
-      await delay(500);
-    }
-
-    const addBtn = findAddButton(position);
-    if (!addBtn) {
-      console.warn(LOG_PREFIX, 'Add button not found for frame');
-      return false;
-    }
-
-    // File 객체 생성
+    // Step 1: 프로젝트 페이지에 이미지 드래그-드롭 업로드
     const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
-    console.log(LOG_PREFIX, `File 객체 생성: ${file.name}, ${file.size}bytes`);
+    console.log(LOG_PREFIX, `[frame] File 생성: ${file.name}, ${file.size}bytes`);
 
-    // MutationObserver로 file input 감지 준비
-    const fileInputDetected = new Promise(resolve => {
-      let resolved = false;
-      const observer = new MutationObserver(mutations => {
-        for (const mutation of mutations) {
-          for (const node of mutation.addedNodes) {
-            if (node instanceof HTMLInputElement && node.type === 'file') {
-              observer.disconnect();
-              if (!resolved) { resolved = true; resolve(node); }
-              return;
-            }
-            if (node instanceof HTMLElement) {
-              const inp = node.querySelector('input[type="file"]');
-              if (inp) {
-                observer.disconnect();
-                if (!resolved) { resolved = true; resolve(inp); }
-                return;
-              }
-            }
-          }
-        }
-      });
-      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['type'] });
-      setTimeout(() => { observer.disconnect(); if (!resolved) { resolved = true; resolve(null); } }, 8000);
-    });
+    const imgCountBefore = countGalleryImages();
+    console.log(LOG_PREFIX, `[frame] 업로드 전 갤러리 이미지: ${imgCountBefore}개`);
 
-    // Step 1: add 버튼 클릭
-    console.log(LOG_PREFIX, 'add 버튼 클릭');
-    addBtn.click();
-
-    // Step 2: upload 버튼 찾기 (최대 3초 대기)
-    let uploadBtn = null;
-    for (let i = 0; i < 15; i++) {
-      await delay(200);
-      uploadBtn = findUploadButton();
-      if (uploadBtn) break;
-    }
-    if (!uploadBtn) {
-      console.error(LOG_PREFIX, '업로드 버튼 못 찾음');
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-      return false;
-    }
-
-    // Step 3: background에서 file input 인터셉터 설치
-    try {
-      await chrome.runtime.sendMessage({ type: 'INJECT_FILE_INPUT', imageDataUrl });
-      console.log(LOG_PREFIX, 'File injection requested');
-    } catch (e) {
-      console.warn(LOG_PREFIX, 'Background inject failed:', e.message);
-    }
-    await delay(300);
-
-    // Step 4: upload 버튼 클릭 (file chooser 트리거)
-    console.log(LOG_PREFIX, '업로드 버튼 클릭');
-    uploadBtn.click();
-
-    // Step 5: MutationObserver로 file input 감지 → 직접 파일 주입
-    const detectedInput = await fileInputDetected;
-    if (detectedInput) {
-      console.log(LOG_PREFIX, 'MutationObserver로 file input 감지됨');
-      try {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        detectedInput.files = dt.files;
-        detectedInput.dispatchEvent(new Event('change', { bubbles: true }));
-        console.log(LOG_PREFIX, 'file input에 직접 파일 주입 완료');
-
-        const cropResult = await handleCropDialog();
-        if (cropResult) {
-          return await waitForFrameUploaded(position, 15000);
-        }
-        return true;
-      } catch (err) {
-        console.warn(LOG_PREFIX, 'file input 직접 주입 실패:', err);
-      }
-    }
-
-    // Step 6: 폴백 - DOM에서 input[type=file] 검색
-    console.log(LOG_PREFIX, '폴백: DOM에서 input[type=file] 검색');
-    for (let i = 0; i < 10; i++) {
-      await delay(500);
-      const inputs = document.querySelectorAll('input[type="file"]');
-      if (inputs.length > 0) {
-        console.log(LOG_PREFIX, `폴백으로 file input 발견 (시도 ${i + 1})`);
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        inputs[0].files = dt.files;
-        inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
-
-        const cropResult = await handleCropDialog();
-        if (cropResult) {
-          return await waitForFrameUploaded(position, 15000);
-        }
-        return true;
-      }
-    }
-
-    // Step 7: 최종 폴백 - drag-and-drop 시뮬레이션
-    console.warn(LOG_PREFIX, 'file input 감지 실패, drag-and-drop 시도');
-    return await uploadViaDropSimulation(file, position);
-  }
-
-  async function uploadViaDropSimulation(file, position) {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await delay(300);
-    const dropTarget = findAddButton(position) || document.querySelector('textarea') || document.body;
+    const dropTarget = document.querySelector('textarea') || document.body;
     const dataTransfer = new DataTransfer();
     dataTransfer.items.add(file);
     for (const eventName of ['dragenter', 'dragover', 'drop']) {
       dropTarget.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer }));
       await delay(100);
     }
-    await delay(2000);
-    if (isFrameAttached(position)) {
-      console.log(LOG_PREFIX, 'drag-and-drop 업로드 성공');
-      return true;
-    }
-    console.error(LOG_PREFIX, 'drag-and-drop 업로드도 실패');
-    return false;
-  }
+    console.log(LOG_PREFIX, '[frame] 드래그-드롭 완료, 업로드 대기...');
 
-  function isFrameAttached(position) {
-    const container = findFrameContainer();
-    const buttons = (container || document).querySelectorAll('button');
-    for (const btn of buttons) {
-      const text = (btn.textContent || '').trim();
-      if (text.includes('첫 번째 프레임') || text.includes('First frame') ||
-          text.includes('마지막 프레임') || text.includes('Last frame')) {
-        return true;
-      }
-    }
-    // 이미지가 이미 첨부되면 add 대신 close/delete 아이콘으로 바뀜
-    const icons = (container || document).querySelectorAll('button i');
-    for (const icon of icons) {
-      if (icon.textContent?.trim() === 'close' || icon.textContent?.trim() === 'delete') {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  async function removeAttachedImage(position) {
-    const container = findFrameContainer();
-    const buttons = (container || document).querySelectorAll('button');
-    for (const btn of buttons) {
-      const icon = btn.querySelector('i');
-      if (icon?.textContent?.trim() === 'close' || icon?.textContent?.trim() === 'delete') {
-        btn.click();
-        await delay(500);
-        return;
-      }
-    }
-  }
-
-  async function handleCropDialog() {
-    console.log(LOG_PREFIX, '자르기 및 저장 다이얼로그 대기...');
+    // Step 2: 갤러리에 새 이미지 등장 대기 (최대 15초)
+    let newImageAppeared = false;
     for (let i = 0; i < 30; i++) {
       await delay(500);
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        const text = (btn.textContent || '').trim().toLowerCase();
-        if (text.includes('자르기 및 저장') || text.includes('crop and save') ||
-            (text.includes('crop') && text.includes('save'))) {
-          console.log(LOG_PREFIX, `"자르기 및 저장" 버튼 발견 (시도 ${i + 1})`);
-          btn.click();
-          await delay(2000);
+      const imgCountNow = countGalleryImages();
+      if (imgCountNow > imgCountBefore) {
+        console.log(LOG_PREFIX, `[frame] 새 이미지 등장: ${imgCountBefore} → ${imgCountNow} (${i * 0.5}s)`);
+        newImageAppeared = true;
+        break;
+      }
+    }
+
+    if (!newImageAppeared) {
+      console.warn(LOG_PREFIX, '[frame] 갤러리에 새 이미지 미등장, 기존 이미지로 시도');
+    }
+    await delay(1000);
+
+    // Step 3: 가장 최근 이미지에서 ⋮ 메뉴 열기 → "프롬프트에 추가" 클릭
+    const added = await addImageToPromptViaMenu();
+    if (added) {
+      console.log(LOG_PREFIX, '[frame] ✓ 프롬프트에 추가 완료');
+      return true;
+    }
+
+    console.error(LOG_PREFIX, '[frame] ✗ 프롬프트에 추가 실패');
+    return false;
+  }
+
+  function countGalleryImages() {
+    // 갤러리 영역의 이미지 수 (Google Storage 이미지만 카운트)
+    let count = 0;
+    document.querySelectorAll('img[src]').forEach(img => {
+      if (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com')) {
+        count++;
+      }
+    });
+    return count;
+  }
+
+  async function addImageToPromptViaMenu() {
+    // 갤러리 이미지 찾기 — 가장 최근 (마지막) 이미지
+    const galleryImages = [];
+    document.querySelectorAll('img[src]').forEach(img => {
+      if (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com')) {
+        if (img.offsetParent !== null && img.offsetWidth > 50) {
+          galleryImages.push(img);
+        }
+      }
+    });
+
+    if (galleryImages.length === 0) {
+      console.warn(LOG_PREFIX, '[frame] 갤러리에 이미지 없음');
+      return false;
+    }
+
+    // 마지막 이미지 (가장 최근 업로드된 것)
+    const targetImg = galleryImages[galleryImages.length - 1];
+    console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 60)}...`);
+
+    // 이미지 컨테이너 찾기 (호버 시 ⋮ 버튼이 나타나는 래퍼)
+    let container = targetImg;
+    for (let i = 0; i < 8; i++) {
+      container = container.parentElement;
+      if (!container) break;
+      // 호버 효과가 적용되는 단위 요소를 찾음
+      if (container.querySelector('button')) break;
+    }
+
+    // 마우스 호버 이벤트 발생 (⋮ 버튼 표시)
+    const rect = targetImg.getBoundingClientRect();
+    const hoverOpts = { bubbles: true, clientX: rect.right - 10, clientY: rect.top + 10 };
+    (container || targetImg).dispatchEvent(new MouseEvent('mouseenter', hoverOpts));
+    (container || targetImg).dispatchEvent(new MouseEvent('mouseover', hoverOpts));
+    (container || targetImg).dispatchEvent(new MouseEvent('mousemove', hoverOpts));
+    await delay(500);
+
+    // ⋮ (more_vert) 버튼 찾기
+    const moreBtn = findMoreButton(container || targetImg);
+    if (!moreBtn) {
+      console.warn(LOG_PREFIX, '[frame] ⋮ 버튼 못찾음, 이미지 직접 클릭 시도');
+      // 이미지 직접 클릭 후 메뉴 나오는지 확인
+      targetImg.click();
+      await delay(500);
+      const moreBtnRetry = findMoreButton(document);
+      if (!moreBtnRetry) {
+        console.error(LOG_PREFIX, '[frame] ⋮ 버튼 최종 실패');
+        return false;
+      }
+      moreBtnRetry.click();
+      await delay(500);
+    } else {
+      console.log(LOG_PREFIX, '[frame] ⋮ 버튼 발견, 클릭');
+      moreBtn.click();
+      await delay(500);
+    }
+
+    // "프롬프트에 추가" / "Add to prompt" 메뉴 아이템 찾기
+    return await clickAddToPromptMenuItem();
+  }
+
+  function findMoreButton(searchRoot) {
+    // more_vert 또는 more_horiz 아이콘이 있는 버튼
+    const buttons = searchRoot.querySelectorAll('button');
+    for (const btn of buttons) {
+      const icon = btn.querySelector('i');
+      const iconText = icon?.textContent?.trim();
+      if (iconText === 'more_vert' || iconText === 'more_horiz') {
+        return btn;
+      }
+    }
+    // 점 3개 (⋮) 텍스트 직접 매칭
+    for (const btn of buttons) {
+      const text = btn.textContent?.trim();
+      if (text === '⋮' || text === '⋯') return btn;
+    }
+    return null;
+  }
+
+  async function clickAddToPromptMenuItem() {
+    const addTexts = ['프롬프트에 추가', 'Add to prompt'];
+
+    // 방법 1: 새로 나타난 메뉴에서 텍스트 매칭
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const allElements = document.querySelectorAll(
+        '[role="menuitem"], [role="option"], button, div[tabindex], li, a'
+      );
+      for (const el of allElements) {
+        const text = el.textContent?.trim() || '';
+        if (addTexts.some(t => text.includes(t)) && el.offsetParent !== null) {
+          console.log(LOG_PREFIX, `[frame] "프롬프트에 추가" 발견: "${text.substring(0, 40)}"`);
+          el.click();
+          await delay(500);
           return true;
         }
       }
+      await delay(300);
     }
-    console.warn(LOG_PREFIX, '자르기 및 저장 다이얼로그 타임아웃 (15초)');
+
+    // 방법 2: add 아이콘 + 텍스트 조합
+    const items = document.querySelectorAll('[role="menuitem"], li, div');
+    for (const item of items) {
+      const icon = item.querySelector('i');
+      const text = item.textContent?.trim() || '';
+      if (icon?.textContent?.trim() === 'add' && text.length < 40 && item.offsetParent !== null) {
+        console.log(LOG_PREFIX, `[frame] add 아이콘 메뉴 아이템: "${text.substring(0, 40)}"`);
+        item.click();
+        await delay(500);
+        return true;
+      }
+    }
+
+    console.error(LOG_PREFIX, '[frame] "프롬프트에 추가" 메뉴 못찾음');
     return false;
   }
 
-  async function waitForFrameUploaded(position, timeout = 15000) {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      if (isFrameAttached(position)) {
-        console.log(LOG_PREFIX, '프레임 이미지 첨부 확인됨');
-        return true;
+  function isFrameAttached() {
+    // 프롬프트 영역 근처에 프레임 이미지가 첨부되었는지 확인
+    // 프롬프트 입력 영역 근처에 작은 이미지 썸네일이 보이면 첨부된 상태
+    const textarea = findPromptTextarea();
+    if (!textarea) return false;
+    let container = textarea;
+    for (let i = 0; i < 6; i++) {
+      container = container.parentElement;
+      if (!container) break;
+      const imgs = container.querySelectorAll('img');
+      for (const img of imgs) {
+        if (img.offsetWidth > 20 && img.offsetWidth < 200 && img.offsetParent !== null) {
+          return true;
+        }
       }
-      await delay(500);
     }
     return false;
   }
