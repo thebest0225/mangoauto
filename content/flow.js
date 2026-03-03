@@ -413,11 +413,13 @@
         return btn;
       }
     }
-    // 모델명만 있는 버튼 (x숫자 없을 수도)
+    // 모델명만 있는 버튼 (x숫자 없을 수도, 패널 내 드롭다운 제외)
     for (const btn of buttons) {
       if (btn === genBtn) continue;
       const text = btn.textContent || '';
       if (text.length > 80 || text.length < 3) continue;
+      // arrow_drop_down 포함 = 패널 내 모델 드롭다운 → 배지가 아님
+      if (text.includes('arrow_drop_down')) continue;
       if (modelKw.some(kw => text.includes(kw)) && !btn.querySelector('textarea')) {
         console.log(LOG_PREFIX, `[trigger] 모델 버튼 발견: "${text.trim().substring(0, 50)}"`);
         return btn;
@@ -465,7 +467,14 @@
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await delay(400);
     if (!isSettingsPanelOpen()) { console.log(LOG_PREFIX, '[panel] 닫힘 (Esc)'); return; }
-    // 3차: body 클릭
+    // 3차: 프롬프트 영역 클릭 (패널 외부)
+    const promptEl = findPromptTextarea() || document.querySelector('[contenteditable]');
+    if (promptEl) {
+      MangoDom.simulateClick(promptEl);
+      await delay(400);
+      if (!isSettingsPanelOpen()) { console.log(LOG_PREFIX, '[panel] 닫힘 (프롬프트 클릭)'); return; }
+    }
+    // 4차: body 클릭
     document.body.click();
     await delay(400);
     console.log(LOG_PREFIX, `[panel] 닫기 시도 후 상태: ${isSettingsPanelOpen() ? '열림' : '닫힘'}`);
@@ -1068,6 +1077,13 @@
   // 새 워크플로우: 이미지를 프로젝트에 드래그-드롭 업로드 → 갤러리에서 ⋮ 메뉴 → "프롬프트에 추가"
 
   async function uploadFrame(imageDataUrl, position = 'first') {
+    // 설정 패널이 열려있으면 갤러리 이미지를 가리므로 닫기
+    if (isSettingsPanelOpen()) {
+      console.log(LOG_PREFIX, '[frame] 설정 패널 열림 → 닫기 시도');
+      await closeSettingsPanel();
+      await delay(500);
+    }
+
     // HTTP URL → dataUrl 변환 (MangoHub 이미지)
     if (imageDataUrl.startsWith('http')) {
       console.log(LOG_PREFIX, '[frame] HTTP URL → dataURL 변환');
@@ -1146,21 +1162,28 @@
   async function addImageToPromptViaMenu() {
     // 갤러리 이미지 찾기 — 가장 최근 (마지막) 이미지
     const galleryImages = [];
+    const allGalleryImages = [];  // 가시성 무관 폴백용
     document.querySelectorAll('img[src]').forEach(img => {
       if (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com')) {
+        allGalleryImages.push(img);
         if (img.offsetParent !== null && img.offsetWidth > 50) {
           galleryImages.push(img);
         }
       }
     });
 
-    if (galleryImages.length === 0) {
+    // 가시성 체크 통과한 이미지 우선, 없으면 DOM에 있는 이미지 폴백
+    const candidates = galleryImages.length > 0 ? galleryImages : allGalleryImages;
+    if (candidates.length === 0) {
       console.warn(LOG_PREFIX, '[frame] 갤러리에 이미지 없음');
       return false;
     }
+    if (galleryImages.length === 0 && allGalleryImages.length > 0) {
+      console.log(LOG_PREFIX, `[frame] 가시성 체크 실패 → DOM 폴백 (${allGalleryImages.length}개)`);
+    }
 
     // 마지막 이미지 (가장 최근 업로드된 것)
-    const targetImg = galleryImages[galleryImages.length - 1];
+    const targetImg = candidates[candidates.length - 1];
     console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 60)}...`);
 
     // 이미지 컨테이너 찾기 (호버 시 ⋮ 버튼이 나타나는 래퍼)
