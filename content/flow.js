@@ -386,47 +386,106 @@
   // Settings badge at bottom: "🔥 Nano Banana Pro ▢ x1" → click to open panel
   // Panel: Image/Video tabs, Landscape/Portrait, x1-x4, model dropdown
   // Model dropdown: click trigger → floating option list appears
+  // 주의: 패널 내부 요소가 <button>이 아닐 수 있음 → XPath 텍스트 검색 필요
+
+  // Broad selector for all clickable-looking elements
+  const PANEL_CLICKABLE_SEL = 'button, [role="button"], [role="tab"], [role="radio"], [role="option"], [role="switch"], [role="menuitemradio"], [tabindex="0"], [tabindex="-1"]';
+
+  // XPath로 정확한 텍스트를 가진 요소 찾기 (element type 무관)
+  function findElementByExactText(text, context = document.body) {
+    // 정확히 일치하는 텍스트 노드의 부모 (가장 작은 단위)
+    const xpath = `.//text()[normalize-space()='${text}']/..`;
+    try {
+      const result = document.evaluate(xpath, context, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      // 가장 작은 (leaf에 가까운) 요소 반환
+      let best = null;
+      for (let i = 0; i < result.snapshotLength; i++) {
+        const el = result.snapshotItem(i);
+        const rect = el.getBoundingClientRect();
+        // 보이는 요소만 (너비/높이 > 0)
+        if (rect.width < 5 || rect.height < 5) continue;
+        // 너무 큰 컨테이너 제외 (패널 전체가 잡히는 것 방지)
+        if (rect.width > 300 || rect.height > 200) continue;
+        if (!best || el.children.length < best.children.length) {
+          best = el;
+        }
+      }
+      return best;
+    } catch (e) {
+      return null;
+    }
+  }
 
   function isSettingsPanelOpen() {
-    // 패널 감지: x1~x4 버튼이 2개 이상 보이면 패널 열린 상태
-    const buttons = document.querySelectorAll('button');
+    // 방법 1: 기존 broad selector로 x1~x4 검색
+    const elements = document.querySelectorAll(PANEL_CLICKABLE_SEL);
     let xCount = 0;
-    for (const btn of buttons) {
-      if (/^x[1-4]$/.test(btn.textContent?.trim())) xCount++;
+    for (const el of elements) {
+      if (/^x[1-4]$/.test(el.textContent?.trim())) xCount++;
     }
-    return xCount >= 2;
+    if (xCount >= 2) return true;
+
+    // 방법 2: XPath로 x1~x4 텍스트 검색 (비표준 요소 대응)
+    let xpathCount = 0;
+    for (let i = 1; i <= 4; i++) {
+      if (findElementByExactText(`x${i}`)) xpathCount++;
+    }
+    if (xpathCount >= 2) return true;
+
+    // 방법 3: Image/Video + Landscape/Portrait 조합 감지
+    const hasMedia = findElementByExactText('Image') || findElementByExactText('Video');
+    const hasAspect = findElementByExactText('Landscape') || findElementByExactText('Portrait');
+    if (hasMedia && hasAspect) return true;
+
+    return false;
   }
 
   function findSettingsTrigger() {
     // 하단 배지 버튼: 모델명 + xN이 포함된 버튼 (프롬프트 텍스트에어리어 근처)
+    // 예: "🔥 Nano Banana 2 crop_16_9 x1" (이미지), "Video crop_16_9 x1" (비디오)
+    // textContent에서 아이콘 리거쳐가 공백 없이 연결될 수 있음: "Videocrop_16_9x1"
     const genBtn = findGenerateButton();
     const buttons = document.querySelectorAll('button, [role="button"]');
     const modelKw = ['Nano', 'Imagen', 'Veo', 'Banana'];
 
+    // 1차: 모델명 또는 미디어타입 + xN 패턴
     for (const btn of buttons) {
       if (btn === genBtn) continue;
       const text = btn.textContent || '';
       if (text.length > 80 || text.length < 3) continue;
-      // 모델명 + x숫자 패턴 (배지), 또는 Video/Image + x숫자 패턴
+      // Video/Image가 텍스트 어딘가에 포함 (^앵커 제거 - 연결된 텍스트 대응)
       const hasModelOrMedia = modelKw.some(kw => text.includes(kw)) ||
-                              /^(Video|Image|video|image)/.test(text.trim());
+                              /Video|Image/i.test(text);
       if (hasModelOrMedia && /x[1-4]/.test(text)) {
         console.log(LOG_PREFIX, `[trigger] 배지 발견: "${text.trim().substring(0, 50)}"`);
         return btn;
       }
     }
-    // 모델명만 있는 버튼 (x숫자 없을 수도, 패널 내 드롭다운 제외)
+
+    // 2차: crop 아이콘 + xN 패턴 (모델명/미디어타입 없이 배지인 경우)
     for (const btn of buttons) {
       if (btn === genBtn) continue;
       const text = btn.textContent || '';
       if (text.length > 80 || text.length < 3) continue;
-      // arrow_drop_down 포함 = 패널 내 모델 드롭다운 → 배지가 아님
+      if (text.includes('arrow_drop_down')) continue;
+      if (/crop/.test(text) && /x[1-4]/.test(text)) {
+        console.log(LOG_PREFIX, `[trigger] crop+xN 배지 발견: "${text.trim().substring(0, 50)}"`);
+        return btn;
+      }
+    }
+
+    // 3차: 모델명만 있는 버튼 (x숫자 없을 수도, 패널 내 드롭다운 제외)
+    for (const btn of buttons) {
+      if (btn === genBtn) continue;
+      const text = btn.textContent || '';
+      if (text.length > 80 || text.length < 3) continue;
       if (text.includes('arrow_drop_down')) continue;
       if (modelKw.some(kw => text.includes(kw)) && !btn.querySelector('textarea')) {
         console.log(LOG_PREFIX, `[trigger] 모델 버튼 발견: "${text.trim().substring(0, 50)}"`);
         return btn;
       }
     }
+
     console.warn(LOG_PREFIX, '[trigger] 못찾음. 버튼 목록:',
       [...buttons].map(b => `"${b.textContent?.trim()?.substring(0, 30)}"`).filter(t => t.length < 35).join(', '));
     return null;
@@ -530,24 +589,40 @@
   }
 
   async function clickSettingsButton(texts, settingName) {
-    const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      const btnText = btn.textContent?.trim() || '';
+    // 방법 1: Broad selector (button, role, tabindex 등)
+    const elements = document.querySelectorAll(PANEL_CLICKABLE_SEL);
+    for (const el of elements) {
+      const elText = el.textContent?.trim() || '';
       for (const text of texts) {
-        if (btnText === text || (btnText.includes(text) && btnText.length < text.length + 20)) {
-          if (isButtonSelected(btn)) {
-            console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택: "${btnText}"`);
+        if (elText === text || (elText.includes(text) && elText.length < text.length + 20)) {
+          if (isButtonSelected(el)) {
+            console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택: "${elText}"`);
             return true;
           }
-          await panelClick(btn);
+          await panelClick(el);
           await delay(300);
-          console.log(LOG_PREFIX, `[btn] ${settingName} 클릭: "${btnText}" → selected=${isButtonSelected(btn)}`);
+          console.log(LOG_PREFIX, `[btn] ${settingName} 클릭: "${elText}" → selected=${isButtonSelected(el)}`);
           return true;
         }
       }
     }
-    console.warn(LOG_PREFIX, `[btn] ${settingName} 못찾음: ${texts.join('/')}. 버튼들:`,
-      [...buttons].map(b => `"${b.textContent?.trim()?.substring(0, 25)}"`).filter(t => t.length < 30).join(', '));
+
+    // 방법 2: XPath 텍스트 검색 (비표준 요소 대응)
+    for (const text of texts) {
+      const el = findElementByExactText(text);
+      if (el) {
+        if (isButtonSelected(el)) {
+          console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택 (xpath): "${text}"`);
+          return true;
+        }
+        await panelClick(el);
+        await delay(300);
+        console.log(LOG_PREFIX, `[btn] ${settingName} 클릭 (xpath): "${text}" tag=${el.tagName}`);
+        return true;
+      }
+    }
+
+    console.warn(LOG_PREFIX, `[btn] ${settingName} 못찾음: ${texts.join('/')}`);
     return false;
   }
 
@@ -578,19 +653,35 @@
 
   async function setOutputCountNew(count) {
     const target = `x${count}`;
-    const buttons = document.querySelectorAll('button');
-    for (const btn of buttons) {
-      if (btn.textContent?.trim() === target) {
-        if (isButtonSelected(btn)) {
+
+    // 방법 1: Broad selector
+    const elements = document.querySelectorAll(PANEL_CLICKABLE_SEL);
+    for (const el of elements) {
+      if (el.textContent?.trim() === target) {
+        if (isButtonSelected(el)) {
           console.log(LOG_PREFIX, `[count] 이미 선택: ${target}`);
           return true;
         }
-        await panelClick(btn);
+        await panelClick(el);
         await delay(300);
-        console.log(LOG_PREFIX, `[count] 클릭: ${target} → selected=${isButtonSelected(btn)}`);
+        console.log(LOG_PREFIX, `[count] 클릭: ${target} → selected=${isButtonSelected(el)}`);
         return true;
       }
     }
+
+    // 방법 2: XPath fallback
+    const el = findElementByExactText(target);
+    if (el) {
+      if (isButtonSelected(el)) {
+        console.log(LOG_PREFIX, `[count] 이미 선택 (xpath): ${target}`);
+        return true;
+      }
+      await panelClick(el);
+      await delay(300);
+      console.log(LOG_PREFIX, `[count] 클릭 (xpath): ${target} tag=${el.tagName}`);
+      return true;
+    }
+
     console.warn(LOG_PREFIX, `[count] ${target} 못찾음`);
     return false;
   }
