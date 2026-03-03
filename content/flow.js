@@ -589,12 +589,28 @@
   }
 
   async function clickSettingsButton(texts, settingName) {
-    // 방법 1: Broad selector (button, role, tabindex 등)
     const elements = document.querySelectorAll(PANEL_CLICKABLE_SEL);
+
+    // ── 1단계: XPath 정확 텍스트 (비표준 요소 대응, 가장 정확) ──
+    for (const text of texts) {
+      const el = findElementByExactText(text);
+      if (el) {
+        if (isButtonSelected(el)) {
+          console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택 (xpath): "${text}"`);
+          return true;
+        }
+        await panelClick(el);
+        await delay(300);
+        console.log(LOG_PREFIX, `[btn] ${settingName} 클릭 (xpath): "${text}" tag=${el.tagName}`);
+        return true;
+      }
+    }
+
+    // ── 2단계: Broad selector 정확 일치 ──
     for (const el of elements) {
       const elText = el.textContent?.trim() || '';
       for (const text of texts) {
-        if (elText === text || (elText.includes(text) && elText.length < text.length + 20)) {
+        if (elText === text) {
           if (isButtonSelected(el)) {
             console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택: "${elText}"`);
             return true;
@@ -607,18 +623,22 @@
       }
     }
 
-    // 방법 2: XPath 텍스트 검색 (비표준 요소 대응)
-    for (const text of texts) {
-      const el = findElementByExactText(text);
-      if (el) {
-        if (isButtonSelected(el)) {
-          console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택 (xpath): "${text}"`);
+    // ── 3단계: Broad selector 부분 일치 (배지 버튼 제외) ──
+    for (const el of elements) {
+      const elText = el.textContent?.trim() || '';
+      // 배지 버튼 제외: crop 아이콘 + xN 패턴이 함께 있으면 배지
+      if (/crop.*x[1-4]|x[1-4].*crop/.test(elText)) continue;
+      for (const text of texts) {
+        if (elText.includes(text) && elText.length < text.length + 15) {
+          if (isButtonSelected(el)) {
+            console.log(LOG_PREFIX, `[btn] ${settingName} 이미 선택 (fuzzy): "${elText}"`);
+            return true;
+          }
+          await panelClick(el);
+          await delay(300);
+          console.log(LOG_PREFIX, `[btn] ${settingName} 클릭 (fuzzy): "${elText}"`);
           return true;
         }
-        await panelClick(el);
-        await delay(300);
-        console.log(LOG_PREFIX, `[btn] ${settingName} 클릭 (xpath): "${text}" tag=${el.tagName}`);
-        return true;
       }
     }
 
@@ -1167,7 +1187,19 @@
   }
 
   // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
-  // 새 워크플로우: 이미지를 프로젝트에 드래그-드롭 업로드 → 갤러리에서 ⋮ 메뉴 → "프롬프트에 추가"
+  // 업로드 방법 우선순위: ClipboardEvent paste → file input → drag-drop
+  // 프로그래밍 방식 DragEvent는 isTrusted=false라 Chrome이 파일 데이터 차단
+  // 사용자 확인: Ctrl+C/V 붙여넣기는 동작함 → paste 방식 우선
+
+  // 갤러리에 새 이미지 등장 대기 헬퍼
+  async function waitForGalleryImage(countBefore, timeoutMs = 10000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (countGalleryImages() > countBefore) return true;
+      await delay(500);
+    }
+    return false;
+  }
 
   async function uploadFrame(imageDataUrl, position = 'first') {
     // 설정 패널이 열려있으면 갤러리 이미지를 가리므로 닫기
@@ -1197,33 +1229,105 @@
     const imgCountBefore = countGalleryImages();
     console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개`);
 
-    // 갤러리에 이미지가 없으면 드래그-드롭 업로드 (첫 시도)
+    // 갤러리에 이미지가 없으면 업로드 시도 (여러 방법 순차)
     // 이미 있으면 업로드 스킵 (재시도 — 이미지는 갤러리에 남아있음)
     if (imgCountBefore === 0) {
       const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
-      console.log(LOG_PREFIX, `[frame] 첫 업로드: ${file.name}, ${file.size}bytes`);
+      console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
+      let uploaded = false;
 
-      const dropTarget = document.querySelector('textarea') || document.body;
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
-      for (const eventName of ['dragenter', 'dragover', 'drop']) {
-        dropTarget.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer }));
-        await delay(100);
-      }
-      console.log(LOG_PREFIX, '[frame] 드래그-드롭 완료, 업로드 대기...');
+      // ── 방법 1: ClipboardEvent paste (Ctrl+V 동작 확인됨) ──
+      if (!uploaded) {
+        console.log(LOG_PREFIX, '[frame] 방법1: ClipboardEvent paste');
+        try {
+          const textarea = findPromptTextarea();
+          const pasteTarget = textarea || document.querySelector('[contenteditable]') || document.body;
+          if (textarea) { textarea.focus(); await delay(100); }
 
-      // 갤러리에 새 이미지 등장 대기 (최대 15초)
-      let newImageAppeared = false;
-      for (let i = 0; i < 30; i++) {
-        await delay(500);
-        if (countGalleryImages() > imgCountBefore) {
-          console.log(LOG_PREFIX, `[frame] 이미지 등장 (${i * 0.5}s)`);
-          newImageAppeared = true;
-          break;
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          const pasteEvent = new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt
+          });
+          pasteTarget.dispatchEvent(pasteEvent);
+          console.log(LOG_PREFIX, '[frame] paste 이벤트 발송 → 대기...');
+          uploaded = await waitForGalleryImage(imgCountBefore, 8000);
+          if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공');
+
+          // paste가 안 되면 document에도 시도
+          if (!uploaded) {
+            document.dispatchEvent(new ClipboardEvent('paste', {
+              bubbles: true, cancelable: true, clipboardData: dt
+            }));
+            await delay(500);
+            uploaded = await waitForGalleryImage(imgCountBefore, 3000);
+            if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공 (document)');
+          }
+        } catch (e) {
+          console.warn(LOG_PREFIX, '[frame] paste 실패:', e.message);
         }
       }
-      if (!newImageAppeared) {
-        console.warn(LOG_PREFIX, '[frame] 업로드 후 이미지 미등장');
+
+      // ── 방법 2: hidden file input ──
+      if (!uploaded) {
+        console.log(LOG_PREFIX, '[frame] 방법2: file input 탐색');
+        const fileInput = MangoDom.findFileInput();
+        if (fileInput) {
+          console.log(LOG_PREFIX, '[frame] file input 발견:', fileInput.accept || 'any');
+          await MangoDom.attachFileToInput(fileInput, file);
+          uploaded = await waitForGalleryImage(imgCountBefore, 8000);
+          if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ file input 성공');
+        } else {
+          console.log(LOG_PREFIX, '[frame] file input 없음');
+        }
+      }
+
+      // ── 방법 3: drag-drop (여러 타겟) ──
+      if (!uploaded) {
+        console.log(LOG_PREFIX, '[frame] 방법3: drag-drop');
+        const textarea = findPromptTextarea();
+        const targets = [
+          textarea,
+          textarea?.closest('[class*="input"]') || textarea?.parentElement?.parentElement,
+          document.querySelector('[class*="drop"]'),
+          document.querySelector('[class*="upload"]'),
+          document.querySelector('main'),
+          document.querySelector('[role="main"]'),
+          document.body
+        ].filter(Boolean);
+
+        for (const target of targets) {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          for (const evtName of ['dragenter', 'dragover', 'drop']) {
+            target.dispatchEvent(new DragEvent(evtName, {
+              bubbles: true, cancelable: true, dataTransfer: dt
+            }));
+            await delay(100);
+          }
+          await delay(1000);
+          if (countGalleryImages() > imgCountBefore) {
+            uploaded = true;
+            console.log(LOG_PREFIX, `[frame] ✓ drag-drop 성공: ${target.tagName}.${(target.className || '').substring(0, 30)}`);
+            break;
+          }
+        }
+      }
+
+      if (!uploaded) {
+        // 최종 대기: 느린 업로드 대응
+        console.warn(LOG_PREFIX, '[frame] 모든 방법 시도 완료, 최종 대기 (5초)...');
+        uploaded = await waitForGalleryImage(imgCountBefore, 5000);
+      }
+
+      if (!uploaded) {
+        console.error(LOG_PREFIX, '[frame] ✗ 이미지 업로드 실패 (모든 방법)');
+        // 디버그: 페이지의 file input, drop zone 정보 출력
+        const inputs = document.querySelectorAll('input[type="file"]');
+        console.log(LOG_PREFIX, `[frame] file input 수: ${inputs.length}`);
+        inputs.forEach((inp, i) => console.log(LOG_PREFIX, `  input[${i}]: accept=${inp.accept}, disabled=${inp.disabled}, hidden=${inp.hidden}`));
       }
       await delay(1000);
     } else {
