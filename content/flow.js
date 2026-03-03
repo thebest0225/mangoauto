@@ -1075,40 +1075,43 @@
       }
     }
 
-    // Step 1: 프로젝트 페이지에 이미지 드래그-드롭 업로드
-    const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
-    console.log(LOG_PREFIX, `[frame] File 생성: ${file.name}, ${file.size}bytes`);
-
     const imgCountBefore = countGalleryImages();
-    console.log(LOG_PREFIX, `[frame] 업로드 전 갤러리 이미지: ${imgCountBefore}개`);
+    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개`);
 
-    const dropTarget = document.querySelector('textarea') || document.body;
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file);
-    for (const eventName of ['dragenter', 'dragover', 'drop']) {
-      dropTarget.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer }));
-      await delay(100);
-    }
-    console.log(LOG_PREFIX, '[frame] 드래그-드롭 완료, 업로드 대기...');
+    // 갤러리에 이미지가 없으면 드래그-드롭 업로드 (첫 시도)
+    // 이미 있으면 업로드 스킵 (재시도 — 이미지는 갤러리에 남아있음)
+    if (imgCountBefore === 0) {
+      const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
+      console.log(LOG_PREFIX, `[frame] 첫 업로드: ${file.name}, ${file.size}bytes`);
 
-    // Step 2: 갤러리에 새 이미지 등장 대기 (최대 15초)
-    let newImageAppeared = false;
-    for (let i = 0; i < 30; i++) {
-      await delay(500);
-      const imgCountNow = countGalleryImages();
-      if (imgCountNow > imgCountBefore) {
-        console.log(LOG_PREFIX, `[frame] 새 이미지 등장: ${imgCountBefore} → ${imgCountNow} (${i * 0.5}s)`);
-        newImageAppeared = true;
-        break;
+      const dropTarget = document.querySelector('textarea') || document.body;
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      for (const eventName of ['dragenter', 'dragover', 'drop']) {
+        dropTarget.dispatchEvent(new DragEvent(eventName, { bubbles: true, cancelable: true, dataTransfer }));
+        await delay(100);
       }
+      console.log(LOG_PREFIX, '[frame] 드래그-드롭 완료, 업로드 대기...');
+
+      // 갤러리에 새 이미지 등장 대기 (최대 15초)
+      let newImageAppeared = false;
+      for (let i = 0; i < 30; i++) {
+        await delay(500);
+        if (countGalleryImages() > imgCountBefore) {
+          console.log(LOG_PREFIX, `[frame] 이미지 등장 (${i * 0.5}s)`);
+          newImageAppeared = true;
+          break;
+        }
+      }
+      if (!newImageAppeared) {
+        console.warn(LOG_PREFIX, '[frame] 업로드 후 이미지 미등장');
+      }
+      await delay(1000);
+    } else {
+      console.log(LOG_PREFIX, '[frame] 갤러리에 이미지 존재 → 업로드 스킵, 프롬프트에 추가만 수행');
     }
 
-    if (!newImageAppeared) {
-      console.warn(LOG_PREFIX, '[frame] 갤러리에 새 이미지 미등장, 기존 이미지로 시도');
-    }
-    await delay(1000);
-
-    // Step 3: 가장 최근 이미지에서 ⋮ 메뉴 열기 → "프롬프트에 추가" 클릭
+    // 항상 실행: ⋮ 메뉴 → "프롬프트에 추가" (실패/재시도 시 프레임 참조가 초기화되므로)
     const added = await addImageToPromptViaMenu();
     if (added) {
       console.log(LOG_PREFIX, '[frame] ✓ 프롬프트에 추가 완료');
