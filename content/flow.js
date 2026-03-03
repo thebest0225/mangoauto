@@ -537,6 +537,14 @@
     return await clickSettingsButton(['Image', '이미지', 'Images'], 'Media type');
   }
 
+  async function setVideoSubMode(mode) {
+    if (mode === 'image-video') {
+      return await clickSettingsButton(['Frame', '프레임'], 'Video sub-mode');
+    }
+    // ingredients 모드는 추후 구현
+    return false;
+  }
+
   async function setAspectRatioNew(ratio) {
     const map = {
       '16:9': ['Landscape', '가로'],
@@ -805,6 +813,12 @@
 
     await setMediaType(mode);
     await delay(300);
+
+    // Video 서브모드 선택 (Frame / Ingredients)
+    if (mode.includes('video')) {
+      await setVideoSubMode(mode);
+      await delay(300);
+    }
 
     if (!already && relevant) {
       console.log(LOG_PREFIX, `[settings] 적용: model=${relevant.model}, ratio=${relevant.aspectRatio}, count=${relevant.outputCount}`);
