@@ -10,6 +10,8 @@ let activeTabIds = [];      // Multiple tabs for concurrent processing
 let automationSettings = {};
 let allResults = [];        // { index, success, dataUrl?, filename? }
 let reviewModeEnabled = false;
+let _currentLoopId = 0;     // Loop generation ID (prevents stale loops)
+let _generationId = 0;      // Watchdog generation tracking (increments per item)
 
 // 썸네일 문구 → 최종 프롬프트 조합 (노란=큰글씨, 흰=작은글씨, swap=위치만)
 function _buildThumbFinalPrompt(basePrompt, textData) {
@@ -61,7 +63,7 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 // ─── Keepalive + Watchdog via chrome.alarms ───
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 });
 let _lastStateChange = Date.now();
-let _lastWatchdogState = null;
+let _lastWatchdogGenId = -1;  // 세대 ID 추적 (상태 이름 대신)
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') {
@@ -69,19 +71,20 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const state = sm.state;
     const stuckStates = [AutoState.GENERATING, AutoState.DOWNLOADING, AutoState.UPLOADING];
 
-    if (state !== _lastWatchdogState) {
+    // 세대 ID가 바뀌면 타이머 리셋 (새 아이템 시작됨)
+    if (_generationId !== _lastWatchdogGenId) {
       _lastStateChange = Date.now();
-      _lastWatchdogState = state;
+      _lastWatchdogGenId = _generationId;
     }
 
     if (stuckStates.includes(state)) {
-      // 타임아웃 계산: Grok 비디오는 길게 (10분), 나머지는 5분
-      const isGrokVideo = sm.platform === 'grok' && sm.mediaType === 'video';
-      const maxStuckMs = isGrokVideo ? 600000 : 300000; // 10분 / 5분
+      // 타임아웃 계산: 비디오는 길게 (10분), 이미지는 5분
+      const isVideo = sm.mediaType === 'video';
+      const maxStuckMs = isVideo ? 600000 : 300000; // 10분 / 5분
       const elapsed = Date.now() - _lastStateChange;
 
       if (elapsed > maxStuckMs) {
-        broadcastLog(`Watchdog: ${state} 상태 ${Math.round(elapsed/1000)}초 경과 → 강제 에러 처리`, 'error');
+        broadcastLog(`Watchdog: ${state} 상태 ${Math.round(elapsed/1000)}초 경과 (genId=${_generationId}) → 강제 에러 처리`, 'error');
 
         // 현재 아이템 실패 처리 후 다음으로 진행
         const item = sm.currentItem;
@@ -375,6 +378,7 @@ async function startAutomation(config) {
   activeTasks.clear();
   pendingCompletions = 0;
   pipelineNextIdx = 0;
+  _generationId = 0;     // 워치독 세대 초기화
 
   // Concurrent settings
   concurrentCount = parseInt(settings?.general?.concurrentCount) || 1;
@@ -383,6 +387,7 @@ async function startAutomation(config) {
 
   // Max retries
   sm.maxRetries = settings?.general?.maxRetries || 3;
+  sm._defaultMaxRetries = sm.maxRetries;  // next()에서 원복용
 
   // Determine media type from mode
   const mediaType = ['text-image', 'image-image'].includes(mode) ? 'image' : 'video';
@@ -607,16 +612,19 @@ async function waitForTabLoad(tabId) {
 // ─── Main Automation Loop ───
 async function runLoop() {
   if (sm.state !== AutoState.PREPARING) return;
+  _currentLoopId++;  // 새 루프 세대 시작 → 이전 루프는 while 조건에서 자동 탈출
+  const myLoopId = _currentLoopId;
+  broadcastLog(`runLoop 시작 (loopId=${myLoopId})`, 'info');
   if (concurrentCount > 1) {
     await runPipelineMode();
   } else {
-    await runSequentialLoop();
+    await runSequentialLoop(myLoopId);
   }
 }
 
 // ─── Sequential loop (single tab) ───
-async function runSequentialLoop() {
-  while (sm.state === AutoState.PREPARING) {
+async function runSequentialLoop(loopId) {
+  while (sm.state === AutoState.PREPARING && _currentLoopId === loopId) {
     const item = sm.currentItem;
     if (!item) {
       sm.transition(AutoState.COMPLETED);
@@ -625,6 +633,7 @@ async function runSequentialLoop() {
 
     const idx = sm.currentIndex + 1;
     const total = sm.queue.length;
+    _generationId++;  // 워치독 타이머 리셋용 세대 ID
     MangoUtils.log('info', `Processing ${idx}/${total}: ${item.text}`);
     broadcastLog(`[${idx}/${total}] ${item.text}`, 'info');
 
@@ -659,6 +668,16 @@ async function runSequentialLoop() {
 
     // Content script가 에러를 반환한 경우 → 인라인 처리 (GENERATION_ERROR 레이스 방지)
     if (resp?.error) {
+      // "Already processing" = content script가 이전 생성 중 → 완료될 때까지 대기
+      if (resp.error === 'Already processing') {
+        broadcastLog('Content script 생성 중 → GENERATION_COMPLETE 대기...', 'warn');
+        // 이미 생성 중이므로 현재 루프를 종료하고 GENERATION_COMPLETE 핸들러에 맡김
+        // handleSequentialComplete → handleCooldownAndNext가 다음 아이템을 처리함
+        sm.transition(AutoState.GENERATING);
+        broadcastState(getExtendedSnapshot());
+        break;
+      }
+
       broadcastLog(`생성 에러: ${resp.error}`, 'error');
       sm.markError(resp.error);
       broadcastState(getExtendedSnapshot());
@@ -1367,6 +1386,7 @@ async function handleCooldownAndNext() {
     let min, max;
     if (false) {
       // (구: Flow 짧은 쿨다운 하드코딩 제거 — 사용자 설정값 사용)
+
     } else {
       min = sm._cooldownMin || 10000;
       max = sm._cooldownMax || 15000;
