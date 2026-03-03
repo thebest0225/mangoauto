@@ -539,7 +539,7 @@
 
   async function setVideoSubMode(mode) {
     if (mode === 'image-video') {
-      return await clickSettingsButton(['Frame', '프레임'], 'Video sub-mode');
+      return await clickSettingsButton(['Frames', 'Frame', '프레임'], 'Video sub-mode');
     }
     // ingredients 모드는 추후 구현
     return false;
