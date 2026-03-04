@@ -59,6 +59,58 @@
     '생성할 수 없', '정책', '다시 시도', '오류', '실패'
   ];
 
+  // 2차 탐색(plain div/span)에서도 감지할 강한 에러 패턴 (false positive 적은 것만)
+  const STRONG_ERROR_PATTERNS = [
+    'failed', 'generation failed', 'audio generation failed',
+    'something went wrong', 'could not generate', 'unable to generate',
+    'error generating', 'violat', 'content policy', 'harmful',
+    'prohibited', 'not allowed', 'inappropriate', 'policies'
+  ];
+
+  // ─── Error Classification ───
+  function classifyError(errorText) {
+    const lower = (errorText || '').toLowerCase();
+    if (lower.includes('audio') && lower.includes('failed')) return 'AUDIO_FAILED';
+    if (lower.includes('something went wrong')) return 'SOMETHING_WRONG';
+    if (lower.includes('violat') || lower.includes('policies') || lower.includes('policy') ||
+        lower.includes('harmful') || lower.includes('content filter') ||
+        lower.includes('prohibited') || lower.includes('not allowed') ||
+        lower.includes('inappropriate') || lower.includes('safety')) return 'CENSORSHIP';
+    return 'GENERATION_FAILED';
+  }
+
+  // ─── Click Retry button in video area ───
+  async function clickRetryButton() {
+    // 1. "retry" / "다시 시도" 텍스트 버튼
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const text = btn.textContent?.trim().toLowerCase() || '';
+      if (text.includes('retry') || text.includes('다시 시도') || text.includes('재시도')) {
+        const rect = btn.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          MangoDom.simulateClick(btn);
+          console.log(LOG_PREFIX, `Clicked Retry button: "${btn.textContent.trim()}"`);
+          return true;
+        }
+      }
+    }
+    // 2. Material icon "refresh" / "replay" / "restart_alt" 버튼
+    const icons = document.querySelectorAll('i, mat-icon, .material-icons, .material-symbols-outlined');
+    for (const icon of icons) {
+      const text = icon.textContent?.trim().toLowerCase() || '';
+      if (text === 'refresh' || text === 'replay' || text === 'restart_alt') {
+        const btn = icon.closest('button') || icon;
+        const rect = btn.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          MangoDom.simulateClick(btn);
+          console.log(LOG_PREFIX, `Clicked retry icon button: "${text}"`);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // ─── Message Handler ───
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'EXECUTE_PROMPT') {
@@ -1715,19 +1767,22 @@
       });
     }
 
-    // 현재 보이는 "Failed" 등 에러 텍스트를 스냅샷 (제거 안 되는 것도 기록하여 이후 무시)
+    // 현재 보이는 에러 텍스트를 스냅샷 (제거 안 되는 것도 기록하여 이후 무시)
     _errorSnapshotTexts.clear();
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
       if (el.children.length > 3) continue;
       const text = el.textContent?.trim() || '';
-      if (text.length < 3 || text.length > 200) continue;
+      if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
-      if (lower === 'failed' || lower.startsWith('failed\n') ||
-          lower.includes('generation failed') || lower.includes('audio generation failed')) {
-        _errorSnapshotTexts.add(text);
-        console.log(LOG_PREFIX, `Snapshot existing error: "${text.substring(0, 50)}"`);
+      // 모든 STRONG_ERROR_PATTERNS으로 스냅샷 (검열, 실패 등 모두 포함)
+      for (const pattern of STRONG_ERROR_PATTERNS) {
+        if (lower.includes(pattern)) {
+          _errorSnapshotTexts.add(text);
+          console.log(LOG_PREFIX, `Snapshot existing error: "${text.substring(0, 80)}"`);
+          break;
+        }
       }
     }
   }
@@ -1741,6 +1796,7 @@
 
     const start = Date.now();
     const checkInterval = 5000;
+    let inlineRetryCount = 0; // Audio failed 등 인라인 재시도 횟수
 
     // Give it time to start
     await delay(5000);
@@ -1760,8 +1816,25 @@
           return;
         }
         if (!lastApiResult.ok) {
-          const e = new Error(`API error: ${lastApiResult.error || 'Unknown'}`);
-          e.errorCode = lastApiResult.errorCode || '';
+          // API 에러도 인라인 복구 시도
+          const apiErrText = lastApiResult.error || 'Unknown';
+          const apiErrType = classifyError(apiErrText);
+          console.log(LOG_PREFIX, `API error: type=${apiErrType}, "${apiErrText.substring(0, 80)}"`);
+
+          if (apiErrType === 'AUDIO_FAILED' && inlineRetryCount < 2) {
+            console.log(LOG_PREFIX, `Audio failed (API) → Retry 버튼 클릭 시도 (${inlineRetryCount + 1}/2)...`);
+            lastApiResult = null; // API 결과 초기화
+            await delay(2000);
+            const clicked = await clickRetryButton();
+            if (clicked) {
+              inlineRetryCount++;
+              await delay(5000);
+              continue;
+            }
+          }
+
+          const e = new Error(`API error: ${apiErrText}`);
+          e.errorCode = lastApiResult.errorCode || apiErrType;
           throw e;
         }
         // API 200 OK이지만 미디어 없음 → DOM에서도 확인 후 판단
@@ -1784,10 +1857,18 @@
 
         // 20초 이상: 스피너 있어도 DOM 에러 체크 (생성 실패 시 스피너와 에러가 공존)
         if (elapsed > 20) {
-          const err = checkForErrors();
-          if (err) {
-            console.log(LOG_PREFIX, `Generation error detected despite spinner: ${err.substring(0, 80)}`);
-            throw new Error(`Generation error: ${err}`);
+          const errText = checkForErrors();
+          if (errText) {
+            const recovered = await tryInlineRecovery(errText, inlineRetryCount);
+            if (recovered) {
+              inlineRetryCount++;
+              continue;
+            }
+            const errType = classifyError(errText);
+            console.log(LOG_PREFIX, `Generation error (spinner+): type=${errType}, "${errText.substring(0, 80)}"`);
+            const e = new Error(`Generation error: ${errText}`);
+            e.errorCode = errType;
+            throw e;
           }
         }
 
@@ -1801,8 +1882,19 @@
         }
       } else {
         // 진행 표시 없을 때만 DOM 에러 체크 (API result보다 후순위)
-        const err = checkForErrors();
-        if (err) throw new Error(`Generation error: ${err}`);
+        const errText = checkForErrors();
+        if (errText) {
+          const recovered = await tryInlineRecovery(errText, inlineRetryCount);
+          if (recovered) {
+            inlineRetryCount++;
+            continue;
+          }
+          const errType = classifyError(errText);
+          console.log(LOG_PREFIX, `Generation error: type=${errType}, "${errText.substring(0, 80)}"`);
+          const e = new Error(`Generation error: ${errText}`);
+          e.errorCode = errType;
+          throw e;
+        }
 
         if (elapsed > 10) {
           // No progress indicators and no API result - check for new videos/images
@@ -1818,6 +1910,29 @@
     }
 
     throw new Error('Generation timed out');
+  }
+
+  // ─── Inline Recovery: 에러 타입에 따라 flow.js 내에서 복구 시도 ───
+  async function tryInlineRecovery(errorText, retryCount) {
+    const errType = classifyError(errorText);
+
+    // AUDIO_FAILED → Retry 버튼 클릭 (최대 2회)
+    if (errType === 'AUDIO_FAILED' && retryCount < 2) {
+      console.log(LOG_PREFIX, `Audio failed → Retry 버튼 클릭 시도 (${retryCount + 1}/2)...`);
+      _errorSnapshotTexts.add(errorText); // 이 에러 텍스트 이후 무시
+      lastApiResult = null; // API 결과 초기화 (재생성 감지를 위해)
+      await delay(1000);
+      const clicked = await clickRetryButton();
+      if (clicked) {
+        console.log(LOG_PREFIX, 'Retry 버튼 클릭 성공 → 재생성 대기');
+        await delay(5000); // 재시작 대기
+        return true;
+      }
+      console.log(LOG_PREFIX, 'Retry 버튼 못 찾음 → 에러 throw');
+    }
+
+    // SOMETHING_WRONG, CENSORSHIP, GENERATION_FAILED → background.js에서 처리 (full retry)
+    return false;
   }
 
   let existingVideos = new Set();
@@ -2155,20 +2270,25 @@
       }
     }
 
-    // 2차: "Failed" 텍스트가 포함된 큰 영역 탐색 (Flow 비디오 생성 실패 패턴)
-    // Flow는 비디오 영역에 "Failed\nAudio generation failed..." 같은 텍스트를 직접 표시
+    // 2차: 에러 텍스트가 포함된 일반 DOM 영역 탐색 (Flow 비디오 생성 실패/검열 패턴)
+    // Flow는 비디오 영역에 "Failed\nAudio generation failed..." 또는
+    // "This prompt might violate our policies..." 같은 텍스트를 직접 표시 (role="alert" 없이)
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
-      if (el.children.length > 3) continue; // 큰 컨테이너 제외
+      if (el.children.length > 5) continue; // 큰 컨테이너 제외
       const text = el.textContent?.trim() || '';
-      if (text.length < 3 || text.length > 200) continue;
+      if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
-      if (lower === 'failed' || lower.startsWith('failed\n') ||
-          lower.includes('generation failed') || lower.includes('audio generation failed')) {
-        // 이전 생성의 에러 텍스트인지 확인 (스냅샷에 있으면 무시)
-        if (_errorSnapshotTexts.has(text)) continue;
-        return text;
+
+      // 이전 생성의 에러 텍스트인지 확인 (스냅샷에 있으면 무시)
+      if (_errorSnapshotTexts.has(text)) continue;
+
+      // STRONG_ERROR_PATTERNS 매칭 (false positive 낮은 패턴만)
+      for (const pattern of STRONG_ERROR_PATTERNS) {
+        if (lower.includes(pattern)) {
+          return text;
+        }
       }
     }
 

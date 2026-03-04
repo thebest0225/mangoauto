@@ -689,7 +689,14 @@ async function runSequentialLoop(loopId) {
                               resp.error.includes('이미지 업로드 거부') ||
                               resp.errorCode === 'IMAGE_REJECTED';
 
-      broadcastLog(`생성 에러: ${resp.error}${isImageRejected ? ' (이미지 거부)' : ''}`, 'error');
+      // 에러 유형 분류 (flow.js에서 전달된 errorCode 활용)
+      const isAudioFailed = resp.errorCode === 'AUDIO_FAILED';
+      const isSomethingWrong = resp.errorCode === 'SOMETHING_WRONG';
+      const errTypeLabel = isImageRejected ? '이미지 거부' :
+                           isAudioFailed ? '오디오 실패' :
+                           isSomethingWrong ? '일시적 오류' : '';
+
+      broadcastLog(`생성 에러: ${resp.error}${errTypeLabel ? ` (${errTypeLabel})` : ''}`, 'error');
       sm.markError(resp.error);
       broadcastState(getExtendedSnapshot());
       if (sm.state === AutoState.ERROR) {
@@ -701,13 +708,15 @@ async function runSequentialLoop(loopId) {
 
       // maxRetries 초과 후 처리
       // 이미지 업로드 거부 → LLM 프롬프트 수정 안 함 (이미지 문제이지 프롬프트 문제가 아님)
+      // 오디오 실패 / 일시적 오류 → LLM 프롬프트 수정 안 함 (프롬프트 문제가 아님)
       // 프롬프트/생성 검열 → LLM 프롬프트 수정 시도
       const llmCfg = automationSettings?.llm;
       const llmMaxAttempts = llmCfg?.retryCount || 2;
       const llmAttemptsSoFar = item._llmRewriteCount || 0;
-      const isCensorship = !isImageRejected && isCensorshipError(resp.error, resp.errorCode);
+      const skipLlm = isImageRejected || isAudioFailed || isSomethingWrong;
+      const isCensorship = !skipLlm && isCensorshipError(resp.error, resp.errorCode);
 
-      broadcastLog(`LLM 조건 체크: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, isImageRejected=${isImageRejected}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(resp.error||'').substring(0,80)}"`, 'info');
+      broadcastLog(`LLM 조건 체크: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, skipLlm=${skipLlm}, errorCode=${resp.errorCode || 'none'}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(resp.error||'').substring(0,80)}"`, 'info');
 
       if (llmCfg?.enabled && llmCfg?.kieApiKey &&
           !item._isThumbnail &&
@@ -1282,12 +1291,17 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
 
   } else {
     // 실패 → 검열 에러이면 LLM 수정 후 큐에 재삽입
+    // 오디오 실패/일시적 오류는 LLM 수정 불필요 (프롬프트 문제 아님)
     const llmCfg = automationSettings?.llm;
     const llmMaxAttempts = llmCfg?.retryCount || 2;
     const llmAttemptsSoFar = item._llmRewriteCount || 0;
-    const isCensorship = isCensorshipError(errorMsg, '');
+    const errorLower = (errorMsg || '').toLowerCase();
+    const isAudioFailedPipe = errorLower.includes('audio') && errorLower.includes('failed');
+    const isSomethingWrongPipe = errorLower.includes('something went wrong');
+    const skipLlmPipe = isAudioFailedPipe || isSomethingWrongPipe;
+    const isCensorship = !skipLlmPipe && isCensorshipError(errorMsg, '');
 
-    broadcastLog(`[파이프라인] LLM 조건: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(errorMsg||'').substring(0,80)}"`, 'info');
+    broadcastLog(`[파이프라인] LLM 조건: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, skipLlm=${skipLlmPipe}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(errorMsg||'').substring(0,80)}"`, 'info');
 
     if (llmCfg?.enabled && llmCfg?.kieApiKey &&
         !item._isThumbnail &&
