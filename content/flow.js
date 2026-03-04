@@ -155,6 +155,7 @@
       checkStopped();
 
       // Step 4: Snapshot existing media (생성 전 기존 미디어 기록)
+      lastApiResult = null; // 이전 아이템의 결과 초기화
       snapshotExistingMedia();
 
       // Step 5: Fill prompt (DOM + MAIN world injection)
@@ -1745,15 +1746,23 @@
 
       // Check progress indicators FIRST (생성 진행 중이면 DOM 에러 무시)
       const generating = countGeneratingItems();
+      const elapsed = Math.round((Date.now() - start) / 1000);
       if (generating > 0) {
-        const elapsed = Math.round((Date.now() - start) / 1000);
         console.log(LOG_PREFIX, `Generating... ${elapsed}s (${generating} items in progress)`);
+        // 60초 이상 경과 시 진행 표시가 있어도 미디어 체크 (스피너가 사라지지 않는 경우 대비)
+        if (elapsed > 60) {
+          const hasNewMedia = checkForNewMedia();
+          if (hasNewMedia) {
+            console.log(LOG_PREFIX, 'Generation complete (media detected despite progress indicators)');
+            return;
+          }
+        }
       } else {
         // 진행 표시 없을 때만 DOM 에러 체크 (API result보다 후순위)
         const err = checkForErrors();
         if (err) throw new Error(`Generation error: ${err}`);
 
-        if (Date.now() - start > 10000) {
+        if (elapsed > 10) {
           // No progress indicators and no API result - check for new videos/images
           const hasNewMedia = checkForNewMedia();
           if (hasNewMedia) {
@@ -1774,14 +1783,25 @@
 
   function snapshotExistingMedia() {
     document.querySelectorAll('video[src]').forEach(el => existingVideos.add(el.src));
+    document.querySelectorAll('video source[src]').forEach(el => existingVideos.add(el.src));
     document.querySelectorAll('img[src]').forEach(el => existingImages.add(el.src));
   }
 
   function checkForNewMedia() {
-    // 새 비디오 감지
+    // 새 비디오 감지 (storage.googleapis.com 또는 기타 http URL)
     const videos = document.querySelectorAll('video[src]');
     for (const v of videos) {
-      if (v.src && !existingVideos.has(v.src) && v.src.includes('storage.googleapis.com')) {
+      if (v.src && !existingVideos.has(v.src) &&
+          v.src.startsWith('http') && !v.src.startsWith('blob:')) {
+        console.log(LOG_PREFIX, `New video detected: ${v.src.substring(0, 80)}`);
+        return true;
+      }
+    }
+    // video > source 엘리먼트 체크
+    const sources = document.querySelectorAll('video source[src]');
+    for (const s of sources) {
+      if (s.src && !existingVideos.has(s.src) && s.src.startsWith('http')) {
+        console.log(LOG_PREFIX, `New video source detected: ${s.src.substring(0, 80)}`);
         return true;
       }
     }

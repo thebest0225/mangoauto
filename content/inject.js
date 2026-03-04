@@ -334,10 +334,15 @@
       if (isVideoCheck) {
         const clone = response.clone();
         clone.json().then((data) => {
-          if (!data.operations) return;
+          if (!data.operations) {
+            console.log(LOG_PREFIX, `📡 Check 응답: operations 없음, keys=[${Object.keys(data).join(',')}]`);
+            return;
+          }
           for (const op of data.operations) {
             const opName = op.operation?.name;
             const pending = pendingVideoOps.get(opName);
+            // 디버그: 모든 operation 상태 출력
+            console.log(LOG_PREFIX, `📡 Op: name=${opName?.substring(0, 20)}, status=${op.status}, pending=${!!pending}, mapSize=${pendingVideoOps.size}`);
             if (!pending) continue;
             if (op.status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') {
               const videoUrl = op.operation?.metadata?.video?.fifeUrl ||
