@@ -248,10 +248,11 @@
     const isImageApi = url.includes('batchGenerate') &&
                        !url.includes('Async') &&
                        !url.includes('Check');
-    const isVideoStart = url.includes('batchAsyncGenerateVideo');
+    const isVideoStartImage = url.includes('batchAsyncGenerateVideoStartImage');
+    const isVideoStart = url.includes('batchAsyncGenerateVideo') && !isVideoStartImage;
     const isVideoCheck = url.includes('batchCheckAsyncVideo');
 
-    if (!isImageApi && !isVideoStart && !isVideoCheck) {
+    if (!isImageApi && !isVideoStart && !isVideoStartImage && !isVideoCheck) {
       return originalFetch.apply(this, args);
     }
 
@@ -267,12 +268,24 @@
         const parsed = JSON.parse(body);
         requestPrompt = parsed.requests?.[0]?.prompt ||
                        parsed.requests?.[0]?.textInput?.prompt ||
+                       parsed.requests?.[0]?.textInput?.text ||
+                       parsed.requests?.[0]?.text ||
                        parsed.request?.prompt || '';
         console.log(LOG_PREFIX, `🌐 Request prompt: "${(requestPrompt || '(empty)').substring(0, 40)}"`);
+        // StartImage API: 요청 구조 디버그
+        if (isVideoStartImage && parsed.requests?.[0]) {
+          const keys = Object.keys(parsed.requests[0]);
+          console.log(LOG_PREFIX, `📋 StartImage 요청 필드: [${keys.join(', ')}]`);
+        }
       }
     } catch (e) {}
 
     // ─── Prompt Injection: replace empty prompt ───
+    // StartImage API (Frames)는 요청 구조가 다름 — Slate 에디터가 직접 처리하므로 주입 불필요
+    if (isVideoStartImage && pendingPrompt) {
+      console.log(LOG_PREFIX, `🎬 StartImage API — Slate에서 프롬프트 처리, 주입 스킵: "${pendingPrompt.substring(0, 40)}"`);
+      pendingPrompt = null;
+    }
     if ((isImageApi || isVideoStart) && pendingPrompt) {
       try {
         const body = args[1]?.body;
@@ -351,8 +364,8 @@
         return response;
       }
 
-      // ─── Video Start ───
-      if (isVideoStart) {
+      // ─── Video Start (regular + StartImage/Frames) ───
+      if (isVideoStart || isVideoStartImage) {
         const clone = response.clone();
         clone.json().then((data) => {
           if (response.ok && data.operations) {
