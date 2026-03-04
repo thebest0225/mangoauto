@@ -1445,9 +1445,47 @@
       return false;
     }
 
-    console.log(LOG_PREFIX, `[frame] ⋮ 버튼 발견: aria="${moreBtn.getAttribute('aria-label')}", text="${moreBtn.textContent?.trim()?.substring(0, 20)}"`);
-    moreBtn.click();
-    await delay(600);
+    console.log(LOG_PREFIX, `[frame] ⋮ 버튼 발견: aria="${moreBtn.getAttribute('aria-label')}", text="${moreBtn.textContent?.trim()?.substring(0, 20)}", parent=${moreBtn.parentElement?.tagName}`);
+
+    // 컨테이너가 <a> 태그면 클릭 시 네비게이션 방지
+    const anchorParent = moreBtn.closest('a');
+    const preventNav = (e) => { e.preventDefault(); e.stopPropagation(); };
+    if (anchorParent) {
+      anchorParent.addEventListener('click', preventNav, { capture: true });
+      console.log(LOG_PREFIX, '[frame] <a> 부모 발견 → 네비게이션 차단 등록');
+    }
+
+    // 전체 마우스 이벤트 시퀀스 (단순 .click()은 프레임워크에서 무시될 수 있음)
+    const btnRect = moreBtn.getBoundingClientRect();
+    const btnX = btnRect.left + btnRect.width / 2;
+    const btnY = btnRect.top + btnRect.height / 2;
+    const clickOpts = { bubbles: true, cancelable: true, clientX: btnX, clientY: btnY, button: 0 };
+    const ptrOpts = { ...clickOpts, pointerId: 1, pointerType: 'mouse' };
+
+    moreBtn.dispatchEvent(new PointerEvent('pointerdown', ptrOpts));
+    moreBtn.dispatchEvent(new MouseEvent('mousedown', clickOpts));
+    await delay(80);
+    moreBtn.dispatchEvent(new PointerEvent('pointerup', ptrOpts));
+    moreBtn.dispatchEvent(new MouseEvent('mouseup', clickOpts));
+    moreBtn.dispatchEvent(new MouseEvent('click', clickOpts));
+    await delay(800);
+
+    // 디버그: 클릭 후 오버레이/메뉴 상태 확인
+    const overlays = document.querySelectorAll('.cdk-overlay-pane, .cdk-overlay-container, [role="menu"], [role="listbox"], .mat-mdc-menu-panel, .mdc-menu-surface');
+    console.log(LOG_PREFIX, `[frame] ⋮ 클릭 후 오버레이/메뉴: ${overlays.length}개`,
+      [...overlays].slice(0, 5).map(o => `${o.tagName}.${(o.className||'').substring(0, 30)} children=${o.children.length} visible=${o.offsetParent !== null}`).join(' | '));
+
+    // 메뉴 안 열렸으면 .click() 폴백
+    if (overlays.length === 0 || [...overlays].every(o => o.children.length === 0)) {
+      console.log(LOG_PREFIX, '[frame] 이벤트 시퀀스 실패 → .click() 폴백');
+      moreBtn.click();
+      await delay(800);
+    }
+
+    // 네비게이션 차단 해제
+    if (anchorParent) {
+      anchorParent.removeEventListener('click', preventNav, { capture: true });
+    }
 
     return await clickAnimateMenuItem();
   }
