@@ -918,26 +918,32 @@ function updateQueueListFromState(state) {
 
   const isCompleted = state.state === 'COMPLETED';
 
-  // 결과 맵 빌드 (index → success)
+  // 결과 맵 빌드 (segmentIndex → success)
   const doneMap = new Map();
   for (const r of state.results) {
     doneMap.set(r.index, r.success);
   }
 
-  // 파이프라인 모드: 현재 진행 중인 항목 인덱스
+  // 파이프라인 모드: 현재 진행 중인 항목 인덱스 (segmentIndex 기준)
   const activeSet = new Set(state.activeIndices || []);
+  // 현재 진행중 항목의 segmentIndex (선택 필터링 시 currentIndex와 DOM 위치 불일치 방지)
+  const currentSegIdx = state.currentItem?.segmentIndex;
 
   items.forEach((item, i) => {
     const statusEl = item.querySelector('.queue-status');
     if (!statusEl) return;
 
-    if (doneMap.has(i)) {
+    // data-idx(segmentIndex) 기준으로 매칭 (DOM 위치가 아닌 실제 세그먼트 인덱스)
+    const selectBox = item.querySelector('.queue-select');
+    const segIdx = selectBox ? parseInt(selectBox.dataset.idx) : i;
+
+    if (doneMap.has(segIdx)) {
       // 완료 또는 실패
-      const success = doneMap.get(i);
+      const success = doneMap.get(segIdx);
       statusEl.textContent = success ? '완료' : '실패';
       statusEl.className = `queue-status ${success ? 'qs-done' : 'qs-fail'}`;
-    } else if (activeSet.size > 0 ? activeSet.has(i) : i === state.currentIndex) {
-      // 진행중 (파이프라인: activeIndices, 순차: currentIndex)
+    } else if (activeSet.size > 0 ? activeSet.has(segIdx) : segIdx === currentSegIdx) {
+      // 진행중 (파이프라인: activeIndices, 순차: currentItem.segmentIndex)
       statusEl.textContent = '진행중';
       statusEl.className = 'queue-status qs-running';
     } else {
@@ -951,12 +957,12 @@ function updateQueueListFromState(state) {
       const existing = item.querySelector('.queue-select');
       if (existing) {
         // 프리뷰 체크박스를 재시도용으로 전환
-        existing.dataset.index = i;
+        existing.dataset.index = segIdx;
       } else {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.className = 'queue-check';
-        cb.dataset.index = i;
+        cb.dataset.index = segIdx;
         item.insertBefore(cb, item.firstChild);
       }
     }

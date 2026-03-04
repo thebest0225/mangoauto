@@ -1361,7 +1361,7 @@
   async function addImageToPromptViaMenu() {
     // 갤러리 이미지 찾기 — 가장 최근 (마지막) 이미지
     const galleryImages = [];
-    const allGalleryImages = [];  // 가시성 무관 폴백용
+    const allGalleryImages = [];
     document.querySelectorAll('img[src]').forEach(img => {
       if (isGalleryImage(img)) {
         allGalleryImages.push(img);
@@ -1371,75 +1371,104 @@
       }
     });
 
-    // 가시성 체크 통과한 이미지 우선, 없으면 DOM에 있는 이미지 폴백
     const candidates = galleryImages.length > 0 ? galleryImages : allGalleryImages;
     if (candidates.length === 0) {
       console.warn(LOG_PREFIX, '[frame] 갤러리에 이미지 없음');
       return false;
     }
-    if (galleryImages.length === 0 && allGalleryImages.length > 0) {
-      console.log(LOG_PREFIX, `[frame] 가시성 체크 실패 → DOM 폴백 (${allGalleryImages.length}개)`);
-    }
 
-    // 마지막 이미지 (가장 최근 업로드된 것)
     const targetImg = candidates[candidates.length - 1];
-    console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 60)}...`);
+    console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 80)}...`);
 
-    // 이미지 컨테이너 찾기 (호버 시 ⋮ 버튼이 나타나는 래퍼)
+    // 이미지 카드 컨테이너 찾기 (이미지를 감싸는 카드 요소)
     let container = targetImg;
     for (let i = 0; i < 8; i++) {
+      if (!container.parentElement) break;
       container = container.parentElement;
-      if (!container) break;
-      // 호버 효과가 적용되는 단위 요소를 찾음
-      if (container.querySelector('button')) break;
+      const r = container.getBoundingClientRect();
+      // 이미지 카드는 보통 100px 이상의 사각형 영역
+      if (r.width > 100 && r.height > 100) break;
     }
+    console.log(LOG_PREFIX, `[frame] 컨테이너: ${container.tagName}.${(container.className || '').substring(0, 40)}, ${container.getBoundingClientRect().width}x${container.getBoundingClientRect().height}`);
 
-    // 마우스 호버 이벤트 발생 (⋮ 버튼 표시)
-    const rect = targetImg.getBoundingClientRect();
-    const hoverOpts = { bubbles: true, clientX: rect.right - 10, clientY: rect.top + 10 };
-    (container || targetImg).dispatchEvent(new MouseEvent('mouseenter', hoverOpts));
-    (container || targetImg).dispatchEvent(new MouseEvent('mouseover', hoverOpts));
-    (container || targetImg).dispatchEvent(new MouseEvent('mousemove', hoverOpts));
-    await delay(500);
+    // 마우스 호버: PointerEvent + MouseEvent (⋮ 버튼 표시 트리거)
+    const rect = (container || targetImg).getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const hoverOpts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+    const pointerOpts = { ...hoverOpts, pointerId: 1, pointerType: 'mouse' };
 
-    // ⋮ (more_vert) 버튼 찾기
-    const moreBtn = findMoreButton(container || targetImg);
+    // 여러 타겟에 호버 이벤트 (컨테이너 + 이미지)
+    for (const target of [container, targetImg].filter(Boolean)) {
+      target.dispatchEvent(new PointerEvent('pointerenter', pointerOpts));
+      target.dispatchEvent(new PointerEvent('pointerover', pointerOpts));
+      target.dispatchEvent(new PointerEvent('pointermove', pointerOpts));
+      target.dispatchEvent(new MouseEvent('mouseenter', hoverOpts));
+      target.dispatchEvent(new MouseEvent('mouseover', hoverOpts));
+      target.dispatchEvent(new MouseEvent('mousemove', hoverOpts));
+    }
+    await delay(800);
+
+    // ⋮ 버튼 찾기 (컨테이너 → 페이지 전체 → aria-label)
+    let moreBtn = findMoreButton(container || targetImg);
+    if (!moreBtn) moreBtn = findMoreButton(document.body);
     if (!moreBtn) {
-      console.warn(LOG_PREFIX, '[frame] ⋮ 버튼 못찾음, 이미지 직접 클릭 시도');
-      // 이미지 직접 클릭 후 메뉴 나오는지 확인
-      targetImg.click();
-      await delay(500);
-      const moreBtnRetry = findMoreButton(document);
-      if (!moreBtnRetry) {
-        console.error(LOG_PREFIX, '[frame] ⋮ 버튼 최종 실패');
-        return false;
-      }
-      moreBtnRetry.click();
-      await delay(500);
-    } else {
-      console.log(LOG_PREFIX, '[frame] ⋮ 버튼 발견, 클릭');
-      moreBtn.click();
-      await delay(500);
+      // aria-label 기반 검색
+      moreBtn = document.querySelector(
+        'button[aria-label*="More" i], button[aria-label*="more" i], ' +
+        'button[aria-label*="옵션" i], button[aria-label*="메뉴" i], ' +
+        'button[aria-label*="추가" i]'
+      );
     }
 
-    // "Animate" (이미지→영상) 또는 "프롬프트에 추가" 메뉴 아이템 찾기
+    if (!moreBtn) {
+      // 재시도: 호버를 한번 더 시도 (이미지 위에 직접)
+      console.log(LOG_PREFIX, '[frame] ⋮ 버튼 없음 → 이미지 위 호버 재시도');
+      const imgRect = targetImg.getBoundingClientRect();
+      const opts2 = { bubbles: true, cancelable: true, clientX: imgRect.right - 15, clientY: imgRect.top + 15 };
+      targetImg.dispatchEvent(new PointerEvent('pointerenter', { ...opts2, pointerId: 1, pointerType: 'mouse' }));
+      targetImg.dispatchEvent(new PointerEvent('pointermove', { ...opts2, pointerId: 1, pointerType: 'mouse' }));
+      targetImg.dispatchEvent(new MouseEvent('mouseenter', opts2));
+      targetImg.dispatchEvent(new MouseEvent('mouseover', opts2));
+      targetImg.dispatchEvent(new MouseEvent('mousemove', opts2));
+      await delay(1000);
+      moreBtn = findMoreButton(container || targetImg);
+      if (!moreBtn) moreBtn = findMoreButton(document.body);
+    }
+
+    if (!moreBtn) {
+      console.error(LOG_PREFIX, '[frame] ⋮ 버튼 최종 실패 (이미지 클릭 안 함 — 페이지 이동 방지)');
+      // 디버그: 컨테이너 내 버튼 목록
+      const btns = (container || document).querySelectorAll('button');
+      console.log(LOG_PREFIX, `[frame] 컨테이너 내 button ${btns.length}개:`,
+        [...btns].slice(0, 5).map(b => `"${b.textContent?.trim()?.substring(0, 20)}" aria=${b.getAttribute('aria-label')}`).join(', '));
+      return false;
+    }
+
+    console.log(LOG_PREFIX, `[frame] ⋮ 버튼 발견: aria="${moreBtn.getAttribute('aria-label')}", text="${moreBtn.textContent?.trim()?.substring(0, 20)}"`);
+    moreBtn.click();
+    await delay(600);
+
     return await clickAnimateMenuItem();
   }
 
   function findMoreButton(searchRoot) {
-    // more_vert 또는 more_horiz 아이콘이 있는 버튼
     const buttons = searchRoot.querySelectorAll('button');
+    // 1: Material icon (more_vert/more_horiz)
     for (const btn of buttons) {
-      const icon = btn.querySelector('i');
+      const icon = btn.querySelector('i, mat-icon, .material-icons');
       const iconText = icon?.textContent?.trim();
-      if (iconText === 'more_vert' || iconText === 'more_horiz') {
-        return btn;
-      }
+      if (iconText === 'more_vert' || iconText === 'more_horiz') return btn;
     }
-    // 점 3개 (⋮) 텍스트 직접 매칭
+    // 2: 텍스트 매칭 (⋮, More)
     for (const btn of buttons) {
       const text = btn.textContent?.trim();
-      if (text === '⋮' || text === '⋯') return btn;
+      if (text === '⋮' || text === '⋯' || text === 'more_vert' || text === 'more_horiz') return btn;
+    }
+    // 3: aria-label 매칭
+    for (const btn of buttons) {
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (label.includes('more') || label.includes('옵션') || label.includes('메뉴')) return btn;
     }
     return null;
   }
@@ -1448,13 +1477,29 @@
     // 우선순위: Animate (이미지→영상) > Add to Prompt (폴백)
     const animateTexts = ['Animate', '애니메이션', '애니메이트'];
     const addTexts = ['Add to Prompt', 'Add to prompt', '프롬프트에 추가'];
-    const allTexts = [...animateTexts, ...addTexts];
 
     // 메뉴가 나타날 때까지 대기 + 텍스트 매칭
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const allElements = document.querySelectorAll(
-        '[role="menuitem"], [role="option"], button, div[tabindex], li, a'
-      );
+    for (let attempt = 0; attempt < 8; attempt++) {
+      // 메뉴/오버레이 컨테이너 (⋮ 클릭 후 드롭다운)
+      const menuSel = '[role="menu"], [role="listbox"], [role="dialog"], .cdk-overlay-pane, .mat-mdc-menu-panel, .mdc-menu-surface';
+      const menuContainers = document.querySelectorAll(menuSel);
+      // 메뉴 컨테이너 내 아이템 + 전체 검색
+      const allElements = [];
+      menuContainers.forEach(mc => {
+        mc.querySelectorAll('[role="menuitem"], [role="option"], button, li, a, div[tabindex], span').forEach(el => allElements.push(el));
+      });
+      // 전역 폴백
+      document.querySelectorAll('[role="menuitem"], [role="option"]').forEach(el => {
+        if (!allElements.includes(el)) allElements.push(el);
+      });
+
+      // 디버그: 첫 시도에서 메뉴 아이템 목록 출력
+      if (attempt === 0) {
+        const menuItems = [...allElements].filter(el => el.offsetParent !== null && el.textContent?.trim().length > 0 && el.textContent.trim().length < 50);
+        console.log(LOG_PREFIX, `[frame] 메뉴 아이템 ${menuItems.length}개:`,
+          menuItems.slice(0, 10).map(el => `"${el.textContent.trim().substring(0, 30)}" [${el.tagName}${el.getAttribute('role') ? ' role=' + el.getAttribute('role') : ''}]`).join(', '));
+      }
+
       // 1차: Animate 우선 검색
       for (const el of allElements) {
         const text = el.textContent?.trim() || '';
@@ -1475,25 +1520,41 @@
           return true;
         }
       }
-      await delay(300);
+      await delay(400);
     }
 
     // 방법 2: 아이콘 기반 매칭 (animation/add 아이콘)
-    const items = document.querySelectorAll('[role="menuitem"], li, div');
+    const items = document.querySelectorAll('[role="menuitem"], li, div, button');
     for (const item of items) {
-      const icon = item.querySelector('i');
+      const icon = item.querySelector('i, mat-icon, .material-icons');
       const iconText = icon?.textContent?.trim();
       const text = item.textContent?.trim() || '';
-      if ((iconText === 'animation' || iconText === 'slow_motion_video' || iconText === 'movie') &&
-          text.length < 40 && item.offsetParent !== null) {
-        console.log(LOG_PREFIX, `[frame] animation 아이콘 메뉴: "${text.substring(0, 40)}"`);
+      if ((iconText === 'animation' || iconText === 'slow_motion_video' || iconText === 'movie' ||
+           iconText === 'animated_images' || iconText === 'play_arrow') &&
+          text.length < 50 && item.offsetParent !== null) {
+        console.log(LOG_PREFIX, `[frame] animation 아이콘 메뉴: icon="${iconText}", text="${text.substring(0, 40)}"`);
         item.click();
         await delay(500);
         return true;
       }
     }
 
-    console.error(LOG_PREFIX, '[frame] "Animate" 메뉴 못찾음');
+    // 방법 3: XPath 텍스트 매칭
+    for (const txt of ['Animate', '애니메이션']) {
+      const el = findElementByExactText(txt);
+      if (el && el.offsetParent !== null) {
+        console.log(LOG_PREFIX, `[frame] XPath "${txt}" 발견`);
+        el.click();
+        await delay(500);
+        return true;
+      }
+    }
+
+    // 디버그: 화면 전체 메뉴 요소 덤프
+    const allMenuItems = document.querySelectorAll('[role="menuitem"], [role="option"], .cdk-overlay-pane *, .mat-mdc-menu-panel *');
+    console.error(LOG_PREFIX, `[frame] "Animate" 메뉴 못찾음. 전체 메뉴요소 ${allMenuItems.length}개:`,
+      [...allMenuItems].filter(el => el.textContent?.trim().length > 0 && el.textContent.trim().length < 50)
+        .slice(0, 15).map(el => `"${el.textContent.trim().substring(0, 30)}" [${el.tagName}]`).join(', '));
     return false;
   }
 

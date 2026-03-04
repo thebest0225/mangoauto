@@ -493,6 +493,8 @@ async function startAutomation(config) {
     const selectedSet = new Set(selectedIndices);
     const beforeCount = queue.length;
     queue = queue.filter(item => selectedSet.has(item.segmentIndex));
+    // 필터링 후 원본 인덱스 보존 (UI 대기열과 매핑용)
+    queue.forEach(item => { item._originalIndex = item.segmentIndex; });
     broadcastLog(`선택 필터: ${beforeCount}개 → ${queue.length}개 (선택 ${selectedIndices.length}개)`, 'info');
   }
 
@@ -517,6 +519,11 @@ async function startAutomation(config) {
     queue, mode: source, platform, mediaType,
     projectId, cooldownMs: avgCooldown
   });
+
+  // 선택 필터링 시 원본 인덱스로 결과 매핑 (UI 대기열 위치 일치)
+  if (selectedIndices && Array.isArray(selectedIndices)) {
+    sm._useOriginalIndex = true;
+  }
 
   // Store full config for later use
   sm._config = config;
