@@ -1295,7 +1295,12 @@
     }
 
     const imgCountBefore = countGalleryImages();
-    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개, 새소스=${isNewSource}, 재시도=${isSameRetry}`);
+    // 업로드 전 갤러리 이미지 src 스냅샷 (새 이미지 식별용)
+    const prevGallerySrcs = new Set();
+    document.querySelectorAll('img[src]').forEach(img => {
+      if (isGalleryImage(img)) prevGallerySrcs.add(img.src);
+    });
+    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개 (src ${prevGallerySrcs.size}종), 새소스=${isNewSource}, 재시도=${isSameRetry}`);
 
     // 재시도(같은 이미지) + 갤러리에 이미지 있으면 업로드 스킵
     // 새 소스이미지면 갤러리 상태 무관하게 항상 업로드
@@ -1382,8 +1387,24 @@
     // 업로드 성공 또는 기존 이미지 사용 → 소스 추적 업데이트
     _lastUploadedSourceUrl = sourceKey;
 
+    // 업로드 후 새로 추가된 이미지 찾기 (스냅샷 비교)
+    let newlyUploadedImg = null;
+    if (shouldUpload) {
+      document.querySelectorAll('img[src]').forEach(img => {
+        if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) {
+          newlyUploadedImg = img;
+        }
+      });
+      if (newlyUploadedImg) {
+        console.log(LOG_PREFIX, `[frame] 새로 업로드된 이미지 식별: ${newlyUploadedImg.src.substring(0, 80)}`);
+      } else {
+        console.warn(LOG_PREFIX, '[frame] 새 이미지 src 변경 감지 실패 → 갤러리 마지막 이미지 사용');
+      }
+    }
+
     // 항상 실행: ⋮ 메뉴 → "Animate" (프레임을 영상 생성용으로 설정)
-    const animated = await addImageToPromptViaMenu();
+    // 새로 업로드한 이미지를 명시적으로 전달하여 정확한 이미지에 Animate 실행
+    const animated = await addImageToPromptViaMenu(newlyUploadedImg);
     if (animated) {
       console.log(LOG_PREFIX, '[frame] ✓ Animate 완료');
       return true;
@@ -1427,26 +1448,41 @@
     return count;
   }
 
-  async function addImageToPromptViaMenu() {
-    // 갤러리 이미지 찾기 — 가장 최근 (마지막) 이미지
-    const galleryImages = [];
-    const allGalleryImages = [];
-    document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img)) {
-        allGalleryImages.push(img);
-        if (img.offsetParent !== null && img.offsetWidth > 50) {
-          galleryImages.push(img);
-        }
-      }
-    });
+  async function addImageToPromptViaMenu(specificImage = null) {
+    let targetImg = null;
 
-    const candidates = galleryImages.length > 0 ? galleryImages : allGalleryImages;
-    if (candidates.length === 0) {
-      console.warn(LOG_PREFIX, '[frame] 갤러리에 이미지 없음');
-      return false;
+    if (specificImage) {
+      // 명시적으로 전달된 이미지 사용 (새로 업로드한 이미지)
+      const rect = specificImage.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        targetImg = specificImage;
+        console.log(LOG_PREFIX, `[frame] 명시된 이미지 사용: ${specificImage.src.substring(0, 80)}`);
+      } else {
+        console.warn(LOG_PREFIX, '[frame] 명시된 이미지가 보이지 않음 → 갤러리에서 검색');
+      }
     }
 
-    const targetImg = candidates[candidates.length - 1];
+    if (!targetImg) {
+      // 갤러리 이미지 찾기 — 가장 최근 (마지막) 이미지
+      const galleryImages = [];
+      const allGalleryImages = [];
+      document.querySelectorAll('img[src]').forEach(img => {
+        if (isGalleryImage(img)) {
+          allGalleryImages.push(img);
+          if (img.offsetParent !== null && img.offsetWidth > 50) {
+            galleryImages.push(img);
+          }
+        }
+      });
+
+      const candidates = galleryImages.length > 0 ? galleryImages : allGalleryImages;
+      if (candidates.length === 0) {
+        console.warn(LOG_PREFIX, '[frame] 갤러리에 이미지 없음');
+        return false;
+      }
+
+      targetImg = candidates[candidates.length - 1];
+    }
     const imgRect = targetImg.getBoundingClientRect();
     console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 80)}... (${Math.round(imgRect.width)}x${Math.round(imgRect.height)} at ${Math.round(imgRect.left)},${Math.round(imgRect.top)})`);
 
