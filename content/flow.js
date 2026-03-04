@@ -59,12 +59,13 @@
     '생성할 수 없', '정책', '다시 시도', '오류', '실패'
   ];
 
-  // 2차 탐색(plain div/span)에서도 감지할 강한 에러 패턴 (false positive 적은 것만)
+  // 2차 탐색(plain div/span)에서도 감지할 강한 에러 패턴
+  // 주의: 'failed', 'policies' 같은 단독 단어는 Flow UI 정상 텍스트에서 false positive 발생
   const STRONG_ERROR_PATTERNS = [
-    'failed', 'generation failed', 'audio generation failed',
+    'generation failed', 'audio generation failed', 'video generation failed',
     'something went wrong', 'could not generate', 'unable to generate',
-    'error generating', 'violat', 'content policy', 'harmful',
-    'prohibited', 'not allowed', 'inappropriate', 'policies'
+    'error generating', 'violate our policies', 'might violate',
+    'content policy violation', 'against our content policy'
   ];
 
   // ─── Error Classification ───
@@ -1808,7 +1809,7 @@
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
-      if (el.children.length > 3) continue;
+      if (el.children.length > 5) continue; // checkForErrors와 동일 기준
       const text = el.textContent?.trim() || '';
       if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
