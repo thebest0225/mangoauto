@@ -1865,10 +1865,10 @@
       return lastApiResult.mediaUrls[0];
     }
 
-    // Method 2: Find video elements with storage.googleapis.com URLs
+    // Method 2: Find video elements (resolved .src property, not getAttribute)
     const videos = document.querySelectorAll('video[src]');
     for (const video of videos) {
-      const src = video.getAttribute('src');
+      const src = video.src; // resolved absolute URL
       if (src && !src.startsWith('blob:') && !src.startsWith('data:') &&
           src.includes('storage.googleapis.com')) {
         return src;
@@ -1877,7 +1877,7 @@
 
     // Method 3: Any new video with http URL
     for (const video of videos) {
-      const src = video.getAttribute('src');
+      const src = video.src; // resolved absolute URL
       if (src && src.startsWith('http') && !existingVideos.has(src)) {
         return src;
       }
@@ -2180,32 +2180,43 @@
     // 생성된 비디오 요소를 우선 탐색 (이미지 ⋮와 비디오 ⋮의 메뉴가 다름)
     let target = null;
 
-    // 1순위: 새로 생성된 <video> 요소
-    const videos = document.querySelectorAll('video');
-    for (const v of videos) {
-      if (v.offsetParent !== null && v.offsetWidth > 50) {
+    // 디버그: 페이지의 모든 video 요소 확인
+    const allVideos = document.querySelectorAll('video');
+    console.log(LOG_PREFIX, `[download] 페이지 video 요소: ${allVideos.length}개`);
+    allVideos.forEach((v, i) => {
+      const rect = v.getBoundingClientRect();
+      const src = v.src || v.querySelector('source')?.src || '(no src)';
+      console.log(LOG_PREFIX, `[download]   video[${i}]: ${Math.round(rect.width)}x${Math.round(rect.height)} at (${Math.round(rect.left)},${Math.round(rect.top)}), src=${src.substring(0, 60)}, inExisting=${existingVideos.has(v.src)}`);
+    });
+
+    // 1순위: 새로 생성된 <video> 요소 (getBoundingClientRect로 가시성 판단)
+    for (const v of allVideos) {
+      const rect = v.getBoundingClientRect();
+      if (rect.width > 50 && rect.height > 30) {
         const src = v.src || v.querySelector('source')?.src || '';
         if (src && !existingVideos.has(src)) {
           target = v;
+          console.log(LOG_PREFIX, `[download] 새 비디오 발견: ${src.substring(0, 60)}`);
           break;
         }
-        // src 없어도 보이는 video면 대상으로
-        if (!target && v.offsetWidth > 100) target = v;
       }
     }
 
-    // 2순위: 아무 보이는 <video> 요소
+    // 2순위: 아무 보이는 <video> 요소 (크기 기반)
     if (!target) {
-      for (const v of videos) {
-        if (v.offsetParent !== null && v.offsetWidth > 100) {
+      for (const v of allVideos) {
+        const rect = v.getBoundingClientRect();
+        if (rect.width > 100 && rect.height > 50) {
           target = v;
+          console.log(LOG_PREFIX, `[download] 보이는 비디오 사용: ${(v.src || '').substring(0, 60)}`);
           break;
         }
       }
     }
 
-    // 3순위: 새로 생성된 이미지 (비디오 없을 때)
+    // 3순위: 새로 생성된 이미지 (비디오 없을 때만)
     if (!target) {
+      console.log(LOG_PREFIX, '[download] video 요소 못 찾음, 이미지로 폴백');
       const mediaElements = findGeneratedMediaElements();
       target = mediaElements.length > 0 ? mediaElements[mediaElements.length - 1] : null;
     }
