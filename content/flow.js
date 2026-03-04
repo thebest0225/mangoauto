@@ -1313,32 +1313,48 @@
       console.log(LOG_PREFIX, '[frame] 갤러리에 이미지 존재 → 업로드 스킵, 프롬프트에 추가만 수행');
     }
 
-    // 항상 실행: ⋮ 메뉴 → "프롬프트에 추가" (실패/재시도 시 프레임 참조가 초기화되므로)
-    const added = await addImageToPromptViaMenu();
-    if (added) {
-      console.log(LOG_PREFIX, '[frame] ✓ 프롬프트에 추가 완료');
+    // 항상 실행: ⋮ 메뉴 → "Animate" (프레임을 영상 생성용으로 설정)
+    const animated = await addImageToPromptViaMenu();
+    if (animated) {
+      console.log(LOG_PREFIX, '[frame] ✓ Animate 완료');
       return true;
     }
 
-    console.error(LOG_PREFIX, '[frame] ✗ 프롬프트에 추가 실패');
+    console.error(LOG_PREFIX, '[frame] ✗ Animate 실패');
     return false;
   }
 
   function isGalleryImage(img) {
     const src = img.src || '';
-    // Google Storage 업로드 이미지
-    if (src.includes('storage.googleapis.com')) return true;
-    // Google 호스팅 이미지 (아바타 제외: /a/ 경로는 계정 프로필 사진)
-    if (src.includes('lh3.googleusercontent.com') && !src.includes('/a/')) return true;
+    if (!src) return false;
+    // 아바타 제외
+    if (src.includes('googleusercontent.com') && src.includes('/a/')) return false;
+    // SVG 아이콘 제외
+    if (src.startsWith('data:image/svg')) return false;
+    // 크기 기반 감지: 갤러리 이미지는 80px 이상, 아이콘/아바타는 작음
+    const w = img.naturalWidth || img.offsetWidth || img.width || 0;
+    const h = img.naturalHeight || img.offsetHeight || img.height || 0;
+    if (w > 80 && h > 80) return true;
+    // URL 패턴 폴백 (크기 정보 없을 때)
+    if (src.includes('googleapis.com')) return true;
+    if (src.includes('googleusercontent.com')) return true;
+    if (src.startsWith('blob:')) return true;
     return false;
   }
 
   function countGalleryImages() {
-    // 갤러리 영역의 이미지 수 (Google Storage 이미지만 카운트, 아바타 제외)
     let count = 0;
     document.querySelectorAll('img[src]').forEach(img => {
       if (isGalleryImage(img)) count++;
     });
+    if (count === 0) {
+      // 디버그: 왜 0인지 확인
+      const allImgs = document.querySelectorAll('img[src]');
+      if (allImgs.length > 0) {
+        console.log(LOG_PREFIX, `[gallery] img 총 ${allImgs.length}개, 갤러리 매칭 0. 샘플:`,
+          [...allImgs].slice(0, 5).map(i => `${i.offsetWidth}x${i.offsetHeight} src=${(i.src||'').substring(0, 80)}`).join(' | '));
+      }
+    }
     return count;
   }
 
@@ -1406,8 +1422,8 @@
       await delay(500);
     }
 
-    // "프롬프트에 추가" / "Add to prompt" 메뉴 아이템 찾기
-    return await clickAddToPromptMenuItem();
+    // "Animate" (이미지→영상) 또는 "프롬프트에 추가" 메뉴 아이템 찾기
+    return await clickAnimateMenuItem();
   }
 
   function findMoreButton(searchRoot) {
@@ -1428,18 +1444,32 @@
     return null;
   }
 
-  async function clickAddToPromptMenuItem() {
-    const addTexts = ['프롬프트에 추가', 'Add to prompt'];
+  async function clickAnimateMenuItem() {
+    // 우선순위: Animate (이미지→영상) > Add to Prompt (폴백)
+    const animateTexts = ['Animate', '애니메이션', '애니메이트'];
+    const addTexts = ['Add to Prompt', 'Add to prompt', '프롬프트에 추가'];
+    const allTexts = [...animateTexts, ...addTexts];
 
-    // 방법 1: 새로 나타난 메뉴에서 텍스트 매칭
+    // 메뉴가 나타날 때까지 대기 + 텍스트 매칭
     for (let attempt = 0; attempt < 5; attempt++) {
       const allElements = document.querySelectorAll(
         '[role="menuitem"], [role="option"], button, div[tabindex], li, a'
       );
+      // 1차: Animate 우선 검색
+      for (const el of allElements) {
+        const text = el.textContent?.trim() || '';
+        if (animateTexts.some(t => text.includes(t)) && el.offsetParent !== null) {
+          console.log(LOG_PREFIX, `[frame] "Animate" 발견: "${text.substring(0, 40)}"`);
+          el.click();
+          await delay(500);
+          return true;
+        }
+      }
+      // 2차: Add to Prompt 폴백
       for (const el of allElements) {
         const text = el.textContent?.trim() || '';
         if (addTexts.some(t => text.includes(t)) && el.offsetParent !== null) {
-          console.log(LOG_PREFIX, `[frame] "프롬프트에 추가" 발견: "${text.substring(0, 40)}"`);
+          console.log(LOG_PREFIX, `[frame] "Add to Prompt" 발견 (폴백): "${text.substring(0, 40)}"`);
           el.click();
           await delay(500);
           return true;
@@ -1448,20 +1478,22 @@
       await delay(300);
     }
 
-    // 방법 2: add 아이콘 + 텍스트 조합
+    // 방법 2: 아이콘 기반 매칭 (animation/add 아이콘)
     const items = document.querySelectorAll('[role="menuitem"], li, div');
     for (const item of items) {
       const icon = item.querySelector('i');
+      const iconText = icon?.textContent?.trim();
       const text = item.textContent?.trim() || '';
-      if (icon?.textContent?.trim() === 'add' && text.length < 40 && item.offsetParent !== null) {
-        console.log(LOG_PREFIX, `[frame] add 아이콘 메뉴 아이템: "${text.substring(0, 40)}"`);
+      if ((iconText === 'animation' || iconText === 'slow_motion_video' || iconText === 'movie') &&
+          text.length < 40 && item.offsetParent !== null) {
+        console.log(LOG_PREFIX, `[frame] animation 아이콘 메뉴: "${text.substring(0, 40)}"`);
         item.click();
         await delay(500);
         return true;
       }
     }
 
-    console.error(LOG_PREFIX, '[frame] "프롬프트에 추가" 메뉴 못찾음');
+    console.error(LOG_PREFIX, '[frame] "Animate" 메뉴 못찾음');
     return false;
   }
 
