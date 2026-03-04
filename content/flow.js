@@ -2094,10 +2094,9 @@
     return null;
   }
 
-  // ─── Download via UI: ⋮ → 다운로드 → 1080p (New UI Mar 2026) ───
+  // ─── Download via UI: ⋮ → 다운로드 → 1080p/720p (New UI Mar 2026) ───
   async function downloadVideoViaMenu() {
     // 생성된 비디오/이미지 중 가장 최근 것 찾기
-    // 갤러리에서 마지막 미디어 요소에 호버 → ⋮ 클릭
     const mediaElements = findGeneratedMediaElements();
     if (mediaElements.length === 0) {
       console.warn(LOG_PREFIX, '[download] 생성된 미디어 없음');
@@ -2105,66 +2104,116 @@
     }
 
     const target = mediaElements[mediaElements.length - 1];
-    console.log(LOG_PREFIX, `[download] 대상: ${target.tagName}, src=${(target.src || '').substring(0, 60)}`);
+    const targetRect = target.getBoundingClientRect();
+    console.log(LOG_PREFIX, `[download] 대상: ${target.tagName}, ${Math.round(targetRect.width)}x${Math.round(targetRect.height)}, src=${(target.src || '').substring(0, 60)}`);
 
-    // 컨테이너 찾기 (호버 시 ⋮ 버튼이 나타나는 래퍼)
-    let container = target;
-    for (let i = 0; i < 8; i++) {
-      container = container.parentElement;
-      if (!container) break;
-      if (container.querySelector('button')) break;
+    // 호버 (이미지/비디오 + 부모 레벨에 PointerEvent + MouseEvent)
+    const hoverTargets = [target];
+    let parent = target.parentElement;
+    for (let i = 0; i < 5 && parent; i++) {
+      hoverTargets.push(parent);
+      parent = parent.parentElement;
     }
+    const cx = targetRect.left + targetRect.width / 2;
+    const cy = targetRect.top + targetRect.height / 2;
+    const hOpts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+    const pOpts = { ...hOpts, pointerId: 1, pointerType: 'mouse' };
+    for (const t of hoverTargets) {
+      t.dispatchEvent(new PointerEvent('pointerenter', pOpts));
+      t.dispatchEvent(new PointerEvent('pointermove', pOpts));
+      t.dispatchEvent(new MouseEvent('mouseenter', hOpts));
+      t.dispatchEvent(new MouseEvent('mouseover', hOpts));
+    }
+    await delay(600);
 
-    // 호버 이벤트
-    const rect = target.getBoundingClientRect();
-    const hoverOpts = { bubbles: true, clientX: rect.right - 10, clientY: rect.top + 10 };
-    (container || target).dispatchEvent(new MouseEvent('mouseenter', hoverOpts));
-    (container || target).dispatchEvent(new MouseEvent('mouseover', hoverOpts));
-    (container || target).dispatchEvent(new MouseEvent('mousemove', hoverOpts));
-    await delay(500);
-
-    // ⋮ 버튼 클릭
-    const moreBtn = findMoreButton(container || target.parentElement);
+    // ⋮ 버튼: 미디어에 가장 가까운 것 (근접도 기반)
+    let moreBtn = findClosestMoreButton(target);
+    if (!moreBtn) {
+      // 우상단 호버 재시도
+      const hOpts2 = { bubbles: true, cancelable: true, clientX: targetRect.right - 20, clientY: targetRect.top + 20 };
+      for (const t of hoverTargets) {
+        t.dispatchEvent(new PointerEvent('pointermove', { ...hOpts2, pointerId: 1, pointerType: 'mouse' }));
+        t.dispatchEvent(new MouseEvent('mousemove', hOpts2));
+      }
+      await delay(600);
+      moreBtn = findClosestMoreButton(target);
+    }
     if (!moreBtn) {
       console.warn(LOG_PREFIX, '[download] ⋮ 버튼 못찾음');
       return false;
     }
-    console.log(LOG_PREFIX, '[download] ⋮ 클릭');
-    moreBtn.click();
-    await delay(500);
 
-    // "다운로드" 메뉴 아이템에 호버 → 서브메뉴 열기
-    const downloadItem = findMenuItemByText(['다운로드', 'Download']);
+    // ⋮ 클릭 (<a> 네비게이션 차단 포함)
+    const anchorP = moreBtn.closest('a');
+    if (anchorP) anchorP.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); }, { capture: true, once: true });
+    const btnRect = moreBtn.getBoundingClientRect();
+    const btnX = btnRect.left + btnRect.width / 2;
+    const btnY = btnRect.top + btnRect.height / 2;
+    const clickOpts = { bubbles: true, cancelable: true, clientX: btnX, clientY: btnY, button: 0 };
+    moreBtn.dispatchEvent(new PointerEvent('pointerdown', { ...clickOpts, pointerId: 1, pointerType: 'mouse' }));
+    moreBtn.dispatchEvent(new MouseEvent('mousedown', clickOpts));
+    await delay(80);
+    moreBtn.dispatchEvent(new PointerEvent('pointerup', { ...clickOpts, pointerId: 1, pointerType: 'mouse' }));
+    moreBtn.dispatchEvent(new MouseEvent('mouseup', clickOpts));
+    moreBtn.dispatchEvent(new MouseEvent('click', clickOpts));
+    await delay(600);
+    if (!hasMenuOverlay()) { moreBtn.click(); await delay(600); }
+    console.log(LOG_PREFIX, '[download] ⋮ 클릭 완료');
+
+    // "Download" / "다운로드" 메뉴 아이템에 호버 → 서브메뉴 열기
+    const downloadItem = findMenuItemByText(['Download', '다운로드']);
     if (!downloadItem) {
-      console.warn(LOG_PREFIX, '[download] 다운로드 메뉴 못찾음');
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      const items = getVisibleMenuItems();
+      console.warn(LOG_PREFIX, `[download] 다운로드 메뉴 못찾음. 메뉴: ${items.join(', ')}`);
+      document.body.click();
       return false;
     }
-    console.log(LOG_PREFIX, '[download] "다운로드" 호버');
+    console.log(LOG_PREFIX, `[download] "Download" 호버: "${downloadItem.textContent?.trim()?.substring(0, 30)}"`);
+    downloadItem.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerId: 1, pointerType: 'mouse' }));
     downloadItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
     downloadItem.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    await delay(500);
+    downloadItem.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    await delay(800);
 
-    // 서브메뉴에서 "1080p" 선택
+    // 서브메뉴 아이템 목록 확인
+    const subItems = getVisibleMenuItems();
+    console.log(LOG_PREFIX, `[download] 서브메뉴: ${subItems.join(', ')}`);
+
+    // 1080p 선택 (단, "Upgrade" 버튼 있으면 스킵)
     const quality1080 = findMenuItemByText(['1080p', '1080']);
     if (quality1080) {
-      console.log(LOG_PREFIX, '[download] 1080p 선택');
-      quality1080.click();
-      await delay(500);
+      // Upgrade 버튼이 있는지 확인 (같은 행/부모에 "Upgrade" 텍스트)
+      const hasUpgrade = quality1080.querySelector('button') ||
+        /upgrade/i.test(quality1080.textContent || '');
+      if (!hasUpgrade) {
+        console.log(LOG_PREFIX, '[download] 1080p 선택 (Upgrade 없음)');
+        quality1080.click();
+        await delay(1000);
+        return true;
+      }
+      console.log(LOG_PREFIX, '[download] 1080p에 Upgrade 버튼 → 720p로 폴백');
+    }
+
+    // 720p 폴백
+    const quality720 = findMenuItemByText(['720p', '720']);
+    if (quality720) {
+      console.log(LOG_PREFIX, '[download] 720p 선택');
+      quality720.click();
+      await delay(1000);
       return true;
     }
 
-    // 1080p 못찾으면 720p 폴백
-    const quality720 = findMenuItemByText(['720p', '720']);
-    if (quality720) {
-      console.log(LOG_PREFIX, '[download] 720p 폴백');
-      quality720.click();
-      await delay(500);
+    // 아무 품질이라도 선택 (270p 등)
+    const anyQuality = findMenuItemByText(['270p', 'Original', 'original']);
+    if (anyQuality) {
+      console.log(LOG_PREFIX, `[download] 대체 품질 선택: "${anyQuality.textContent?.trim()?.substring(0, 30)}"`);
+      anyQuality.click();
+      await delay(1000);
       return true;
     }
 
     console.warn(LOG_PREFIX, '[download] 품질 옵션 못찾음');
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    document.body.click();
     return false;
   }
 
@@ -2174,10 +2223,14 @@
     document.querySelectorAll('video').forEach(v => {
       if (v.offsetParent !== null && v.offsetWidth > 50) results.push(v);
     });
-    // 갤러리 이미지 (storage.googleapis.com)
+    // 갤러리 이미지 (크기 기반 — 생성된 미디어는 100px 이상)
     document.querySelectorAll('img[src]').forEach(img => {
-      if (img.offsetParent !== null && img.offsetWidth > 100 &&
-          (img.src.includes('storage.googleapis.com') || img.src.includes('lh3.googleusercontent.com'))) {
+      if (img.offsetParent !== null && img.offsetWidth > 100 && img.offsetHeight > 80) {
+        const src = img.src || '';
+        // 아바타/아이콘 제외
+        if (src.includes('googleusercontent.com') && src.includes('/a/')) return;
+        if (src.startsWith('data:image/svg')) return;
+        if (src.includes('placeholder')) return;
         results.push(img);
       }
     });
