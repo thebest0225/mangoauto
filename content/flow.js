@@ -1378,90 +1378,72 @@
     }
 
     const targetImg = candidates[candidates.length - 1];
-    console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 80)}...`);
+    const imgRect = targetImg.getBoundingClientRect();
+    console.log(LOG_PREFIX, `[frame] 대상 이미지: ${targetImg.src.substring(0, 80)}... (${Math.round(imgRect.width)}x${Math.round(imgRect.height)} at ${Math.round(imgRect.left)},${Math.round(imgRect.top)})`);
 
-    // 이미지 카드 컨테이너 찾기 (이미지를 감싸는 카드 요소)
-    let container = targetImg;
-    for (let i = 0; i < 8; i++) {
-      if (!container.parentElement) break;
-      container = container.parentElement;
-      const r = container.getBoundingClientRect();
-      // 이미지 카드는 보통 100px 이상의 사각형 영역
-      if (r.width > 100 && r.height > 100) break;
+    // 이미지 위에 직접 호버 (⋮ 버튼 표시 트리거)
+    // 이미지 + 부모 레벨들에 호버 이벤트 전파
+    const hoverTargets = [targetImg];
+    let parent = targetImg.parentElement;
+    for (let i = 0; i < 5 && parent; i++) {
+      hoverTargets.push(parent);
+      parent = parent.parentElement;
     }
-    console.log(LOG_PREFIX, `[frame] 컨테이너: ${container.tagName}.${(container.className || '').substring(0, 40)}, ${container.getBoundingClientRect().width}x${container.getBoundingClientRect().height}`);
 
-    // 마우스 호버: PointerEvent + MouseEvent (⋮ 버튼 표시 트리거)
-    const rect = (container || targetImg).getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const hoverOpts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
-    const pointerOpts = { ...hoverOpts, pointerId: 1, pointerType: 'mouse' };
-
-    // 여러 타겟에 호버 이벤트 (컨테이너 + 이미지)
-    for (const target of [container, targetImg].filter(Boolean)) {
-      target.dispatchEvent(new PointerEvent('pointerenter', pointerOpts));
-      target.dispatchEvent(new PointerEvent('pointerover', pointerOpts));
-      target.dispatchEvent(new PointerEvent('pointermove', pointerOpts));
-      target.dispatchEvent(new MouseEvent('mouseenter', hoverOpts));
-      target.dispatchEvent(new MouseEvent('mouseover', hoverOpts));
-      target.dispatchEvent(new MouseEvent('mousemove', hoverOpts));
+    function dispatchHover(targets, x, y) {
+      const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y };
+      const pOpts = { ...opts, pointerId: 1, pointerType: 'mouse' };
+      for (const t of targets) {
+        t.dispatchEvent(new PointerEvent('pointerenter', pOpts));
+        t.dispatchEvent(new PointerEvent('pointerover', pOpts));
+        t.dispatchEvent(new PointerEvent('pointermove', pOpts));
+        t.dispatchEvent(new MouseEvent('mouseenter', opts));
+        t.dispatchEvent(new MouseEvent('mouseover', opts));
+        t.dispatchEvent(new MouseEvent('mousemove', opts));
+      }
     }
-    await delay(800);
 
-    // ⋮ 버튼 찾기 (컨테이너 → 페이지 전체 → aria-label)
-    let moreBtn = findMoreButton(container || targetImg);
-    if (!moreBtn) moreBtn = findMoreButton(document.body);
+    // 1차 호버: 이미지 중앙
+    dispatchHover(hoverTargets, imgRect.left + imgRect.width / 2, imgRect.top + imgRect.height / 2);
+    await delay(600);
+
+    // ⋮ 버튼 찾기: 이미지에 가장 가까운 more 버튼 (근접도 기반)
+    let moreBtn = findClosestMoreButton(targetImg);
+
     if (!moreBtn) {
-      // aria-label 기반 검색
-      moreBtn = document.querySelector(
-        'button[aria-label*="More" i], button[aria-label*="more" i], ' +
-        'button[aria-label*="옵션" i], button[aria-label*="메뉴" i], ' +
-        'button[aria-label*="추가" i]'
-      );
+      // 2차 호버: 이미지 우상단 (⋮ 버튼이 보통 여기에 나타남)
+      console.log(LOG_PREFIX, '[frame] ⋮ 버튼 없음 → 우상단 호버 재시도');
+      dispatchHover(hoverTargets, imgRect.right - 20, imgRect.top + 20);
+      await delay(800);
+      moreBtn = findClosestMoreButton(targetImg);
     }
 
     if (!moreBtn) {
-      // 재시도: 호버를 한번 더 시도 (이미지 위에 직접)
-      console.log(LOG_PREFIX, '[frame] ⋮ 버튼 없음 → 이미지 위 호버 재시도');
-      const imgRect = targetImg.getBoundingClientRect();
-      const opts2 = { bubbles: true, cancelable: true, clientX: imgRect.right - 15, clientY: imgRect.top + 15 };
-      targetImg.dispatchEvent(new PointerEvent('pointerenter', { ...opts2, pointerId: 1, pointerType: 'mouse' }));
-      targetImg.dispatchEvent(new PointerEvent('pointermove', { ...opts2, pointerId: 1, pointerType: 'mouse' }));
-      targetImg.dispatchEvent(new MouseEvent('mouseenter', opts2));
-      targetImg.dispatchEvent(new MouseEvent('mouseover', opts2));
-      targetImg.dispatchEvent(new MouseEvent('mousemove', opts2));
-      await delay(1000);
-      moreBtn = findMoreButton(container || targetImg);
-      if (!moreBtn) moreBtn = findMoreButton(document.body);
-    }
-
-    if (!moreBtn) {
-      console.error(LOG_PREFIX, '[frame] ⋮ 버튼 최종 실패 (이미지 클릭 안 함 — 페이지 이동 방지)');
-      // 디버그: 컨테이너 내 버튼 목록
-      const btns = (container || document).querySelectorAll('button');
-      console.log(LOG_PREFIX, `[frame] 컨테이너 내 button ${btns.length}개:`,
-        [...btns].slice(0, 5).map(b => `"${b.textContent?.trim()?.substring(0, 20)}" aria=${b.getAttribute('aria-label')}`).join(', '));
+      // 디버그: 페이지 내 모든 ⋮ 후보 출력
+      const allBtns = findAllMoreButtons();
+      console.error(LOG_PREFIX, `[frame] ⋮ 버튼 최종 실패. 페이지 내 more 버튼 ${allBtns.length}개:`,
+        allBtns.map(({ btn, dist }) => {
+          const r = btn.getBoundingClientRect();
+          return `"${btn.textContent?.trim()?.substring(0, 15)}" dist=${Math.round(dist)} pos=(${Math.round(r.left)},${Math.round(r.top)})`;
+        }).join(' | '));
       return false;
     }
 
-    console.log(LOG_PREFIX, `[frame] ⋮ 버튼 발견: aria="${moreBtn.getAttribute('aria-label')}", text="${moreBtn.textContent?.trim()?.substring(0, 20)}", parent=${moreBtn.parentElement?.tagName}`);
+    const moreBtnRect = moreBtn.getBoundingClientRect();
+    console.log(LOG_PREFIX, `[frame] ⋮ 버튼 발견 (이미지 근접): text="${moreBtn.textContent?.trim()?.substring(0, 20)}", pos=(${Math.round(moreBtnRect.left)},${Math.round(moreBtnRect.top)})`);
 
-    // 컨테이너가 <a> 태그면 클릭 시 네비게이션 방지
+    // 클릭 전 <a> 부모 네비게이션 차단
     const anchorParent = moreBtn.closest('a');
     const preventNav = (e) => { e.preventDefault(); e.stopPropagation(); };
     if (anchorParent) {
       anchorParent.addEventListener('click', preventNav, { capture: true });
-      console.log(LOG_PREFIX, '[frame] <a> 부모 발견 → 네비게이션 차단 등록');
     }
 
-    // 전체 마우스 이벤트 시퀀스 (단순 .click()은 프레임워크에서 무시될 수 있음)
-    const btnRect = moreBtn.getBoundingClientRect();
-    const btnX = btnRect.left + btnRect.width / 2;
-    const btnY = btnRect.top + btnRect.height / 2;
+    // 전체 마우스 이벤트 시퀀스
+    const btnX = moreBtnRect.left + moreBtnRect.width / 2;
+    const btnY = moreBtnRect.top + moreBtnRect.height / 2;
     const clickOpts = { bubbles: true, cancelable: true, clientX: btnX, clientY: btnY, button: 0 };
     const ptrOpts = { ...clickOpts, pointerId: 1, pointerType: 'mouse' };
-
     moreBtn.dispatchEvent(new PointerEvent('pointerdown', ptrOpts));
     moreBtn.dispatchEvent(new MouseEvent('mousedown', clickOpts));
     await delay(80);
@@ -1470,45 +1452,101 @@
     moreBtn.dispatchEvent(new MouseEvent('click', clickOpts));
     await delay(800);
 
-    // 디버그: 클릭 후 오버레이/메뉴 상태 확인
-    const overlays = document.querySelectorAll('.cdk-overlay-pane, .cdk-overlay-container, [role="menu"], [role="listbox"], .mat-mdc-menu-panel, .mdc-menu-surface');
-    console.log(LOG_PREFIX, `[frame] ⋮ 클릭 후 오버레이/메뉴: ${overlays.length}개`,
-      [...overlays].slice(0, 5).map(o => `${o.tagName}.${(o.className||'').substring(0, 30)} children=${o.children.length} visible=${o.offsetParent !== null}`).join(' | '));
-
-    // 메뉴 안 열렸으면 .click() 폴백
-    if (overlays.length === 0 || [...overlays].every(o => o.children.length === 0)) {
-      console.log(LOG_PREFIX, '[frame] 이벤트 시퀀스 실패 → .click() 폴백');
+    // 메뉴 열림 확인 → 안 열렸으면 .click() 폴백
+    let menuOpened = hasMenuOverlay();
+    if (!menuOpened) {
+      console.log(LOG_PREFIX, '[frame] 이벤트 시퀀스로 메뉴 안 열림 → .click() 폴백');
       moreBtn.click();
       await delay(800);
+      menuOpened = hasMenuOverlay();
     }
 
-    // 네비게이션 차단 해제
     if (anchorParent) {
       anchorParent.removeEventListener('click', preventNav, { capture: true });
+    }
+
+    // 메뉴가 열렸는지 확인 (Rename/Delete가 아닌 Animate가 있어야 함)
+    if (menuOpened) {
+      const menuItems = getVisibleMenuItems();
+      console.log(LOG_PREFIX, `[frame] 메뉴 아이템: ${menuItems.map(t => `"${t}"`).join(', ')}`);
+      // Rename/Delete만 있으면 잘못된 ⋮ 버튼 (프로젝트 메뉴)
+      if (menuItems.some(t => /rename/i.test(t)) && !menuItems.some(t => /animate|애니메이션/i.test(t))) {
+        console.warn(LOG_PREFIX, '[frame] 프로젝트 메뉴 열림 (Rename/Delete) → 닫고 실패 처리');
+        document.body.click(); // 메뉴 닫기
+        await delay(300);
+        return false;
+      }
     }
 
     return await clickAnimateMenuItem();
   }
 
-  function findMoreButton(searchRoot) {
-    const buttons = searchRoot.querySelectorAll('button');
-    // 1: Material icon (more_vert/more_horiz)
-    for (const btn of buttons) {
+  // 모든 ⋮ (more) 버튼을 찾아 이미지와의 거리 포함 반환
+  function findAllMoreButtons() {
+    const results = [];
+    document.querySelectorAll('button').forEach(btn => {
       const icon = btn.querySelector('i, mat-icon, .material-icons');
-      const iconText = icon?.textContent?.trim();
-      if (iconText === 'more_vert' || iconText === 'more_horiz') return btn;
-    }
-    // 2: 텍스트 매칭 (⋮, More)
-    for (const btn of buttons) {
-      const text = btn.textContent?.trim();
-      if (text === '⋮' || text === '⋯' || text === 'more_vert' || text === 'more_horiz') return btn;
-    }
-    // 3: aria-label 매칭
-    for (const btn of buttons) {
+      const iconText = icon?.textContent?.trim() || '';
+      const text = btn.textContent?.trim() || '';
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (label.includes('more') || label.includes('옵션') || label.includes('메뉴')) return btn;
+      const isMore = iconText === 'more_vert' || iconText === 'more_horiz' ||
+        text === '⋮' || text === '⋯' || text === 'more_vert' || text === 'more_horiz' ||
+        /^more_vert/i.test(text) ||
+        label.includes('more') || label.includes('옵션') || label.includes('메뉴');
+      if (isMore) {
+        const r = btn.getBoundingClientRect();
+        results.push({ btn, rect: r, dist: 0 });
+      }
+    });
+    return results;
+  }
+
+  // 대상 이미지에 가장 가까운 ⋮ 버튼 찾기 (이미지 영역 내부/근접 우선)
+  function findClosestMoreButton(targetImg) {
+    const imgRect = targetImg.getBoundingClientRect();
+    const imgCx = imgRect.left + imgRect.width / 2;
+    const imgCy = imgRect.top + imgRect.height / 2;
+    const allBtns = findAllMoreButtons();
+    for (const item of allBtns) {
+      const r = item.rect;
+      // 이미지 영역 내에 있는지 (마진 30px)
+      item.insideImage = r.left >= imgRect.left - 30 && r.right <= imgRect.right + 30 &&
+                         r.top >= imgRect.top - 30 && r.bottom <= imgRect.bottom + 30;
+      item.dist = Math.hypot(
+        (r.left + r.width / 2) - imgCx,
+        (r.top + r.height / 2) - imgCy
+      );
     }
-    return null;
+    // 이미지 내부 버튼 우선, 그 다음 거리순
+    allBtns.sort((a, b) => {
+      if (a.insideImage && !b.insideImage) return -1;
+      if (!a.insideImage && b.insideImage) return 1;
+      return a.dist - b.dist;
+    });
+    // 이미지 내부 버튼만 반환 (외부 버튼은 프로젝트 메뉴일 가능성 높음)
+    const inside = allBtns.filter(b => b.insideImage);
+    if (inside.length > 0) return inside[0].btn;
+    // 이미지 내부에 없으면 매우 가까운 것만 (100px 이내)
+    const nearby = allBtns.filter(b => b.dist < 100);
+    return nearby.length > 0 ? nearby[0].btn : null;
+  }
+
+  // 메뉴 오버레이가 열려있는지 확인
+  function hasMenuOverlay() {
+    const overlays = document.querySelectorAll('[role="menu"], [role="listbox"], .cdk-overlay-pane, .mat-mdc-menu-panel, .mdc-menu-surface');
+    return [...overlays].some(o => o.children.length > 0 && o.offsetParent !== null);
+  }
+
+  // 현재 열린 메뉴의 아이템 텍스트 목록
+  function getVisibleMenuItems() {
+    const texts = [];
+    document.querySelectorAll('[role="menuitem"], [role="option"]').forEach(el => {
+      if (el.offsetParent !== null) {
+        const t = el.textContent?.trim();
+        if (t && t.length < 50) texts.push(t);
+      }
+    });
+    return texts;
   }
 
   async function clickAnimateMenuItem() {
