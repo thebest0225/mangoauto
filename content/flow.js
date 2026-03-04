@@ -2189,34 +2189,38 @@
       console.log(LOG_PREFIX, `[download]   video[${i}]: ${Math.round(rect.width)}x${Math.round(rect.height)} at (${Math.round(rect.left)},${Math.round(rect.top)}), src=${src.substring(0, 60)}, inExisting=${existingVideos.has(v.src)}`);
     });
 
-    // 1순위: 새로 생성된 <video> 요소 (getBoundingClientRect로 가시성 판단)
+    // 1순위: 새로 생성된 <video> 요소 또는 그 부모 컨테이너
+    // Flow는 <video>를 0x0으로 숨기고 썸네일 <img>로 표시하므로, 부모를 올라가야 함
     for (const v of allVideos) {
-      const rect = v.getBoundingClientRect();
-      if (rect.width > 50 && rect.height > 30) {
-        const src = v.src || v.querySelector('source')?.src || '';
-        if (src && !existingVideos.has(src)) {
-          target = v;
-          console.log(LOG_PREFIX, `[download] 새 비디오 발견: ${src.substring(0, 60)}`);
+      const src = v.src || v.querySelector('source')?.src || '';
+      if (!src || existingVideos.has(src)) continue;
+
+      const vRect = v.getBoundingClientRect();
+      // video 자체가 보이면 직접 사용
+      if (vRect.width > 50 && vRect.height > 30) {
+        target = v;
+        console.log(LOG_PREFIX, `[download] 비디오 직접 사용: ${Math.round(vRect.width)}x${Math.round(vRect.height)}`);
+        break;
+      }
+
+      // video가 0x0이면 보이는 부모 컨테이너를 찾아 올라감
+      console.log(LOG_PREFIX, `[download] 비디오 0x0, 부모 컨테이너 탐색...`);
+      let parent = v.parentElement;
+      for (let i = 0; i < 10 && parent; i++) {
+        const pRect = parent.getBoundingClientRect();
+        if (pRect.width > 100 && pRect.height > 80 && pRect.top >= 0) {
+          target = parent;
+          console.log(LOG_PREFIX, `[download] 비디오 부모 컨테이너: ${parent.tagName}.${parent.className?.substring?.(0, 30) || ''}, ${Math.round(pRect.width)}x${Math.round(pRect.height)} at (${Math.round(pRect.left)},${Math.round(pRect.top)})`);
           break;
         }
+        parent = parent.parentElement;
       }
+      if (target) break;
     }
 
-    // 2순위: 아무 보이는 <video> 요소 (크기 기반)
+    // 2순위: 이미지 중 비디오가 아닌 새로 생성된 것 (비디오 <video> 자체를 못 찾을 때)
     if (!target) {
-      for (const v of allVideos) {
-        const rect = v.getBoundingClientRect();
-        if (rect.width > 100 && rect.height > 50) {
-          target = v;
-          console.log(LOG_PREFIX, `[download] 보이는 비디오 사용: ${(v.src || '').substring(0, 60)}`);
-          break;
-        }
-      }
-    }
-
-    // 3순위: 새로 생성된 이미지 (비디오 없을 때만)
-    if (!target) {
-      console.log(LOG_PREFIX, '[download] video 요소 못 찾음, 이미지로 폴백');
+      console.log(LOG_PREFIX, '[download] video 부모도 못 찾음, 이미지로 폴백');
       const mediaElements = findGeneratedMediaElements();
       target = mediaElements.length > 0 ? mediaElements[mediaElements.length - 1] : null;
     }
