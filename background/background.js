@@ -1091,6 +1091,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
       };
       await addReviewItem(reviewItem);
       sm.markSuccess({ segmentIndex: item.segmentIndex, review: true });
+      broadcastState(getExtendedSnapshot());
       broadcastLog(`검토 대기열 추가: ${filename}`, 'info');
     } else {
       // 기존 동작: 즉시 업로드
@@ -1114,6 +1115,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
           await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
         }
         sm.markSuccess({ segmentIndex: item.segmentIndex });
+        broadcastState(getExtendedSnapshot());
         broadcastLog(`업로드 완료: ${filename}`, 'success');
       } catch (err) {
         if (err.message === 'AUTH_EXPIRED') {
@@ -1163,6 +1165,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
         saveAs: false
       });
       sm.markSuccess({ downloaded: filename });
+      broadcastState(getExtendedSnapshot());
       broadcastLog(`다운로드: ${filename}`, 'success');
       // UI 다운로드 파일 정리 (standalone 모드)
       if (_uiDownloadId) {
