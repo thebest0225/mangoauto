@@ -2129,14 +2129,44 @@
 
   // ─── Download via UI: ⋮ → 다운로드 → 1080p/720p (New UI Mar 2026) ───
   async function downloadVideoViaMenu() {
-    // 생성된 비디오/이미지 중 가장 최근 것 찾기
-    const mediaElements = findGeneratedMediaElements();
-    if (mediaElements.length === 0) {
+    // 생성된 비디오 요소를 우선 탐색 (이미지 ⋮와 비디오 ⋮의 메뉴가 다름)
+    let target = null;
+
+    // 1순위: 새로 생성된 <video> 요소
+    const videos = document.querySelectorAll('video');
+    for (const v of videos) {
+      if (v.offsetParent !== null && v.offsetWidth > 50) {
+        const src = v.src || v.querySelector('source')?.src || '';
+        if (src && !existingVideos.has(src)) {
+          target = v;
+          break;
+        }
+        // src 없어도 보이는 video면 대상으로
+        if (!target && v.offsetWidth > 100) target = v;
+      }
+    }
+
+    // 2순위: 아무 보이는 <video> 요소
+    if (!target) {
+      for (const v of videos) {
+        if (v.offsetParent !== null && v.offsetWidth > 100) {
+          target = v;
+          break;
+        }
+      }
+    }
+
+    // 3순위: 새로 생성된 이미지 (비디오 없을 때)
+    if (!target) {
+      const mediaElements = findGeneratedMediaElements();
+      target = mediaElements.length > 0 ? mediaElements[mediaElements.length - 1] : null;
+    }
+
+    if (!target) {
       console.warn(LOG_PREFIX, '[download] 생성된 미디어 없음');
       return false;
     }
 
-    const target = mediaElements[mediaElements.length - 1];
     const targetRect = target.getBoundingClientRect();
     console.log(LOG_PREFIX, `[download] 대상: ${target.tagName}, ${Math.round(targetRect.width)}x${Math.round(targetRect.height)}, src=${(target.src || '').substring(0, 60)}`);
 
@@ -2193,7 +2223,7 @@
     if (!hasMenuOverlay()) { moreBtn.click(); await delay(600); }
     console.log(LOG_PREFIX, '[download] ⋮ 클릭 완료');
 
-    // "Download" / "다운로드" 메뉴 아이템에 호버 → 서브메뉴 열기
+    // "Download" / "다운로드" 메뉴 아이템 찾기
     const downloadItem = findMenuItemByText(['Download', '다운로드']);
     if (!downloadItem) {
       const items = getVisibleMenuItems();
@@ -2201,21 +2231,48 @@
       document.body.click();
       return false;
     }
-    console.log(LOG_PREFIX, `[download] "Download" 호버: "${downloadItem.textContent?.trim()?.substring(0, 30)}"`);
-    downloadItem.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, pointerId: 1, pointerType: 'mouse' }));
-    downloadItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-    downloadItem.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    downloadItem.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    console.log(LOG_PREFIX, `[download] "Download" 발견: "${downloadItem.textContent?.trim()?.substring(0, 30)}", tag=${downloadItem.tagName}, role=${downloadItem.getAttribute('role')}`);
+
+    // Download 아이템에 호버 → 서브메뉴 열기 시도
+    const diRect = downloadItem.getBoundingClientRect();
+    const diX = diRect.left + diRect.width / 2;
+    const diY = diRect.top + diRect.height / 2;
+    const diOpts = { bubbles: true, cancelable: true, clientX: diX, clientY: diY };
+    downloadItem.dispatchEvent(new PointerEvent('pointerenter', { ...diOpts, pointerId: 1, pointerType: 'mouse' }));
+    downloadItem.dispatchEvent(new PointerEvent('pointermove', { ...diOpts, pointerId: 1, pointerType: 'mouse' }));
+    downloadItem.dispatchEvent(new MouseEvent('mouseenter', diOpts));
+    downloadItem.dispatchEvent(new MouseEvent('mouseover', diOpts));
+    downloadItem.dispatchEvent(new MouseEvent('mousemove', diOpts));
     await delay(800);
 
-    // 서브메뉴 아이템 목록 확인
+    // 서브메뉴 확인 (품질 옵션이 있는지)
+    let quality1080 = findMenuItemByText(['1080p', '1080']);
+    let quality720 = findMenuItemByText(['720p', '720']);
+
+    // 서브메뉴 안 열렸으면 클릭으로 시도
+    if (!quality1080 && !quality720) {
+      console.log(LOG_PREFIX, '[download] 호버로 서브메뉴 안 열림, 클릭 시도');
+      downloadItem.click();
+      await delay(800);
+      quality1080 = findMenuItemByText(['1080p', '1080']);
+      quality720 = findMenuItemByText(['720p', '720']);
+    }
+
+    // 여전히 없으면 오른쪽 가장자리로 호버 (서브메뉴 트리거)
+    if (!quality1080 && !quality720) {
+      const rightOpts = { bubbles: true, cancelable: true, clientX: diRect.right - 2, clientY: diY };
+      downloadItem.dispatchEvent(new PointerEvent('pointermove', { ...rightOpts, pointerId: 1, pointerType: 'mouse' }));
+      downloadItem.dispatchEvent(new MouseEvent('mousemove', rightOpts));
+      await delay(800);
+      quality1080 = findMenuItemByText(['1080p', '1080']);
+      quality720 = findMenuItemByText(['720p', '720']);
+    }
+
     const subItems = getVisibleMenuItems();
     console.log(LOG_PREFIX, `[download] 서브메뉴: ${subItems.join(', ')}`);
 
     // 1080p 선택 (단, "Upgrade" 버튼 있으면 스킵)
-    const quality1080 = findMenuItemByText(['1080p', '1080']);
     if (quality1080) {
-      // Upgrade 버튼이 있는지 확인 (같은 행/부모에 "Upgrade" 텍스트)
       const hasUpgrade = quality1080.querySelector('button') ||
         /upgrade/i.test(quality1080.textContent || '');
       if (!hasUpgrade) {
@@ -2228,7 +2285,6 @@
     }
 
     // 720p 폴백
-    const quality720 = findMenuItemByText(['720p', '720']);
     if (quality720) {
       console.log(LOG_PREFIX, '[download] 720p 선택');
       quality720.click();
@@ -2241,6 +2297,24 @@
     if (anyQuality) {
       console.log(LOG_PREFIX, `[download] 대체 품질 선택: "${anyQuality.textContent?.trim()?.substring(0, 30)}"`);
       anyQuality.click();
+      await delay(1000);
+      return true;
+    }
+
+    // 품질 서브메뉴 없음 — Download 자체를 클릭 (직접 다운로드 지원하는 경우)
+    console.log(LOG_PREFIX, '[download] 품질 서브메뉴 없음, Download 직접 클릭');
+    downloadItem.click();
+    await delay(1000);
+
+    // 클릭 후 품질 옵션이 나타났는지 다시 확인
+    quality1080 = findMenuItemByText(['1080p', '1080']);
+    quality720 = findMenuItemByText(['720p', '720']);
+    if (quality1080 || quality720) {
+      const qualityBtn = quality720 || quality1080; // 720p 우선 (안전)
+      const hasUpgrade1080 = quality1080 && (/upgrade/i.test(quality1080.textContent || ''));
+      const finalBtn = (quality1080 && !hasUpgrade1080) ? quality1080 : qualityBtn;
+      console.log(LOG_PREFIX, `[download] 품질 선택: "${finalBtn.textContent?.trim()?.substring(0, 20)}"`);
+      finalBtn.click();
       await delay(1000);
       return true;
     }

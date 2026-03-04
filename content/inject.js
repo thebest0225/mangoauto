@@ -353,6 +353,38 @@
       if (isVideoCheck) {
         const clone = response.clone();
         clone.json().then((data) => {
+          // ─── 방식 2: data.media 응답 (StartImage/Frames API) ───
+          // operations가 없고 media가 있는 경우: 비디오 URL이 media에 포함됨
+          if (!data.operations && data.media && Array.isArray(data.media) && pendingVideoOps.size > 0) {
+            // media에서 비디오 URL 추출 시도
+            let videoUrl = '';
+            for (const m of data.media) {
+              videoUrl = m?.video?.fifeUrl || m?.video?.videoUri || m?.video?.url ||
+                        m?.fifeUrl || m?.videoUri || '';
+              if (videoUrl) break;
+            }
+            if (!videoUrl) videoUrl = findDeepUrl(data.media) || '';
+
+            if (videoUrl) {
+              // media에 비디오 URL 있음 → 완료!
+              const [opName, pending] = [...pendingVideoOps.entries()][0];
+              pendingVideoOps.delete(opName);
+              console.log(LOG_PREFIX, `✅ Video ready (media response): ${videoUrl.substring(0, 80)}`);
+              window.postMessage({
+                type: 'VEO3_API_RESULT', seq: pending.seq, prompt: pending.prompt,
+                status: 200, ok: true, hasMedia: true,
+                mediaUrls: [videoUrl], isVideo: true, videoCompleted: true
+              }, '*');
+              return;
+            }
+            // media는 있지만 비디오 URL 없음 → 아직 생성 중이거나 소스 이미지만 있음
+            console.log(LOG_PREFIX, `📡 Check: media ${data.media.length}개, 비디오 URL 없음 (생성 중)`);
+            if (data.media.length > 0) {
+              console.log(LOG_PREFIX, `📡 media[0] keys: [${Object.keys(data.media[0]).join(',')}]`);
+            }
+            return;
+          }
+
           if (!data.operations) {
             console.log(LOG_PREFIX, `📡 Check 응답: operations 없음, keys=[${Object.keys(data).join(',')}]`);
             return;
