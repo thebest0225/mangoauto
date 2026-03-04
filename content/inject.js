@@ -377,10 +377,33 @@
               }, '*');
               return;
             }
-            // media는 있지만 비디오 URL 없음 → 아직 생성 중이거나 소스 이미지만 있음
-            console.log(LOG_PREFIX, `📡 Check: media ${data.media.length}개, 비디오 URL 없음 (생성 중)`);
+            // media는 있지만 비디오 URL 없음 → 구조 확인 + 에러 감지
             if (data.media.length > 0) {
-              console.log(LOG_PREFIX, `📡 media[0] keys: [${Object.keys(data.media[0]).join(',')}]`);
+              const m0 = data.media[0];
+              console.log(LOG_PREFIX, `📡 Check: media ${data.media.length}개, 비디오 URL 없음`);
+              console.log(LOG_PREFIX, `📡 media[0] keys: [${Object.keys(m0).join(',')}]`);
+              // video 객체 내부 구조 로깅 (URL 필드 탐색)
+              if (m0.video) {
+                const vKeys = Object.keys(m0.video);
+                console.log(LOG_PREFIX, `📡 media[0].video keys: [${vKeys.join(',')}]`);
+                // 에러/실패 상태 감지
+                const vStr = JSON.stringify(m0.video).substring(0, 200);
+                if (vStr.toLowerCase().includes('fail') || vStr.toLowerCase().includes('error') ||
+                    m0.video.status?.toLowerCase()?.includes('fail')) {
+                  const [opName, pending] = [...pendingVideoOps.entries()][0];
+                  pendingVideoOps.delete(opName);
+                  const errMsg = m0.video.error?.message || m0.video.failureReason || 'Video generation failed (media response)';
+                  console.log(LOG_PREFIX, `❌ Video failed (media response): ${errMsg}`);
+                  window.postMessage({
+                    type: 'VEO3_API_RESULT', seq: pending.seq, prompt: pending.prompt,
+                    status: 400, ok: false, error: errMsg,
+                    errorCode: 'VIDEO_GENERATION_FAILED', isVideo: true
+                  }, '*');
+                  return;
+                }
+              }
+            } else {
+              console.log(LOG_PREFIX, `📡 Check: media 비어있음 (생성 중)`);
             }
             return;
           }

@@ -55,7 +55,8 @@
   const ERROR_PHRASES = [
     'could not generate', 'unable to generate', 'violates', 'policy',
     'try again', 'something went wrong', 'error generating', 'content policy',
-    '생성할 수 없', '정책', '다시 시도', '오류'
+    'failed', 'audio generation failed', 'generation failed',
+    '생성할 수 없', '정책', '다시 시도', '오류', '실패'
   ];
 
   // ─── Message Handler ───
@@ -1762,7 +1763,17 @@
       const elapsed = Math.round((Date.now() - start) / 1000);
       if (generating > 0) {
         console.log(LOG_PREFIX, `Generating... ${elapsed}s (${generating} items in progress)`);
-        // 60초 이상 경과 시 진행 표시가 있어도 미디어 체크 (스피너가 사라지지 않는 경우 대비)
+
+        // 20초 이상: 스피너 있어도 DOM 에러 체크 (생성 실패 시 스피너와 에러가 공존)
+        if (elapsed > 20) {
+          const err = checkForErrors();
+          if (err) {
+            console.log(LOG_PREFIX, `Generation error detected despite spinner: ${err.substring(0, 80)}`);
+            throw new Error(`Generation error: ${err}`);
+          }
+        }
+
+        // 60초 이상: 스피너 있어도 미디어 체크 (스피너가 사라지지 않는 경우 대비)
         if (elapsed > 60) {
           const hasNewMedia = checkForNewMedia();
           if (hasNewMedia) {
@@ -2112,6 +2123,7 @@
 
   // ─── Error Detection ───
   function checkForErrors() {
+    // 1차: 시맨틱 셀렉터 (alert, error class 등)
     const alerts = document.querySelectorAll(
       '[role="alert"], [class*="error"], [class*="warning"], ' +
       '.snackbar, [class*="snack"], mat-snack-bar, [class*="toast"]'
@@ -2124,6 +2136,22 @@
         }
       }
     }
+
+    // 2차: "Failed" 텍스트가 포함된 큰 영역 탐색 (Flow 비디오 생성 실패 패턴)
+    // Flow는 비디오 영역에 "Failed\nAudio generation failed..." 같은 텍스트를 직접 표시
+    const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
+    for (const el of candidates) {
+      if (el.offsetParent === null) continue;
+      if (el.children.length > 3) continue; // 큰 컨테이너 제외
+      const text = el.textContent?.trim() || '';
+      if (text.length < 3 || text.length > 200) continue;
+      const lower = text.toLowerCase();
+      if (lower === 'failed' || lower.startsWith('failed\n') ||
+          lower.includes('generation failed') || lower.includes('audio generation failed')) {
+        return text;
+      }
+    }
+
     return null;
   }
 
