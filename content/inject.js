@@ -360,6 +360,10 @@
             let videoUrl = '';
             for (const m of data.media) {
               videoUrl = m?.video?.fifeUrl || m?.video?.videoUri || m?.video?.url ||
+                        m?.video?.generatedVideo?.fifeUrl || m?.video?.generatedVideo?.videoUri ||
+                        m?.video?.generatedVideo?.url ||
+                        m?.video?.operation?.metadata?.video?.fifeUrl ||
+                        m?.video?.operation?.metadata?.video?.videoUri ||
                         m?.fifeUrl || m?.videoUri || '';
               if (videoUrl) break;
             }

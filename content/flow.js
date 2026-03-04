@@ -1692,7 +1692,10 @@
     return count;
   }
 
-  // 화면에 남아있는 에러/경고 DOM 요소 강제 제거
+  // 이전 에러 텍스트 스냅샷 (새 에러만 감지하기 위해)
+  let _errorSnapshotTexts = new Set();
+
+  // 화면에 남아있는 에러/경고 DOM 요소 강제 제거 + 스냅샷
   function dismissVisibleErrors() {
     const selectors = [
       '[role="alert"]', '[class*="snackbar"]', '[class*="snack"]',
@@ -1711,7 +1714,22 @@
         }
       });
     }
-    // MangoDialogDismisser는 자동 interval로 처리 (별도 호출 불필요)
+
+    // 현재 보이는 "Failed" 등 에러 텍스트를 스냅샷 (제거 안 되는 것도 기록하여 이후 무시)
+    _errorSnapshotTexts.clear();
+    const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
+    for (const el of candidates) {
+      if (el.offsetParent === null) continue;
+      if (el.children.length > 3) continue;
+      const text = el.textContent?.trim() || '';
+      if (text.length < 3 || text.length > 200) continue;
+      const lower = text.toLowerCase();
+      if (lower === 'failed' || lower.startsWith('failed\n') ||
+          lower.includes('generation failed') || lower.includes('audio generation failed')) {
+        _errorSnapshotTexts.add(text);
+        console.log(LOG_PREFIX, `Snapshot existing error: "${text.substring(0, 50)}"`);
+      }
+    }
   }
 
   async function waitForGenerationComplete(timeoutMin) {
@@ -2148,6 +2166,8 @@
       const lower = text.toLowerCase();
       if (lower === 'failed' || lower.startsWith('failed\n') ||
           lower.includes('generation failed') || lower.includes('audio generation failed')) {
+        // 이전 생성의 에러 텍스트인지 확인 (스냅샷에 있으면 무시)
+        if (_errorSnapshotTexts.has(text)) continue;
         return text;
       }
     }
