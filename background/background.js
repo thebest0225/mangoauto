@@ -1038,15 +1038,18 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   broadcastLog(`handleSequentialComplete: mode=${sm.mode}, mediaType=${sm.mediaType}, hasUrl=${!!mediaUrl}, hasDataUrl=${!!mediaDataUrl}`, 'info');
 
   // ui-download 마커 처리: chrome.downloads에서 실제 URL 찾기
+  let _uiDownloadId = null; // UI 다운로드 ID (나중에 삭제용)
   if (mediaUrl === 'ui-download') {
     broadcastLog('ui-download 감지 — chrome.downloads에서 실제 URL 검색...', 'info');
     const dlInfo = await findRecentDownloadUrl(120000);
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
+      _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
     } else if (dlInfo?.filePath) {
       // URL은 없지만 파일 경로 있음 — file:// URL로 시도
       mediaUrl = 'file:///' + dlInfo.filePath.replace(/\\/g, '/');
+      _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 파일 경로 사용: ${mediaUrl.substring(0, 80)}`, 'info');
     } else {
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음 — 업로드 스킵', 'warn');
@@ -1137,6 +1140,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
           saveAs: false
         });
         broadcastLog(`로컬 다운로드: ${filename}`, 'info');
+        // UI 다운로드 파일 정리 (중복 방지: 올바른 이름으로 재다운로드했으므로 원본 삭제)
+        if (_uiDownloadId) {
+          try {
+            await chrome.downloads.removeFile(_uiDownloadId);
+            chrome.downloads.erase({ id: _uiDownloadId });
+            broadcastLog('UI 다운로드 원본 파일 삭제', 'info');
+          } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
+        }
       }
     } catch (dlErr) {
       broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
@@ -1153,6 +1164,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
       });
       sm.markSuccess({ downloaded: filename });
       broadcastLog(`다운로드: ${filename}`, 'success');
+      // UI 다운로드 파일 정리 (standalone 모드)
+      if (_uiDownloadId) {
+        try {
+          await chrome.downloads.removeFile(_uiDownloadId);
+          chrome.downloads.erase({ id: _uiDownloadId });
+          broadcastLog('UI 다운로드 원본 파일 삭제', 'info');
+        } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
+      }
     } catch (err) {
       // 다운로드 실패: 기록 후 다음 진행
       broadcastLog(`다운로드 실패: ${err.message} (다음 항목 진행)`, 'error');
@@ -1201,11 +1220,13 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   const filename = generateFilename(task.queueIndex ?? itemIndex, sm.platform, sm.mediaType);
 
   // ui-download 마커 처리 (concurrent)
+  let _uiDownloadId = null;
   if (mediaUrl === 'ui-download') {
     broadcastLog('ui-download 감지 (concurrent) — chrome.downloads에서 실제 URL 검색...', 'info');
     const dlInfo = await findRecentDownloadUrl(120000);
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
+      _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
     } else {
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음', 'warn');
@@ -1290,6 +1311,10 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
             saveAs: false
           });
           broadcastLog(`로컬 다운로드: ${filename}`, 'info');
+          // UI 다운로드 원본 삭제 (concurrent)
+          if (_uiDownloadId) {
+            try { await chrome.downloads.removeFile(_uiDownloadId); chrome.downloads.erase({ id: _uiDownloadId }); } catch (e) {}
+          }
         }
       } catch (dlErr) {
         broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
@@ -1305,6 +1330,10 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
         });
         broadcastLog(`다운로드: ${filename}`, 'success');
         sm.results.push({ success: true, index: itemIndex, downloaded: filename });
+        // UI 다운로드 원본 삭제 (concurrent standalone)
+        if (_uiDownloadId) {
+          try { await chrome.downloads.removeFile(_uiDownloadId); chrome.downloads.erase({ id: _uiDownloadId }); } catch (e) {}
+        }
       } catch (err) {
         broadcastLog(`다운로드 실패: ${err.message}`, 'error');
         sm.results.push({ success: false, index: itemIndex, error: err.message });
@@ -1838,13 +1867,13 @@ async function findRecentDownloadUrl(maxAgeMs = 120000) {
       const isGoogleDl = url.includes('google') || url.includes('googleapis');
       if (dl.state === 'complete') {
         broadcastLog(`최근 다운로드 발견 (완료): ${filename.substring(filename.length - 40)}`, 'info');
-        return { url, filePath: dl.filename, state: 'complete' };
+        return { url, filePath: dl.filename, state: 'complete', downloadId: dl.id };
       }
       if (dl.state === 'in_progress' && isGoogleDl) {
         // 진행 중이면 완료 대기 (최대 60초)
         broadcastLog(`다운로드 진행 중, 완료 대기: ${dl.id}`, 'info');
-        const completedUrl = await waitForDownloadComplete(dl.id, 60000);
-        if (completedUrl) return completedUrl;
+        const completedInfo = await waitForDownloadComplete(dl.id, 60000);
+        if (completedInfo) return completedInfo;
       }
     }
     return null;
@@ -1868,7 +1897,7 @@ function waitForDownloadComplete(downloadId, timeoutMs = 60000) {
         chrome.downloads.onChanged.removeListener(listener);
         chrome.downloads.search({ id: downloadId }, (results) => {
           const dl = results?.[0];
-          resolve(dl ? { url: dl.finalUrl || dl.url, filePath: dl.filename, state: 'complete' } : null);
+          resolve(dl ? { url: dl.finalUrl || dl.url, filePath: dl.filename, state: 'complete', downloadId: dl.id } : null);
         });
       } else if (delta.state?.current === 'interrupted') {
         clearTimeout(timeout);
