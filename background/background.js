@@ -671,11 +671,19 @@ async function runSequentialLoop(loopId) {
       // "Already processing" = content script가 이전 생성 중 → 완료될 때까지 대기
       if (resp.error === 'Already processing') {
         broadcastLog('Content script 생성 중 → GENERATION_COMPLETE 대기...', 'warn');
-        // 이미 생성 중이므로 현재 루프를 종료하고 GENERATION_COMPLETE 핸들러에 맡김
-        // handleSequentialComplete → handleCooldownAndNext가 다음 아이템을 처리함
         sm.transition(AutoState.GENERATING);
         broadcastState(getExtendedSnapshot());
         break;
+      }
+
+      // "Image rejected" = 서버가 이미지 거부 (400) → 재시도 무의미, 바로 스킵
+      if (resp.error.includes('Image rejected') || resp.error.includes('이미지 업로드 거부') ||
+          resp.errorCode === 'IMAGE_REJECTED') {
+        broadcastLog(`이미지 서버 거부 → 다음 항목으로 건너뜀: ${resp.error}`, 'warn');
+        sm.skipCurrent();
+        broadcastState(getExtendedSnapshot());
+        await handleCooldownAndNext();
+        continue;
       }
 
       broadcastLog(`생성 에러: ${resp.error}`, 'error');

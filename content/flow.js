@@ -146,7 +146,10 @@
           await delay(2000);
         } else {
           // 이미지 없이 생성하면 전혀 다른 결과가 나오므로 에러 처리
-          throw new Error('Frame upload failed - 이미지 업로드 실패');
+          // "image rejected" 키워드 포함 → background에서 재시도 스킵
+          const err = new Error('Image rejected - 이미지 업로드 거부 (서버 400)');
+          err.errorCode = 'IMAGE_REJECTED';
+          throw err;
         }
       }
       checkStopped();
@@ -1229,75 +1232,61 @@
     const imgCountBefore = countGalleryImages();
     console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개`);
 
-    // 갤러리에 이미지가 없으면 업로드 시도 (여러 방법 순차)
+    // 갤러리에 이미지가 없으면 업로드 시도
     // 이미 있으면 업로드 스킵 (재시도 — 이미지는 갤러리에 남아있음)
     if (imgCountBefore === 0) {
       const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
       console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
       let uploaded = false;
+      let apiTriggered = false;  // API가 호출되었는지 (400이면 재시도 무의미)
 
-      // ── 방법 1: ClipboardEvent paste (Ctrl+V 동작 확인됨) ──
-      if (!uploaded) {
-        console.log(LOG_PREFIX, '[frame] 방법1: ClipboardEvent paste');
+      // ── 방법 1 (우선): hidden file input (확인된 방법 — 실제 uploadImage API 호출) ──
+      const fileInput = MangoDom.findFileInput();
+      if (fileInput) {
+        console.log(LOG_PREFIX, '[frame] file input으로 업로드:', fileInput.accept || 'any');
+        apiTriggered = true;  // file input은 확실히 API 호출
+        await MangoDom.attachFileToInput(fileInput, file);
+        uploaded = await waitForGalleryImage(imgCountBefore, 12000);
+        if (uploaded) {
+          console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
+        } else {
+          // API는 호출됐으나 갤러리 미등장 → 서버가 이미지 거부 (400 등)
+          console.error(LOG_PREFIX, '[frame] ✗ 서버가 이미지 거부 (API 호출됨, 갤러리 미등장)');
+          // 다른 방법 시도해봤자 같은 결과 → 바로 실패 반환
+          return false;
+        }
+      }
+
+      // ── 방법 2: ClipboardEvent paste (file input 없을 때만) ──
+      if (!uploaded && !apiTriggered) {
+        console.log(LOG_PREFIX, '[frame] 방법2: ClipboardEvent paste');
         try {
           const textarea = findPromptTextarea();
           const pasteTarget = textarea || document.querySelector('[contenteditable]') || document.body;
           if (textarea) { textarea.focus(); await delay(100); }
-
           const dt = new DataTransfer();
           dt.items.add(file);
-          const pasteEvent = new ClipboardEvent('paste', {
-            bubbles: true,
-            cancelable: true,
-            clipboardData: dt
-          });
-          pasteTarget.dispatchEvent(pasteEvent);
+          pasteTarget.dispatchEvent(new ClipboardEvent('paste', {
+            bubbles: true, cancelable: true, clipboardData: dt
+          }));
           console.log(LOG_PREFIX, '[frame] paste 이벤트 발송 → 대기...');
-          uploaded = await waitForGalleryImage(imgCountBefore, 8000);
+          uploaded = await waitForGalleryImage(imgCountBefore, 10000);
           if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공');
-
-          // paste가 안 되면 document에도 시도
-          if (!uploaded) {
-            document.dispatchEvent(new ClipboardEvent('paste', {
-              bubbles: true, cancelable: true, clipboardData: dt
-            }));
-            await delay(500);
-            uploaded = await waitForGalleryImage(imgCountBefore, 3000);
-            if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공 (document)');
-          }
         } catch (e) {
           console.warn(LOG_PREFIX, '[frame] paste 실패:', e.message);
         }
       }
 
-      // ── 방법 2: hidden file input ──
-      if (!uploaded) {
-        console.log(LOG_PREFIX, '[frame] 방법2: file input 탐색');
-        const fileInput = MangoDom.findFileInput();
-        if (fileInput) {
-          console.log(LOG_PREFIX, '[frame] file input 발견:', fileInput.accept || 'any');
-          await MangoDom.attachFileToInput(fileInput, file);
-          uploaded = await waitForGalleryImage(imgCountBefore, 8000);
-          if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ file input 성공');
-        } else {
-          console.log(LOG_PREFIX, '[frame] file input 없음');
-        }
-      }
-
-      // ── 방법 3: drag-drop (여러 타겟) ──
-      if (!uploaded) {
+      // ── 방법 3: drag-drop (위 방법 모두 실패 시) ──
+      if (!uploaded && !apiTriggered) {
         console.log(LOG_PREFIX, '[frame] 방법3: drag-drop');
         const textarea = findPromptTextarea();
         const targets = [
           textarea,
-          textarea?.closest('[class*="input"]') || textarea?.parentElement?.parentElement,
           document.querySelector('[class*="drop"]'),
-          document.querySelector('[class*="upload"]'),
           document.querySelector('main'),
-          document.querySelector('[role="main"]'),
           document.body
         ].filter(Boolean);
-
         for (const target of targets) {
           const dt = new DataTransfer();
           dt.items.add(file);
@@ -1307,27 +1296,17 @@
             }));
             await delay(100);
           }
-          await delay(1000);
+          await delay(2000);
           if (countGalleryImages() > imgCountBefore) {
             uploaded = true;
-            console.log(LOG_PREFIX, `[frame] ✓ drag-drop 성공: ${target.tagName}.${(target.className || '').substring(0, 30)}`);
+            console.log(LOG_PREFIX, `[frame] ✓ drag-drop 성공: ${target.tagName}`);
             break;
           }
         }
       }
 
       if (!uploaded) {
-        // 최종 대기: 느린 업로드 대응
-        console.warn(LOG_PREFIX, '[frame] 모든 방법 시도 완료, 최종 대기 (5초)...');
-        uploaded = await waitForGalleryImage(imgCountBefore, 5000);
-      }
-
-      if (!uploaded) {
-        console.error(LOG_PREFIX, '[frame] ✗ 이미지 업로드 실패 (모든 방법)');
-        // 디버그: 페이지의 file input, drop zone 정보 출력
-        const inputs = document.querySelectorAll('input[type="file"]');
-        console.log(LOG_PREFIX, `[frame] file input 수: ${inputs.length}`);
-        inputs.forEach((inp, i) => console.log(LOG_PREFIX, `  input[${i}]: accept=${inp.accept}, disabled=${inp.disabled}, hidden=${inp.hidden}`));
+        console.error(LOG_PREFIX, '[frame] ✗ 이미지 업로드 실패');
       }
       await delay(1000);
     } else {
