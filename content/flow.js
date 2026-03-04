@@ -181,13 +181,15 @@
       // Step 8: Extract result + Download
       if (mediaType === 'video' || mode.includes('video')) {
         // 비디오: URL 직접 전달 (dataUrl 변환 시 50MB+ 메모리 이슈 방지)
-        let videoUrl;
+        let videoUrl = '';
         if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
           console.log(LOG_PREFIX, 'Using API-intercepted video URL');
           videoUrl = lastApiResult.mediaUrls[0];
         } else {
-          videoUrl = await getVideoUrl();
-          if (!videoUrl) throw new Error('Cannot find video URL');
+          videoUrl = await getVideoUrl() || '';
+          if (!videoUrl) {
+            console.warn(LOG_PREFIX, 'Video URL not found via API/DOM — UI 다운로드로 진행');
+          }
         }
 
         // UI 다운로드: ⋮ → 다운로드 → 1080p (브라우저 네이티브 다운로드)
@@ -196,12 +198,14 @@
         if (downloaded) {
           console.log(LOG_PREFIX, '✓ 1080p 다운로드 트리거됨');
         } else {
-          console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패, URL 방식으로 진행');
+          console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패');
+          // URL도 없고 UI 다운로드도 실패하면 에러
+          if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
-          mediaUrl: videoUrl,
+          mediaUrl: videoUrl || 'ui-download',
           mediaType: 'video'
         });
       } else {
@@ -1731,16 +1735,25 @@
           console.log(LOG_PREFIX, 'Generation complete (API result)');
           return;
         }
+        // 비디오 완료됨 (URL은 못 찾았지만 생성 자체는 성공)
+        if (lastApiResult.ok && lastApiResult.videoCompleted) {
+          console.log(LOG_PREFIX, 'Generation complete (API: videoCompleted, URL은 DOM에서 탐색)');
+          return;
+        }
         if (!lastApiResult.ok) {
           const e = new Error(`API error: ${lastApiResult.error || 'Unknown'}`);
           e.errorCode = lastApiResult.errorCode || '';
           throw e;
         }
-        // API 200 OK이지만 미디어 없음 → 생성 실패 (검열 등)
+        // API 200 OK이지만 미디어 없음 → DOM에서도 확인 후 판단
         if (lastApiResult.ok && !lastApiResult.hasMedia) {
-          const e = new Error('생성 실패: 미디어 없이 완료됨 (검열 가능성)');
-          e.errorCode = 'NO_MEDIA';
-          throw e;
+          const hasNewMedia = checkForNewMedia();
+          if (hasNewMedia) {
+            console.log(LOG_PREFIX, 'Generation complete (API ok + DOM media detected)');
+            return;
+          }
+          // DOM에도 없으면 좀 더 기다려봄 (즉시 에러 던지지 않음)
+          console.log(LOG_PREFIX, 'API ok but no media yet, waiting for DOM...');
         }
       }
 

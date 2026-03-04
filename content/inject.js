@@ -241,6 +241,25 @@
     return false;
   }
 
+  // ─── Deep URL finder: 응답 객체에서 비디오 URL을 재귀적으로 탐색 ───
+  function findDeepUrl(obj, depth = 0) {
+    if (!obj || typeof obj !== 'object' || depth > 6) return null;
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (typeof val === 'string' && val.length > 20 &&
+          (val.includes('storage.googleapis.com') || val.includes('fifeUrl') ||
+           key.toLowerCase().includes('url') || key.toLowerCase().includes('uri')) &&
+          val.startsWith('http')) {
+        return val;
+      }
+      if (typeof val === 'object' && val !== null) {
+        const found = findDeepUrl(val, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
   // ─── Fetch Interceptor ───
   window.fetch = async function (...args) {
     const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
@@ -345,14 +364,43 @@
             console.log(LOG_PREFIX, `📡 Op: name=${opName?.substring(0, 20)}, status=${op.status}, pending=${!!pending}, mapSize=${pendingVideoOps.size}`);
             if (!pending) continue;
             if (op.status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') {
-              const videoUrl = op.operation?.metadata?.video?.fifeUrl ||
-                              op.operation?.metadata?.video?.videoUri;
+              const meta = op.operation?.metadata;
+              const result = op.operation?.result;
+              const resp = op.operation?.response;
+              // 다양한 경로에서 비디오 URL 추출 시도
+              const videoUrl = meta?.video?.fifeUrl ||
+                              meta?.video?.videoUri ||
+                              meta?.video?.url ||
+                              meta?.generatedVideo?.fifeUrl ||
+                              meta?.generatedVideo?.videoUri ||
+                              meta?.generatedVideo?.url ||
+                              result?.video?.fifeUrl ||
+                              result?.video?.videoUri ||
+                              resp?.video?.fifeUrl ||
+                              resp?.video?.videoUri ||
+                              '';
+              // 디버그: 실제 응답 구조 출력 (URL 못 찾을 때 원인 파악용)
+              if (!videoUrl) {
+                console.log(LOG_PREFIX, '⚠️ Video URL not found in response. Structure:');
+                console.log(LOG_PREFIX, '  metadata keys:', JSON.stringify(Object.keys(meta || {})));
+                console.log(LOG_PREFIX, '  metadata.video:', JSON.stringify(meta?.video || 'none'));
+                console.log(LOG_PREFIX, '  result keys:', JSON.stringify(Object.keys(result || {})));
+                console.log(LOG_PREFIX, '  response keys:', JSON.stringify(Object.keys(resp || {})));
+                console.log(LOG_PREFIX, '  full op keys:', JSON.stringify(Object.keys(op.operation || {})));
+                // 재귀적으로 URL 찾기 시도
+                const deepUrl = findDeepUrl(op.operation);
+                if (deepUrl) {
+                  console.log(LOG_PREFIX, '🔍 Deep search found URL:', deepUrl.substring(0, 80));
+                }
+              }
+              const finalUrl = videoUrl || findDeepUrl(op.operation) || '';
               pendingVideoOps.delete(opName);
-              console.log(LOG_PREFIX, 'Video ready:', videoUrl?.substring(0, 60));
+              console.log(LOG_PREFIX, 'Video ready:', finalUrl ? finalUrl.substring(0, 60) : '(URL 없음 — DOM 감지 필요)');
               window.postMessage({
                 type: 'VEO3_API_RESULT', seq: pending.seq, prompt: pending.prompt,
-                status: 200, ok: true, hasMedia: !!videoUrl,
-                mediaUrls: videoUrl ? [videoUrl] : [], isVideo: true
+                status: 200, ok: true, hasMedia: true,
+                mediaUrls: finalUrl ? [finalUrl] : [], isVideo: true,
+                videoCompleted: true
               }, '*');
             } else if (op.status === 'MEDIA_GENERATION_STATUS_FAILED') {
               pendingVideoOps.delete(opName);
