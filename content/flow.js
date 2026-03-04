@@ -1204,45 +1204,7 @@
     return false;
   }
 
-  let _lastUploadedSourceUrl = null;  // 마지막 업로드한 소스 이미지 추적 (대기열 변경 감지)
-
-  async function deleteGalleryImages() {
-    // 갤러리의 모든 이미지를 ⋮ → Delete로 삭제
-    const images = [];
-    document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img) && img.offsetParent !== null) images.push(img);
-    });
-    console.log(LOG_PREFIX, `[frame] 기존 갤러리 이미지 ${images.length}개 삭제 시작`);
-    for (const img of images) {
-      const moreBtn = findClosestMoreButton(img);
-      if (!moreBtn) continue;
-      // 호버 → 클릭
-      const imgRect = img.getBoundingClientRect();
-      const hoverTargets = [img];
-      let p = img.parentElement;
-      for (let i = 0; i < 3 && p; i++) { hoverTargets.push(p); p = p.parentElement; }
-      const hOpts = { bubbles: true, cancelable: true, clientX: imgRect.left + imgRect.width / 2, clientY: imgRect.top + imgRect.height / 2 };
-      for (const t of hoverTargets) {
-        t.dispatchEvent(new PointerEvent('pointerenter', { ...hOpts, pointerId: 1, pointerType: 'mouse' }));
-        t.dispatchEvent(new MouseEvent('mouseover', hOpts));
-      }
-      await delay(400);
-      const anchorP = moreBtn.closest('a');
-      if (anchorP) anchorP.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); }, { capture: true, once: true });
-      moreBtn.click();
-      await delay(500);
-      // Delete 메뉴 아이템 클릭
-      const menuItems = document.querySelectorAll('[role="menuitem"]');
-      for (const item of menuItems) {
-        if (/delete|삭제/i.test(item.textContent) && item.offsetParent !== null) {
-          item.click();
-          console.log(LOG_PREFIX, '[frame] 갤러리 이미지 삭제 클릭');
-          await delay(800);
-          break;
-        }
-      }
-    }
-  }
+  let _lastUploadedSourceUrl = null;  // 마지막 업로드한 소스 이미지 추적
 
   async function uploadFrame(imageDataUrl, position = 'first') {
     // 설정 패널이 열려있으면 갤러리 이미지를 가리므로 닫기
@@ -1255,6 +1217,7 @@
     // 소스 이미지 URL 추적 (HTTP URL 기준, dataUrl이면 앞부분 비교)
     const sourceKey = imageDataUrl.startsWith('http') ? imageDataUrl : imageDataUrl.substring(0, 200);
     const isNewSource = _lastUploadedSourceUrl !== null && _lastUploadedSourceUrl !== sourceKey;
+    const isSameRetry = !isNewSource && _lastUploadedSourceUrl !== null;
 
     // HTTP URL → dataUrl 변환 (MangoHub 이미지)
     if (imageDataUrl.startsWith('http')) {
@@ -1273,19 +1236,13 @@
       }
     }
 
-    // 대기열이 바뀌었으면 기존 갤러리 이미지 삭제 (다른 소스 이미지)
-    if (isNewSource) {
-      console.log(LOG_PREFIX, '[frame] 새 소스 이미지 → 기존 갤러리 이미지 삭제');
-      await deleteGalleryImages();
-      await delay(500);
-    }
+    const imgCountBefore = countGalleryImages();
+    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개, 새소스=${isNewSource}, 재시도=${isSameRetry}`);
 
-    let imgCountBefore = countGalleryImages();
-    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개, 새소스=${isNewSource}`);
-
-    // 갤러리에 이미지가 없으면 업로드 시도
-    // 이미 있으면 업로드 스킵 (재시도 — 같은 이미지는 갤러리에 남아있음)
-    if (imgCountBefore === 0) {
+    // 재시도(같은 이미지) + 갤러리에 이미지 있으면 업로드 스킵
+    // 새 소스이미지면 갤러리 상태 무관하게 항상 업로드
+    const shouldUpload = isNewSource || imgCountBefore === 0;
+    if (shouldUpload) {
       const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
       console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
       let uploaded = false;
