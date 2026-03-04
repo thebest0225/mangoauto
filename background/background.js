@@ -676,17 +676,13 @@ async function runSequentialLoop(loopId) {
         break;
       }
 
-      // "Image rejected" = 서버가 이미지 거부 (400) → 재시도 무의미, 바로 스킵
-      if (resp.error.includes('Image rejected') || resp.error.includes('이미지 업로드 거부') ||
-          resp.errorCode === 'IMAGE_REJECTED') {
-        broadcastLog(`이미지 서버 거부 → 다음 항목으로 건너뜀: ${resp.error}`, 'warn');
-        sm.skipCurrent();
-        broadcastState(getExtendedSnapshot());
-        await handleCooldownAndNext();
-        continue;
-      }
+      // "Image rejected" = 서버가 이미지 거부 (400)
+      // 이미지 자체 문제 → 사용자 설정 재시도 횟수만큼 재시도, LLM 프롬프트 수정은 안 함
+      const isImageRejected = resp.error.includes('Image rejected') ||
+                              resp.error.includes('이미지 업로드 거부') ||
+                              resp.errorCode === 'IMAGE_REJECTED';
 
-      broadcastLog(`생성 에러: ${resp.error}`, 'error');
+      broadcastLog(`생성 에러: ${resp.error}${isImageRejected ? ' (이미지 거부)' : ''}`, 'error');
       sm.markError(resp.error);
       broadcastState(getExtendedSnapshot());
       if (sm.state === AutoState.ERROR) {
@@ -696,13 +692,15 @@ async function runSequentialLoop(loopId) {
         continue;
       }
 
-      // maxRetries 초과 → 검열 에러이면 LLM 프롬프트 수정 재시도
+      // maxRetries 초과 후 처리
+      // 이미지 업로드 거부 → LLM 프롬프트 수정 안 함 (이미지 문제이지 프롬프트 문제가 아님)
+      // 프롬프트/생성 검열 → LLM 프롬프트 수정 시도
       const llmCfg = automationSettings?.llm;
       const llmMaxAttempts = llmCfg?.retryCount || 2;
       const llmAttemptsSoFar = item._llmRewriteCount || 0;
-      const isCensorship = isCensorshipError(resp.error, resp.errorCode);
+      const isCensorship = !isImageRejected && isCensorshipError(resp.error, resp.errorCode);
 
-      broadcastLog(`LLM 조건 체크: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(resp.error||'').substring(0,80)}"`, 'info');
+      broadcastLog(`LLM 조건 체크: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, isImageRejected=${isImageRejected}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(resp.error||'').substring(0,80)}"`, 'info');
 
       if (llmCfg?.enabled && llmCfg?.kieApiKey &&
           !item._isThumbnail &&
