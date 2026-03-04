@@ -361,10 +361,16 @@
             for (const m of data.media) {
               videoUrl = m?.video?.fifeUrl || m?.video?.videoUri || m?.video?.url ||
                         m?.video?.generatedVideo?.fifeUrl || m?.video?.generatedVideo?.videoUri ||
-                        m?.video?.generatedVideo?.url ||
+                        m?.video?.generatedVideo?.url || m?.video?.generatedVideo?.mediaUrl ||
+                        m?.video?.generatedVideo?.encodedVideo?.url || m?.video?.generatedVideo?.encodedVideo?.uri ||
                         m?.video?.operation?.metadata?.video?.fifeUrl ||
                         m?.video?.operation?.metadata?.video?.videoUri ||
+                        m?.video?.operation?.response?.video?.fifeUrl ||
+                        m?.video?.operation?.response?.video?.videoUri ||
+                        m?.video?.operation?.result?.video?.fifeUrl ||
+                        m?.video?.operation?.result?.video?.videoUri ||
                         m?.fifeUrl || m?.videoUri || '';
+              if (!videoUrl) videoUrl = findDeepUrl(m?.video) || '';
               if (videoUrl) break;
             }
             if (!videoUrl) videoUrl = findDeepUrl(data.media) || '';
@@ -390,6 +396,23 @@
               if (m0.video) {
                 const vKeys = Object.keys(m0.video);
                 console.log(LOG_PREFIX, `📡 media[0].video keys: [${vKeys.join(',')}]`);
+                // generatedVideo 내부 구조 상세 로깅
+                if (m0.video.generatedVideo) {
+                  const gvKeys = Object.keys(m0.video.generatedVideo);
+                  console.log(LOG_PREFIX, `📡 generatedVideo keys: [${gvKeys.join(',')}]`);
+                  console.log(LOG_PREFIX, `📡 generatedVideo: ${JSON.stringify(m0.video.generatedVideo).substring(0, 500)}`);
+                }
+                // operation 내부 구조 상세 로깅
+                if (m0.video.operation) {
+                  const opKeys = Object.keys(m0.video.operation);
+                  console.log(LOG_PREFIX, `📡 operation keys: [${opKeys.join(',')}]`);
+                  if (m0.video.operation.metadata) {
+                    console.log(LOG_PREFIX, `📡 operation.metadata: ${JSON.stringify(m0.video.operation.metadata).substring(0, 500)}`);
+                  }
+                  if (m0.video.operation.response) {
+                    console.log(LOG_PREFIX, `📡 operation.response: ${JSON.stringify(m0.video.operation.response).substring(0, 500)}`);
+                  }
+                }
                 // 에러/실패 상태 감지
                 const vStr = JSON.stringify(m0.video).substring(0, 200);
                 if (vStr.toLowerCase().includes('fail') || vStr.toLowerCase().includes('error') ||

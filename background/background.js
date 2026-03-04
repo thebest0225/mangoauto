@@ -1037,6 +1037,23 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   const filename = generateFilename(sm.currentIndex, sm.platform, sm.mediaType);
   broadcastLog(`handleSequentialComplete: mode=${sm.mode}, mediaType=${sm.mediaType}, hasUrl=${!!mediaUrl}, hasDataUrl=${!!mediaDataUrl}`, 'info');
 
+  // ui-download 마커 처리: chrome.downloads에서 실제 URL 찾기
+  if (mediaUrl === 'ui-download') {
+    broadcastLog('ui-download 감지 — chrome.downloads에서 실제 URL 검색...', 'info');
+    const dlInfo = await findRecentDownloadUrl(120000);
+    if (dlInfo?.url) {
+      mediaUrl = dlInfo.url;
+      broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
+    } else if (dlInfo?.filePath) {
+      // URL은 없지만 파일 경로 있음 — file:// URL로 시도
+      mediaUrl = 'file:///' + dlInfo.filePath.replace(/\\/g, '/');
+      broadcastLog(`다운로드 파일 경로 사용: ${mediaUrl.substring(0, 80)}`, 'info');
+    } else {
+      broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음 — 업로드 스킵', 'warn');
+      mediaUrl = null;
+    }
+  }
+
   // Flow 비디오 품질 업스케일 적용
   if (mediaUrl && sm.platform === 'flow' && sm.mediaType === 'video') {
     const videoQuality = automationSettings?.download?.videoQuality || '720p';
@@ -1182,6 +1199,19 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   const itemIndex = task.index;
   // 파일명은 큐 인덱스 기준 (resultIndex가 아닌 실제 큐 위치)
   const filename = generateFilename(task.queueIndex ?? itemIndex, sm.platform, sm.mediaType);
+
+  // ui-download 마커 처리 (concurrent)
+  if (mediaUrl === 'ui-download') {
+    broadcastLog('ui-download 감지 (concurrent) — chrome.downloads에서 실제 URL 검색...', 'info');
+    const dlInfo = await findRecentDownloadUrl(120000);
+    if (dlInfo?.url) {
+      mediaUrl = dlInfo.url;
+      broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
+    } else {
+      broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음', 'warn');
+      mediaUrl = null;
+    }
+  }
 
   // Flow 비디오 품질 업스케일 적용 (concurrent)
   if (mediaUrl && sm.platform === 'flow' && sm.mediaType === 'video') {
@@ -1784,6 +1814,70 @@ async function fetchMediaWithCookies(url) {
   }
 
   throw new Error(`미디어 다운로드 실패: ${url.substring(0, 60)}`);
+}
+
+// ─── Find recent download URL from chrome.downloads (for ui-download fallback) ───
+async function findRecentDownloadUrl(maxAgeMs = 120000) {
+  try {
+    const results = await chrome.downloads.search({
+      orderBy: ['-startTime'],
+      limit: 10
+    });
+    const now = Date.now();
+    for (const dl of results) {
+      // 최근 다운로드만 확인
+      const startTime = new Date(dl.startTime).getTime();
+      if (now - startTime > maxAgeMs) continue;
+      // 비디오 파일만 (mp4, webm 등)
+      const filename = (dl.filename || '').toLowerCase();
+      const url = dl.finalUrl || dl.url || '';
+      const isVideo = filename.endsWith('.mp4') || filename.endsWith('.webm') ||
+                      url.includes('video') || (dl.mime || '').includes('video');
+      if (!isVideo) continue;
+      // Google Labs / storage.googleapis.com에서 온 다운로드 우선
+      const isGoogleDl = url.includes('google') || url.includes('googleapis');
+      if (dl.state === 'complete') {
+        broadcastLog(`최근 다운로드 발견 (완료): ${filename.substring(filename.length - 40)}`, 'info');
+        return { url, filePath: dl.filename, state: 'complete' };
+      }
+      if (dl.state === 'in_progress' && isGoogleDl) {
+        // 진행 중이면 완료 대기 (최대 60초)
+        broadcastLog(`다운로드 진행 중, 완료 대기: ${dl.id}`, 'info');
+        const completedUrl = await waitForDownloadComplete(dl.id, 60000);
+        if (completedUrl) return completedUrl;
+      }
+    }
+    return null;
+  } catch (e) {
+    broadcastLog(`chrome.downloads.search 실패: ${e.message}`, 'warn');
+    return null;
+  }
+}
+
+// ─── Wait for a specific download to complete ───
+function waitForDownloadComplete(downloadId, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.downloads.onChanged.removeListener(listener);
+      resolve(null);
+    }, timeoutMs);
+    function listener(delta) {
+      if (delta.id !== downloadId) return;
+      if (delta.state?.current === 'complete') {
+        clearTimeout(timeout);
+        chrome.downloads.onChanged.removeListener(listener);
+        chrome.downloads.search({ id: downloadId }, (results) => {
+          const dl = results?.[0];
+          resolve(dl ? { url: dl.finalUrl || dl.url, filePath: dl.filename, state: 'complete' } : null);
+        });
+      } else if (delta.state?.current === 'interrupted') {
+        clearTimeout(timeout);
+        chrome.downloads.onChanged.removeListener(listener);
+        resolve(null);
+      }
+    }
+    chrome.downloads.onChanged.addListener(listener);
+  });
 }
 
 // ─── Apply video quality to Flow fifeUrl ───
