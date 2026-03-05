@@ -919,9 +919,11 @@ function updateQueueListFromState(state) {
   const isCompleted = state.state === 'COMPLETED';
 
   // 결과 맵 빌드 (segmentIndex → success)
+  // MangoHub: segmentIndex(1-based)로 매칭, Standalone: index(0-based)로 매칭
   const doneMap = new Map();
   for (const r of state.results) {
-    doneMap.set(r.index, r.success);
+    const key = r.segmentIndex !== undefined ? r.segmentIndex : r.index;
+    doneMap.set(key, r.success);
   }
 
   // 파이프라인 모드: 현재 진행 중인 항목 인덱스 (segmentIndex 기준)
