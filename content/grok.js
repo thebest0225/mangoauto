@@ -190,34 +190,35 @@
       // 3. 프롬프트 입력 + 전송 → 영상 생성
       // ══════════════════════════════════════════════════
       if (mode === 'image-video' && sourceImageDataUrl) {
-        showToast('=== 프레임→영상 모드 시작 (새 UI) ===', 'info');
+        showToast('=== 프레임→영상 모드 시작 ===', 'info');
 
         // Step 1: 메인 페이지 확인
         showToast('Step 1: 메인 페이지 확인...', 'info');
         await ensureMainPage();
         checkStopped();
 
-        // Step 2: 이미지 첨부 → 자동으로 결과 페이지 이동
-        showToast('Step 2: 이미지 첨부 중...', 'info');
+        // Step 2: 비디오 모드 전환 + 설정 (새 UI: 하단 바에서 직접, 구 UI: 패널)
+        // 새 UI에서는 비디오 모드를 먼저 선택해야 이미지가 프레임으로 처리됨
+        showToast('Step 2: 비디오 모드 전환 + 설정...', 'info');
+        const switched = await switchToVideoMode(settings);
+        if (!switched) throw new Error('비디오 모드 전환 실패');
+        checkStopped();
+
+        // Step 3: 이미지 첨부 (비디오 모드에서 이미지 = 시작 프레임)
+        showToast('Step 3: 이미지 첨부 중...', 'info');
         const attached = await attachImage(sourceImageDataUrl);
         if (!attached) throw new Error('이미지 첨부 실패');
         showToast('이미지 첨부 완료!', 'success');
         checkStopped();
 
-        // Step 3: 결과 페이지 대기
-        showToast('Step 3: 결과 페이지 대기...', 'info');
+        // Step 4: 결과 페이지 대기 (이미지 첨부 후 자동 이동될 수 있음)
+        showToast('Step 4: 결과 페이지 대기...', 'info');
         await waitForResultPage(timeoutMs);
-        await delay(3000);
+        await delay(2000);
         checkStopped();
 
-        // Step 4: 검열 확인
+        // Step 5: 검열 확인
         if (isModerated()) throw new ModerationError();
-
-        // Step 5: 설정 패널에서 "동영상 만들기" 모드 전환 + 설정 적용
-        showToast('Step 5: 비디오 모드 전환 + 설정...', 'info');
-        const switched = await switchToVideoMode(settings);
-        if (!switched) throw new Error('비디오 모드 전환 실패');
-        checkStopped();
 
         // Step 6: 프롬프트 입력
         if (prompt?.trim()) {
@@ -576,13 +577,51 @@
       duration: videoDuration, resolution: videoResolution, aspectRatio
     });
 
+    // ═══ 새 UI (2026.03~): 하단 바에 인라인 버튼 ═══
+    // 하단 바에 "이미지" / "비디오" 탭 + 설정 버튼이 직접 표시
+    const inlineVideoBtn = findButtonByTextInArea('비디오') || findButtonByTextInArea('Video');
+    if (inlineVideoBtn) {
+      console.log(LOG_PREFIX, '새 UI: 하단 바 인라인 버튼 사용');
+      MangoDom.simulateClick(inlineVideoBtn);
+      await delay(500);
+      showToast('비디오 모드 선택 완료', 'info');
+
+      // 하단 바의 모든 설정 버튼 수집
+      const barBtns = [];
+      document.querySelectorAll('button').forEach(b => {
+        const rect = b.getBoundingClientRect();
+        const text = (b.textContent || '').trim();
+        if (rect.top > window.innerHeight - 150 && text.length > 0 && text.length <= 10) {
+          barBtns.push(b);
+        }
+      });
+      const btnTexts = barBtns.map(b => (b.textContent || '').trim());
+      console.log(LOG_PREFIX, `하단 바 설정 버튼 ${barBtns.length}개: [${btnTexts.join(', ')}]`);
+
+      if (videoDuration) {
+        clickButtonInList(barBtns, [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)], 'duration');
+        await delay(200);
+      }
+      if (videoResolution) {
+        clickButtonInList(barBtns, [videoResolution, videoResolution.replace('p', '')], 'resolution');
+        await delay(200);
+      }
+      if (aspectRatio) {
+        clickButtonInList(barBtns, [aspectRatio], 'aspectRatio');
+        await delay(200);
+      }
+
+      showToast('비디오 모드 전환 + 설정 완료!', 'success');
+      return true;
+    }
+
+    // ═══ 구 UI 폴백: 플로팅 패널 방식 ═══
+    console.log(LOG_PREFIX, '구 UI 폴백: 플로팅 패널 방식 시도');
+
     // Step 1: 설정 패널 트리거 버튼 찾기
-    // 방법 1: 메인 페이지 (aria-label="모델 선택" / 텍스트 "비디오"/"이미지")
     let modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
                    findButtonByTextInArea('이미지') ||
-                   findButtonByTextInArea('비디오') ||
-                   findButtonByTextInArea('Image') ||
-                   findButtonByTextInArea('Video');
+                   findButtonByTextInArea('Image');
 
     // 방법 2: 결과 페이지 (aria-label 기반, 하단 250px 이내)
     if (!modelBtn) {
@@ -611,8 +650,6 @@
           const submitBtn = findSubmitButton();
           const candidates = Array.from(container.querySelectorAll('button'))
             .filter(b => b !== submitBtn && !b.disabled && (b.textContent || '').trim().length <= 10);
-
-          // aria-expanded / aria-haspopup 버튼 우선
           for (const btn of candidates) {
             if (btn.getAttribute('aria-expanded') !== null || btn.getAttribute('aria-haspopup')) {
               modelBtn = btn;
@@ -620,7 +657,6 @@
               break;
             }
           }
-          // SVG 아이콘 버튼 fallback
           if (!modelBtn) {
             for (const btn of candidates) {
               if (btn.querySelector('svg')) {
@@ -635,64 +671,54 @@
     }
 
     if (!modelBtn) {
-      console.error(LOG_PREFIX, '설정 패널 트리거 버튼 못 찾음 (모든 방법 실패)');
-      showToast('모달 트리거 버튼 없음', 'error');
-      // 디버그: 하단 250px 이내 모든 버튼 출력
+      console.error(LOG_PREFIX, '설정 패널 트리거 버튼 못 찾음');
+      showToast('설정 트리거 버튼 없음', 'error');
       const allBtns = document.querySelectorAll('button');
       console.log(LOG_PREFIX, '=== 하단바 버튼 디버그 ===');
       allBtns.forEach((b, i) => {
         const rect = b.getBoundingClientRect();
         if (rect.top > window.innerHeight - 250) {
-          console.log(LOG_PREFIX, `  btn[${i}]: "${(b.textContent || '').trim().substring(0, 30)}" aria="${b.getAttribute('aria-label') || ''}" expanded=${b.getAttribute('aria-expanded')} top=${Math.round(rect.top)}`);
+          console.log(LOG_PREFIX, `  btn[${i}]: "${(b.textContent || '').trim().substring(0, 30)}" aria="${b.getAttribute('aria-label') || ''}" top=${Math.round(rect.top)}`);
         }
       });
       return false;
     }
 
     showToast(`트리거 버튼: "${(modelBtn.textContent || '').trim().substring(0, 20)}"`, 'info');
-
-    // Step 2: 패널 열기
     MangoDom.simulateClick(modelBtn);
     await delay(800);
 
-    // Step 3: 설정 먼저 적용 (패널이 열린 상태에서)
-    // "동영상 만들기"를 누르면 패널이 닫히므로, 설정을 먼저 적용해야 함
+    // 설정 먼저 적용
     let dropdownBtns = findDropdownButtons();
     if (dropdownBtns.length > 0) {
       const btnTexts = dropdownBtns.map(b => (b.textContent || '').trim()).filter(t => t.length < 20);
       showToast(`패널 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
-
       if (videoDuration) {
-        const durationLabels = [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)];
-        clickButtonInList(dropdownBtns, durationLabels, 'duration');
+        clickButtonInList(dropdownBtns, [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)], 'duration');
         await delay(200);
       }
-
       if (videoResolution) {
-        const resLabels = [videoResolution, videoResolution.replace('p', '')];
-        clickButtonInList(dropdownBtns, resLabels, 'resolution');
+        clickButtonInList(dropdownBtns, [videoResolution, videoResolution.replace('p', '')], 'resolution');
         await delay(200);
       }
-
       if (aspectRatio) {
-        const arLabels = [aspectRatio];
-        clickButtonInList(dropdownBtns, arLabels, 'aspectRatio');
+        clickButtonInList(dropdownBtns, [aspectRatio], 'aspectRatio');
         await delay(200);
       }
     }
 
-    // Step 4: "동영상 만들기" 모드 선택 (마지막에 — 클릭하면 패널이 자동으로 닫힘)
+    // "동영상 만들기" 모드 선택
     const videoItem = findDropdownItem('동영상 만들기') ||
+                      findDropdownItem('동영상 생성') ||
                       findDropdownItem('비디오') ||
                       findDropdownItem('Video');
     if (videoItem) {
       const itemText = (videoItem.textContent || '').trim().substring(0, 30);
       showToast(`"${itemText}" 클릭`, 'info');
       MangoDom.simulateClick(videoItem);
-      await delay(1000); // 모드 전환 대기
+      await delay(1000);
     } else {
       console.warn(LOG_PREFIX, '동영상 만들기 옵션 못 찾음');
-      showToast('동영상 만들기 옵션 없음', 'error');
       const panel = findFloatingContainer();
       if (panel) {
         const panelBtns = panel.querySelectorAll('button, [role="menuitem"], [role="option"]');
@@ -705,7 +731,6 @@
       return false;
     }
 
-    // 전환 확인: 텍스트필드 placeholder 변경 체크
     const editor = findEditor();
     if (editor) {
       const placeholder = editor.getAttribute('data-placeholder') || editor.textContent || '';
