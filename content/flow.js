@@ -1254,10 +1254,19 @@
   // 사용자 확인: Ctrl+C/V 붙여넣기는 동작함 → paste 방식 우선
 
   // 갤러리에 새 이미지 등장 대기 헬퍼
-  async function waitForGalleryImage(countBefore, timeoutMs = 10000) {
+  async function waitForGalleryImage(countBefore, timeoutMs = 10000, prevSrcs = null) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
+      // 방법 1: 갤러리 이미지 수 증가
       if (countGalleryImages() > countBefore) return true;
+      // 방법 2: 새로운 src 등장 (갤러리 수 고정/교체 시)
+      if (prevSrcs && prevSrcs.size > 0) {
+        let hasNew = false;
+        document.querySelectorAll('img[src]').forEach(img => {
+          if (isGalleryImage(img) && !prevSrcs.has(img.src)) hasNew = true;
+        });
+        if (hasNew) return true;
+      }
       await delay(500);
     }
     return false;
@@ -1318,7 +1327,7 @@
         console.log(LOG_PREFIX, '[frame] file input으로 업로드:', fileInput.accept || 'any');
         apiTriggered = true;  // file input은 확실히 API 호출
         await MangoDom.attachFileToInput(fileInput, file);
-        uploaded = await waitForGalleryImage(imgCountBefore, 12000);
+        uploaded = await waitForGalleryImage(imgCountBefore, 12000, prevGallerySrcs);
         if (uploaded) {
           console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
         } else {
@@ -1342,7 +1351,7 @@
             bubbles: true, cancelable: true, clipboardData: dt
           }));
           console.log(LOG_PREFIX, '[frame] paste 이벤트 발송 → 대기...');
-          uploaded = await waitForGalleryImage(imgCountBefore, 10000);
+          uploaded = await waitForGalleryImage(imgCountBefore, 10000, prevGallerySrcs);
           if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공');
         } catch (e) {
           console.warn(LOG_PREFIX, '[frame] paste 실패:', e.message);
