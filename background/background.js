@@ -1040,8 +1040,8 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
   // ui-download 마커 처리: chrome.downloads에서 실제 URL 찾기
   let _uiDownloadId = null; // UI 다운로드 ID (나중에 삭제용)
   if (mediaUrl === 'ui-download') {
-    broadcastLog('ui-download 감지 — chrome.downloads에서 실제 URL 검색...', 'info');
-    const dlInfo = await findRecentDownloadUrl(120000);
+    broadcastLog(`ui-download 감지 (${sm.mediaType}) — chrome.downloads에서 실제 URL 검색...`, 'info');
+    const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType);
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
@@ -1225,8 +1225,8 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   // ui-download 마커 처리 (concurrent)
   let _uiDownloadId = null;
   if (mediaUrl === 'ui-download') {
-    broadcastLog('ui-download 감지 (concurrent) — chrome.downloads에서 실제 URL 검색...', 'info');
-    const dlInfo = await findRecentDownloadUrl(120000);
+    broadcastLog(`ui-download 감지 (concurrent, ${sm.mediaType}) — chrome.downloads에서 실제 URL 검색...`, 'info');
+    const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType);
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
@@ -1849,7 +1849,7 @@ async function fetchMediaWithCookies(url) {
 }
 
 // ─── Find recent download URL from chrome.downloads (for ui-download fallback) ───
-async function findRecentDownloadUrl(maxAgeMs = 120000) {
+async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video') {
   try {
     const results = await chrome.downloads.search({
       orderBy: ['-startTime'],
@@ -1860,12 +1860,20 @@ async function findRecentDownloadUrl(maxAgeMs = 120000) {
       // 최근 다운로드만 확인
       const startTime = new Date(dl.startTime).getTime();
       if (now - startTime > maxAgeMs) continue;
-      // 비디오 파일만 (mp4, webm 등)
       const filename = (dl.filename || '').toLowerCase();
       const url = dl.finalUrl || dl.url || '';
-      const isVideo = filename.endsWith('.mp4') || filename.endsWith('.webm') ||
-                      url.includes('video') || (dl.mime || '').includes('video');
-      if (!isVideo) continue;
+      const mime = dl.mime || '';
+      // 미디어 타입에 따라 필터링
+      if (targetMediaType === 'image') {
+        const isImage = filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg') ||
+                        filename.endsWith('.webp') || mime.includes('image') ||
+                        url.includes('image') || url.includes('googleapis');
+        if (!isImage) continue;
+      } else {
+        const isVideo = filename.endsWith('.mp4') || filename.endsWith('.webm') ||
+                        url.includes('video') || mime.includes('video');
+        if (!isVideo) continue;
+      }
       // Google Labs / storage.googleapis.com에서 온 다운로드 우선
       const isGoogleDl = url.includes('google') || url.includes('googleapis');
       if (dl.state === 'complete') {

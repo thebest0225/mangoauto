@@ -263,21 +263,58 @@
           mediaType: 'video'
         });
       } else {
-        // 이미지: dataUrl로 변환
-        let mediaDataUrl;
-        if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
-          console.log(LOG_PREFIX, 'Using API-intercepted image URL');
-          mediaDataUrl = await MangoDom.fetchAsDataUrl(lastApiResult.mediaUrls[0]);
+        // 이미지: 품질 설정에 따라 UI 메뉴 다운로드 or dataUrl 변환
+        const imageQuality = settings?.download?.imageQuality || '1k';
+        console.log(LOG_PREFIX, `이미지 다운로드 품질: ${imageQuality}`);
+
+        if (imageQuality !== '1k') {
+          // 2K/4K: UI 호버 메뉴를 통해 업스케일 다운로드
+          console.log(LOG_PREFIX, `${imageQuality} UI 다운로드 시도...`);
+          const downloaded = await downloadImageViaMenu(imageQuality);
+
+          // API URL도 함께 전달 (MangoHub 업로드용 폴백)
+          let imgUrl = '';
+          if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
+            imgUrl = lastApiResult.mediaUrls[0];
+          } else {
+            imgUrl = await getGeneratedImageUrl() || '';
+          }
+
+          if (downloaded) {
+            console.log(LOG_PREFIX, `✓ ${imageQuality} 이미지 다운로드 트리거됨`);
+            chrome.runtime.sendMessage({
+              type: 'GENERATION_COMPLETE',
+              mediaUrl: imgUrl || 'ui-download',
+              mediaType: 'image'
+            });
+          } else {
+            // UI 다운로드 실패 → dataUrl 폴백
+            console.warn(LOG_PREFIX, `⚠ ${imageQuality} UI 다운로드 실패, dataUrl 폴백`);
+            if (!imgUrl) throw new Error('Cannot find generated image');
+            const mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
+            chrome.runtime.sendMessage({
+              type: 'GENERATION_COMPLETE',
+              mediaDataUrl,
+              mediaType: 'image'
+            });
+          }
         } else {
-          const imgUrl = await getGeneratedImageUrl();
-          if (!imgUrl) throw new Error('Cannot find generated image');
-          mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
+          // 1K: 기존 방식 (dataUrl 변환)
+          let mediaDataUrl;
+          if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
+            console.log(LOG_PREFIX, 'Using API-intercepted image URL');
+            mediaDataUrl = await MangoDom.fetchAsDataUrl(lastApiResult.mediaUrls[0]);
+          } else {
+            const imgUrl = await getGeneratedImageUrl();
+            if (!imgUrl) throw new Error('Cannot find generated image');
+            mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
+          }
+          chrome.runtime.sendMessage({
+            type: 'GENERATION_COMPLETE',
+            mediaDataUrl,
+            mediaType: 'image'
+          });
         }
-        chrome.runtime.sendMessage({
-          type: 'GENERATION_COMPLETE',
-          mediaDataUrl,
-          mediaType: 'image'
-        });
       }
 
       return { ok: true };
@@ -2549,6 +2586,199 @@
     }
 
     console.warn(LOG_PREFIX, '[download] 품질 옵션 못찾음');
+    document.body.click();
+    return false;
+  }
+
+  /**
+   * 이미지 호버 메뉴를 통해 지정 품질(1K/2K/4K)로 다운로드
+   * downloadVideoViaMenu와 동일한 UI 인터랙션 패턴 사용
+   */
+  async function downloadImageViaMenu(quality = '1k') {
+    // 최신 갤러리 이미지 찾기
+    let target = null;
+    const allImgs = document.querySelectorAll('img[src]');
+    for (const img of allImgs) {
+      if (!isGalleryImage(img)) continue;
+      const src = img.src || '';
+      if (!existingImages.has(src)) {
+        target = img;
+      }
+    }
+    // 새 이미지 못 찾으면 마지막 갤러리 이미지 사용
+    if (!target) {
+      for (const img of allImgs) {
+        if (isGalleryImage(img)) target = img;
+      }
+    }
+    if (!target) {
+      console.warn(LOG_PREFIX, '[img-download] 갤러리 이미지 없음');
+      return false;
+    }
+
+    const targetRect = target.getBoundingClientRect();
+    console.log(LOG_PREFIX, `[img-download] 대상: ${Math.round(targetRect.width)}x${Math.round(targetRect.height)}, quality=${quality}`);
+
+    // 호버 (이미지 + 부모 계층)
+    const hoverTargets = [target];
+    let parent = target.parentElement;
+    for (let i = 0; i < 5 && parent; i++) {
+      hoverTargets.push(parent);
+      parent = parent.parentElement;
+    }
+    const cx = targetRect.left + targetRect.width / 2;
+    const cy = targetRect.top + targetRect.height / 2;
+    const hOpts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+    const pOpts = { ...hOpts, pointerId: 1, pointerType: 'mouse' };
+    for (const t of hoverTargets) {
+      t.dispatchEvent(new PointerEvent('pointerenter', pOpts));
+      t.dispatchEvent(new PointerEvent('pointermove', pOpts));
+      t.dispatchEvent(new MouseEvent('mouseenter', hOpts));
+      t.dispatchEvent(new MouseEvent('mouseover', hOpts));
+    }
+    await delay(600);
+
+    // ⋮ 버튼 찾기
+    let moreBtn = findClosestMoreButton(target);
+    if (!moreBtn) {
+      const hOpts2 = { bubbles: true, cancelable: true, clientX: targetRect.right - 20, clientY: targetRect.top + 20 };
+      for (const t of hoverTargets) {
+        t.dispatchEvent(new PointerEvent('pointermove', { ...hOpts2, pointerId: 1, pointerType: 'mouse' }));
+        t.dispatchEvent(new MouseEvent('mousemove', hOpts2));
+      }
+      await delay(600);
+      moreBtn = findClosestMoreButton(target);
+    }
+    if (!moreBtn) {
+      console.warn(LOG_PREFIX, '[img-download] ⋮ 버튼 못찾음');
+      return false;
+    }
+
+    // ⋮ 클릭
+    const anchorP = moreBtn.closest('a');
+    if (anchorP) anchorP.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); }, { capture: true, once: true });
+    const btnRect = moreBtn.getBoundingClientRect();
+    const btnX = btnRect.left + btnRect.width / 2;
+    const btnY = btnRect.top + btnRect.height / 2;
+    const clickOpts = { bubbles: true, cancelable: true, clientX: btnX, clientY: btnY, button: 0 };
+    moreBtn.dispatchEvent(new PointerEvent('pointerdown', { ...clickOpts, pointerId: 1, pointerType: 'mouse' }));
+    moreBtn.dispatchEvent(new MouseEvent('mousedown', clickOpts));
+    await delay(80);
+    moreBtn.dispatchEvent(new PointerEvent('pointerup', { ...clickOpts, pointerId: 1, pointerType: 'mouse' }));
+    moreBtn.dispatchEvent(new MouseEvent('mouseup', clickOpts));
+    moreBtn.dispatchEvent(new MouseEvent('click', clickOpts));
+    await delay(600);
+    if (!hasMenuOverlay()) { moreBtn.click(); await delay(600); }
+    console.log(LOG_PREFIX, '[img-download] ⋮ 클릭 완료');
+
+    // "다운로드" 메뉴 아이템 찾기
+    const downloadItem = findMenuItemByText(['Download', '다운로드']);
+    if (!downloadItem) {
+      const items = getVisibleMenuItems();
+      console.warn(LOG_PREFIX, `[img-download] 다운로드 메뉴 못찾음. 메뉴: ${items.join(', ')}`);
+      document.body.click();
+      return false;
+    }
+    console.log(LOG_PREFIX, `[img-download] "Download" 발견: "${downloadItem.textContent?.trim()?.substring(0, 30)}"`);
+
+    // Download 아이템에 호버 → 서브메뉴 열기
+    const diRect = downloadItem.getBoundingClientRect();
+    const diX = diRect.left + diRect.width / 2;
+    const diY = diRect.top + diRect.height / 2;
+    const diOpts = { bubbles: true, cancelable: true, clientX: diX, clientY: diY };
+    downloadItem.dispatchEvent(new PointerEvent('pointerenter', { ...diOpts, pointerId: 1, pointerType: 'mouse' }));
+    downloadItem.dispatchEvent(new PointerEvent('pointermove', { ...diOpts, pointerId: 1, pointerType: 'mouse' }));
+    downloadItem.dispatchEvent(new MouseEvent('mouseenter', diOpts));
+    downloadItem.dispatchEvent(new MouseEvent('mouseover', diOpts));
+    downloadItem.dispatchEvent(new MouseEvent('mousemove', diOpts));
+    await delay(800);
+
+    // 품질 매핑: '1k' → ['1K', '1k', 'Original'], '2k' → ['2K', '2k'], '4k' → ['4K', '4k']
+    const qualityMap = {
+      '1k': ['1K', '1k', 'Original', 'original'],
+      '2k': ['2K', '2k'],
+      '4k': ['4K', '4k']
+    };
+    const targetTexts = qualityMap[quality] || qualityMap['1k'];
+
+    // 서브메뉴에서 품질 옵션 찾기
+    let qualityBtn = findMenuItemByText(targetTexts);
+
+    // 서브메뉴 안 열렸으면 클릭으로 시도
+    if (!qualityBtn) {
+      console.log(LOG_PREFIX, '[img-download] 호버로 서브메뉴 안 열림, 클릭 시도');
+      downloadItem.click();
+      await delay(800);
+      qualityBtn = findMenuItemByText(targetTexts);
+    }
+
+    // 오른쪽 가장자리 호버 재시도
+    if (!qualityBtn) {
+      const rightOpts = { bubbles: true, cancelable: true, clientX: diRect.right - 2, clientY: diY };
+      downloadItem.dispatchEvent(new PointerEvent('pointermove', { ...rightOpts, pointerId: 1, pointerType: 'mouse' }));
+      downloadItem.dispatchEvent(new MouseEvent('mousemove', rightOpts));
+      await delay(800);
+      qualityBtn = findMenuItemByText(targetTexts);
+    }
+
+    const subItems = getVisibleMenuItems();
+    console.log(LOG_PREFIX, `[img-download] 서브메뉴: ${subItems.join(', ')}`);
+
+    if (qualityBtn) {
+      // Upgrade 버튼 있으면 해당 품질 사용 불가 → 한 단계 낮은 품질로 폴백
+      const hasUpgrade = qualityBtn.querySelector('button') ||
+        /upgrade|업그레이드/i.test(qualityBtn.textContent || '');
+      if (hasUpgrade) {
+        console.log(LOG_PREFIX, `[img-download] ${quality}에 Upgrade 버튼 → 폴백`);
+        // 4k → 2k → 1k 순으로 폴백
+        const fallbackOrder = quality === '4k' ? ['2k', '1k'] : ['1k'];
+        for (const fb of fallbackOrder) {
+          const fbTexts = qualityMap[fb];
+          const fbBtn = findMenuItemByText(fbTexts);
+          if (fbBtn) {
+            const fbUpgrade = fbBtn.querySelector('button') || /upgrade|업그레이드/i.test(fbBtn.textContent || '');
+            if (!fbUpgrade) {
+              console.log(LOG_PREFIX, `[img-download] 폴백 ${fb} 선택`);
+              fbBtn.click();
+              await delay(1000);
+              return true;
+            }
+          }
+        }
+      } else {
+        console.log(LOG_PREFIX, `[img-download] ${quality} 선택`);
+        qualityBtn.click();
+        await delay(1000);
+        return true;
+      }
+    }
+
+    // 원하는 품질 못 찾으면 아무 품질이나 선택
+    const any1k = findMenuItemByText(['1K', '1k', 'Original', 'original']);
+    if (any1k) {
+      console.log(LOG_PREFIX, `[img-download] 대체: 1K 선택`);
+      any1k.click();
+      await delay(1000);
+      return true;
+    }
+
+    // 품질 서브메뉴 없음 — Download 직접 클릭
+    console.log(LOG_PREFIX, '[img-download] 품질 서브메뉴 없음, Download 직접 클릭');
+    downloadItem.click();
+    await delay(1000);
+
+    // 클릭 후 품질 옵션 재확인
+    qualityBtn = findMenuItemByText(targetTexts);
+    if (qualityBtn) {
+      const hasUpgrade = qualityBtn.querySelector('button') || /upgrade|업그레이드/i.test(qualityBtn.textContent || '');
+      if (!hasUpgrade) {
+        qualityBtn.click();
+        await delay(1000);
+        return true;
+      }
+    }
+
+    console.warn(LOG_PREFIX, '[img-download] 품질 옵션 못찾음');
     document.body.click();
     return false;
   }
