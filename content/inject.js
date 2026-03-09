@@ -560,5 +560,29 @@
     }
   };
 
-  console.log(LOG_PREFIX, 'Fetch interceptor installed (v4.1 high-level Slate API)');
+  // ─── Upscaled Image Blob Interceptor ───
+  // Flow가 2K/4K 업스케일 이미지를 다운로드할 때 blob 데이터를 캡처
+  // URL.createObjectURL → <a download> 패턴을 감지하여 dataUrl로 변환 후 content script에 전달
+  const origCreateObjectURL = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = function(obj) {
+    const blobUrl = origCreateObjectURL(obj);
+    // 이미지 blob만 캡처 (500KB 이상 — 썸네일/아이콘 등 제외, 2K는 보통 1MB+)
+    if (obj instanceof Blob && obj.type?.startsWith('image/') && obj.size > 500000) {
+      console.log(LOG_PREFIX, `🖼️ 이미지 blob 감지: ${obj.type}, ${Math.round(obj.size / 1024)}KB`);
+      const reader = new FileReader();
+      reader.onload = () => {
+        window.postMessage({
+          type: 'UPSCALED_IMAGE_BLOB',
+          dataUrl: reader.result,
+          size: obj.size,
+          mimeType: obj.type
+        }, '*');
+        console.log(LOG_PREFIX, `🖼️ 업스케일 이미지 dataUrl 전달 (${Math.round(obj.size / 1024)}KB)`);
+      };
+      reader.readAsDataURL(obj);
+    }
+    return blobUrl;
+  };
+
+  console.log(LOG_PREFIX, 'Fetch interceptor installed (v4.1 high-level Slate API + blob interceptor)');
 })();

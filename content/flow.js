@@ -145,6 +145,7 @@
   // ─── Listen for messages from inject.js (MAIN world) ───
   let lastApiResult = null;
   let lastUpscaledDataUrl = null;  // inject.js가 캡처한 업스케일 이미지 blob
+  let lastUpscaledSize = 0;       // 가장 큰 blob만 유지하기 위한 크기 추적
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'VEO3_API_RESULT') {
       console.log(LOG_PREFIX, 'API result received:', event.data);
@@ -154,8 +155,15 @@
       console.log(LOG_PREFIX, 'Prompt injection confirmed by inject.js:', event.data.ok);
     }
     if (event.data?.type === 'UPSCALED_IMAGE_BLOB') {
-      lastUpscaledDataUrl = event.data.dataUrl;
-      console.log(LOG_PREFIX, `업스케일 이미지 수신: ${Math.round(event.data.size / 1024)}KB`);
+      // 여러 blob이 감지될 수 있으므로 가장 큰 것만 유지 (= 업스케일 이미지)
+      const newSize = event.data.size || 0;
+      if (newSize > lastUpscaledSize) {
+        lastUpscaledDataUrl = event.data.dataUrl;
+        lastUpscaledSize = newSize;
+        console.log(LOG_PREFIX, `업스케일 이미지 수신 (최대): ${Math.round(newSize / 1024)}KB`);
+      } else {
+        console.log(LOG_PREFIX, `업스케일 이미지 무시 (더 작음): ${Math.round(newSize / 1024)}KB < ${Math.round(lastUpscaledSize / 1024)}KB`);
+      }
     }
   });
 
@@ -273,39 +281,68 @@
         console.log(LOG_PREFIX, `이미지 다운로드 품질: ${imageQuality}`);
 
         if (imageQuality !== '1k') {
-          // 2K/4K: UI 호버 메뉴를 통해 업스케일 다운로드
-          lastUpscaledDataUrl = null; // 이전 캡처 초기화
-          console.log(LOG_PREFIX, `${imageQuality} UI 다운로드 시도...`);
-          const downloaded = await downloadImageViaMenu(imageQuality);
+          // 2K/4K: UI 호버 메뉴를 통해 업스케일 다운로드 (최대 3회 시도)
+          const maxUpscaleAttempts = 3;
+          let mediaDataUrl = null;
 
-          if (downloaded) {
-            // inject.js의 FileReader가 비동기이므로 dataUrl 수신 대기 (최대 10초)
-            if (!lastUpscaledDataUrl) {
-              console.log(LOG_PREFIX, '업스케일 blob dataUrl 대기 중...');
-              for (let i = 0; i < 20 && !lastUpscaledDataUrl; i++) {
-                await delay(500);
+          for (let attempt = 1; attempt <= maxUpscaleAttempts; attempt++) {
+            lastUpscaledDataUrl = null; // 이전 캡처 초기화
+            lastUpscaledSize = 0;
+            console.log(LOG_PREFIX, `${imageQuality} UI 다운로드 시도 (${attempt}/${maxUpscaleAttempts})...`);
+            const downloaded = await downloadImageViaMenu(imageQuality);
+
+            if (downloaded) {
+              // inject.js의 FileReader가 비동기이므로 dataUrl 수신 대기 (최대 15초)
+              if (!lastUpscaledDataUrl) {
+                console.log(LOG_PREFIX, '업스케일 blob dataUrl 대기 중...');
+                for (let i = 0; i < 30 && !lastUpscaledDataUrl; i++) {
+                  await delay(500);
+                }
+              }
+
+              if (lastUpscaledDataUrl) {
+                mediaDataUrl = lastUpscaledDataUrl;
+                console.log(LOG_PREFIX, `✓ 업스케일 이미지 캡처 성공 (${Math.round(mediaDataUrl.length / 1024)}KB) → MangoHub + 프로젝트 폴더에 2K 저장`);
+                break; // 성공 — 루프 탈출
+              } else {
+                console.warn(LOG_PREFIX, `⚠ 업스케일 blob 캡처 실패 (시도 ${attempt}/${maxUpscaleAttempts})`);
+                if (attempt < maxUpscaleAttempts) {
+                  console.log(LOG_PREFIX, `메뉴 닫기 후 재시도 대기...`);
+                  document.body.click(); // 메뉴 닫기
+                  await delay(2000);
+                }
+              }
+            } else {
+              console.warn(LOG_PREFIX, `⚠ UI 다운로드 실패 (시도 ${attempt}/${maxUpscaleAttempts})`);
+              if (attempt < maxUpscaleAttempts) {
+                await delay(2000);
               }
             }
-            // inject.js가 blob을 가로채서 dataUrl로 변환한 것이 있으면 사용 (2K)
-            // 없으면 원본 API URL로 폴백 (1K)
-            let mediaDataUrl = lastUpscaledDataUrl || null;
-            if (mediaDataUrl) {
-              console.log(LOG_PREFIX, `✓ 업스케일 이미지 캡처 성공 (${Math.round(mediaDataUrl.length / 1024)}KB) → MangoHub + 프로젝트 폴더에 2K 저장`);
+          }
+
+          if (mediaDataUrl) {
+            // 2K 캡처 성공
+            chrome.runtime.sendMessage({
+              type: 'GENERATION_COMPLETE',
+              mediaDataUrl,
+              mediaType: 'image',
+              uiDownloaded: true
+            });
+          } else {
+            // 모든 재시도 실패 → 원본 1K로 폴백
+            console.warn(LOG_PREFIX, `⚠ ${maxUpscaleAttempts}회 시도 모두 실패 → 원본 1K 폴백`);
+            let imgUrl = '';
+            if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
+              imgUrl = lastApiResult.mediaUrls[0];
             } else {
-              console.log(LOG_PREFIX, '업스케일 blob 캡처 안 됨 → 원본 API URL 폴백');
-              let imgUrl = '';
-              if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
-                imgUrl = lastApiResult.mediaUrls[0];
-              } else {
-                imgUrl = await getGeneratedImageUrl() || '';
-              }
-              if (imgUrl) {
-                try {
-                  mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
-                  console.log(LOG_PREFIX, `원본 이미지 dataUrl (${Math.round(mediaDataUrl.length / 1024)}KB)`);
-                } catch (e) {
-                  console.warn(LOG_PREFIX, `원본 이미지 fetch 실패: ${e.message}`);
-                }
+              imgUrl = await getGeneratedImageUrl() || '';
+            }
+            if (imgUrl) {
+              try {
+                mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
+                console.log(LOG_PREFIX, `원본 이미지 dataUrl (${Math.round(mediaDataUrl.length / 1024)}KB)`);
+              } catch (e) {
+                console.warn(LOG_PREFIX, `원본 이미지 fetch 실패: ${e.message}`);
               }
             }
             chrome.runtime.sendMessage({
@@ -313,16 +350,6 @@
               mediaDataUrl: mediaDataUrl || null,
               mediaType: 'image',
               uiDownloaded: true
-            });
-          } else {
-            // UI 다운로드 실패 → dataUrl 폴백
-            console.warn(LOG_PREFIX, `⚠ ${imageQuality} UI 다운로드 실패, dataUrl 폴백`);
-            if (!imgUrl) throw new Error('Cannot find generated image');
-            const mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
-            chrome.runtime.sendMessage({
-              type: 'GENERATION_COMPLETE',
-              mediaDataUrl,
-              mediaType: 'image'
             });
           }
         } else {
