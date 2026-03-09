@@ -563,36 +563,41 @@
   // ─── Upscaled Image Blob Interceptor ───
   // Flow가 2K/4K 업스케일 이미지를 다운로드할 때 blob 데이터를 캡처
   // content script에서 ENABLE_BLOB_CAPTURE 메시지로 활성화/비활성화
-  let _blobCaptureEnabled = false;
+  // window 전역 플래그 사용 (inject.js가 여러 VM 인스턴스로 로드될 수 있으므로)
+  window.__mangoBlobCapture = window.__mangoBlobCapture || false;
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'ENABLE_BLOB_CAPTURE') {
-      _blobCaptureEnabled = !!event.data.enabled;
-      if (_blobCaptureEnabled) {
+      window.__mangoBlobCapture = !!event.data.enabled;
+      if (window.__mangoBlobCapture) {
         console.log(LOG_PREFIX, '🖼️ Blob 캡처 활성화');
       }
     }
   });
 
-  const origCreateObjectURL = URL.createObjectURL.bind(URL);
-  URL.createObjectURL = function(obj) {
-    const blobUrl = origCreateObjectURL(obj);
-    // 활성화 상태에서만 이미지 blob 캡처 (500KB 이상)
-    if (_blobCaptureEnabled && obj instanceof Blob && obj.type?.startsWith('image/') && obj.size > 500000) {
-      console.log(LOG_PREFIX, `🖼️ 이미지 blob 감지: ${obj.type}, ${Math.round(obj.size / 1024)}KB`);
-      const reader = new FileReader();
-      reader.onload = () => {
-        window.postMessage({
-          type: 'UPSCALED_IMAGE_BLOB',
-          dataUrl: reader.result,
-          size: obj.size,
-          mimeType: obj.type
-        }, '*');
-        console.log(LOG_PREFIX, `🖼️ 업스케일 이미지 dataUrl 전달 (${Math.round(obj.size / 1024)}KB)`);
-      };
-      reader.readAsDataURL(obj);
-    }
-    return blobUrl;
-  };
+  // createObjectURL은 한 번만 패치 (중복 패치 방지)
+  if (!window.__mangoCreateObjectURLPatched) {
+    window.__mangoCreateObjectURLPatched = true;
+    const origCreateObjectURL = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = function(obj) {
+      const blobUrl = origCreateObjectURL(obj);
+      // 활성화 상태에서만 이미지 blob 캡처 (500KB 이상)
+      if (window.__mangoBlobCapture && obj instanceof Blob && obj.type?.startsWith('image/') && obj.size > 500000) {
+        console.log(LOG_PREFIX, `🖼️ 이미지 blob 감지: ${obj.type}, ${Math.round(obj.size / 1024)}KB`);
+        const reader = new FileReader();
+        reader.onload = () => {
+          window.postMessage({
+            type: 'UPSCALED_IMAGE_BLOB',
+            dataUrl: reader.result,
+            size: obj.size,
+            mimeType: obj.type
+          }, '*');
+          console.log(LOG_PREFIX, `🖼️ 업스케일 이미지 dataUrl 전달 (${Math.round(obj.size / 1024)}KB)`);
+        };
+        reader.readAsDataURL(obj);
+      }
+      return blobUrl;
+    };
+  }
 
   console.log(LOG_PREFIX, 'Fetch interceptor installed (v4.1 high-level Slate API + blob interceptor)');
 })();

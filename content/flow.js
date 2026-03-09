@@ -184,6 +184,8 @@
     isProcessing = true;
     shouldStop = false;
     lastApiResult = null;
+    lastUpscaledDataUrl = null;
+    lastUpscaledSize = 0;
     // 자동화 시작 시 다이얼로그 자동처리 재개
     if (window.MangoDialogDismisser) {
       window.MangoDialogDismisser.disabled = false;
@@ -1357,7 +1359,9 @@
   // 갤러리에 새 이미지 등장 대기 헬퍼
   async function waitForGalleryImage(countBefore, timeoutMs = 10000, prevSrcs = null) {
     const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
+    // 갤러리 이미지가 많으면(교체 상황) 더 오래 대기
+    const effectiveTimeout = countBefore >= 5 ? Math.max(timeoutMs, 20000) : timeoutMs;
+    while (Date.now() - start < effectiveTimeout) {
       // 방법 1: 갤러리 이미지 수 증가
       if (countGalleryImages() > countBefore) return true;
       // 방법 2: 새로운 src 등장 (갤러리 수 고정/교체 시)
@@ -1368,7 +1372,21 @@
         });
         if (hasNew) return true;
       }
+      // 방법 3: 로딩 인디케이터 감지 (업로드 중이면 계속 대기)
+      const hasLoader = !!document.querySelector('[class*="loading"], [class*="progress"], [class*="spinner"], [role="progressbar"]');
+      if (hasLoader && (Date.now() - start) < effectiveTimeout - 2000) {
+        // 로딩 중이면 타임아웃 연장하지 않고 계속 대기
+      }
       await delay(500);
+    }
+    // 타임아웃 시 마지막으로 갤러리 변화 확인
+    if (countGalleryImages() > countBefore) return true;
+    if (prevSrcs && prevSrcs.size > 0) {
+      let hasNew = false;
+      document.querySelectorAll('img[src]').forEach(img => {
+        if (isGalleryImage(img) && !prevSrcs.has(img.src)) hasNew = true;
+      });
+      if (hasNew) return true;
     }
     return false;
   }
