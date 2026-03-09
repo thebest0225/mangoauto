@@ -204,28 +204,33 @@
         if (!switched) throw new Error('비디오 모드 전환 실패');
         checkStopped();
 
-        // Step 3: 이미지 첨부 (비디오 모드에서 이미지 = 시작 프레임)
-        showToast('Step 3: 이미지 첨부 중...', 'info');
-        const attached = await attachImage(sourceImageDataUrl);
-        if (!attached) throw new Error('이미지 첨부 실패');
-        showToast('이미지 첨부 완료!', 'success');
-        checkStopped();
-
-        // Step 4: 프롬프트 입력 (새 UI: 메인 페이지에서 프롬프트 + 이미지 함께 전송)
+        // Step 3: 프롬프트 먼저 입력 (이미지 붙여넣기 전에 프롬프트 설정)
+        // 이미지를 비디오 모드에서 붙여넣으면 자동 전송될 수 있으므로 프롬프트부터 입력
         if (prompt?.trim()) {
-          showToast('Step 4: 비디오 프롬프트 입력...', 'info');
+          showToast('Step 3: 비디오 프롬프트 입력...', 'info');
           await typePrompt(prompt);
           await delay(500);
         }
         checkStopped();
 
-        // Step 5: 전송 버튼 클릭 → 영상 생성 시작
-        showToast('Step 5: 전송...', 'info');
-        const submitted = await tryClickSubmit();
-        if (!submitted) throw new Error('전송 실패');
+        // Step 4: 이미지 첨부 (비디오 모드에서 이미지 = 시작 프레임)
+        showToast('Step 4: 이미지 첨부 중...', 'info');
+        const attached = await attachImage(sourceImageDataUrl);
+        if (!attached) throw new Error('이미지 첨부 실패');
+        showToast('이미지 첨부 완료!', 'success');
         checkStopped();
 
-        // Step 6: 결과 페이지 대기 (전송 후 결과 페이지로 이동)
+        // Step 5: 전송 (이미지 첨부로 자동 전송됐으면 건너뛰기)
+        if (!isOnMainPage()) {
+          showToast('Step 5: 이미지 첨부로 자동 전송됨', 'info');
+        } else {
+          showToast('Step 5: 전송...', 'info');
+          const submitted = await tryClickSubmit();
+          if (!submitted) throw new Error('전송 실패');
+        }
+        checkStopped();
+
+        // Step 6: 결과 페이지 대기
         showToast('Step 6: 결과 페이지 대기...', 'info');
         await waitForResultPage(timeoutMs);
         await delay(2000);
@@ -609,14 +614,9 @@
       if (aspectRatio) {
         clickButtonInList(barBtns, [aspectRatio], 'aspectRatio');
         await delay(300);
-        // 비율 버튼은 드롭다운 팝오버를 열 수 있음 → 이미 선택된 값이면 토글로 열린 채 남음
-        // 팝오버가 열려있으면 닫기 (빈 영역 클릭)
-        const popover = document.querySelector('[role="listbox"], [data-radix-popper-content-wrapper], [role="menu"]');
-        if (popover && popover.offsetParent !== null) {
-          console.log(LOG_PREFIX, '비율 드롭다운 열림 감지 → 닫기');
-          document.body.click();
-          await delay(300);
-        }
+        // 비율 버튼은 드롭다운 팝오버를 열 수 있음 → Escape로 닫기
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        await delay(300);
       }
 
       showToast('비디오 모드 전환 + 설정 완료!', 'success');
