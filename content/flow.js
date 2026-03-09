@@ -281,23 +281,16 @@
           }
 
           if (downloaded) {
-            console.log(LOG_PREFIX, `✓ ${imageQuality} 이미지 다운로드 트리거됨`);
-            // UI가 이미 2K/4K를 PC에 다운로드 완료 → 로컬 재다운로드 불필요
-            // MangoHub 업로드용: fife URL에 해상도 파라미터 추가하여 2K/4K fetch
-            const uploadUrl = applyFifeImageQuality(imgUrl, imageQuality);
-            console.log(LOG_PREFIX, `MangoHub 업로드 URL: ${uploadUrl?.substring(0, 80)}`);
+            console.log(LOG_PREFIX, `✓ ${imageQuality} PC 다운로드 완료 (2K/4K는 다운로드 폴더에만 존재)`);
+            // PC: 2K/4K UI 다운로드 완료 (다운로드 폴더)
+            // MangoHub: 원본 이미지 업로드 (2K는 PC 다운로드 전용, MangoHub는 원본)
             let mediaDataUrl = null;
-            if (uploadUrl) {
+            if (imgUrl) {
               try {
-                mediaDataUrl = await MangoDom.fetchAsDataUrl(uploadUrl);
-                console.log(LOG_PREFIX, `✓ ${imageQuality} 이미지 dataUrl 변환 완료 (${Math.round(mediaDataUrl.length / 1024)}KB)`);
+                mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
+                console.log(LOG_PREFIX, `원본 이미지 dataUrl 변환 완료 (${Math.round(mediaDataUrl.length / 1024)}KB)`);
               } catch (e) {
-                console.warn(LOG_PREFIX, `${imageQuality} fetch 실패, 원본 URL 폴백: ${e.message}`);
-                try {
-                  mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
-                } catch (e2) {
-                  console.warn(LOG_PREFIX, `원본 URL fetch도 실패: ${e2.message}`);
-                }
+                console.warn(LOG_PREFIX, `원본 이미지 fetch 실패: ${e.message}`);
               }
             }
             chrome.runtime.sendMessage({
@@ -2807,24 +2800,6 @@
     console.warn(LOG_PREFIX, '[img-download] 품질 옵션 못찾음');
     document.body.click();
     return false;
-  }
-
-  /**
-   * Google fife URL에 해상도 파라미터 추가
-   * fife URL은 =s{size} 또는 =w{width}-h{height} 형식의 크기 지정자를 지원
-   */
-  function applyFifeImageQuality(url, quality) {
-    if (!url) return url;
-    const sizeMap = { '1k': 1024, '2k': 2048, '4k': 4096 };
-    const size = sizeMap[quality] || 1024;
-    // 기존 크기 파라미터 제거 후 새 크기 추가
-    let cleanUrl = url.replace(/=s\d+/, '').replace(/=w\d+(-h\d+)?/, '');
-    // URL 끝에 =s{size} 추가 (fife URL 규격)
-    if (cleanUrl.includes('fifeUrl') || cleanUrl.includes('googleapis.com') || cleanUrl.includes('googleusercontent.com')) {
-      return cleanUrl + `=s${size}`;
-    }
-    // fife URL이 아니면 그대로 반환
-    return url;
   }
 
   /**
