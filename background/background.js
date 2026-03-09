@@ -1134,8 +1134,21 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     }
 
     // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
-    if (uiDownloaded) {
-      // UI가 이미 2K/4K를 PC에 다운로드했으므로 재다운로드 불필요
+    if (uiDownloaded && mediaDataUrl) {
+      // UI가 이미 PC에 다운로드했지만, 2K dataUrl이 있으므로 프로젝트 폴더에 저장
+      try {
+        const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+        await chrome.downloads.download({
+          url: mediaDataUrl,
+          filename: dlFilename,
+          saveAs: false
+        });
+        broadcastLog(`2K 프로젝트 폴더 저장: ${filename}`, 'info');
+      } catch (dlErr) {
+        broadcastLog(`2K 로컬 저장 실패: ${dlErr.message}`, 'warn');
+      }
+    } else if (uiDownloaded) {
+      // UI가 이미 PC에 다운로드했고 dataUrl 없음 — 건너뛰기
       broadcastLog('UI 다운로드 완료 상태 — 로컬 재다운로드 건너뛰기', 'info');
     } else {
       try {
@@ -1163,8 +1176,25 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     }
   } else {
     // Standalone - download locally via chrome.downloads (브라우저 쿠키 자동 포함)
-    if (uiDownloaded) {
-      // UI가 이미 PC에 다운로드했으므로 재다운로드 불필요
+    if (uiDownloaded && mediaDataUrl) {
+      // UI가 이미 PC에 다운로드했지만, 2K dataUrl이 있으므로 프로젝트 폴더에 저장
+      try {
+        const dlFilename = getDownloadPath(filename, false);
+        await chrome.downloads.download({
+          url: mediaDataUrl,
+          filename: dlFilename,
+          saveAs: false
+        });
+        sm.markSuccess({ downloaded: filename });
+        broadcastState(getExtendedSnapshot());
+        broadcastLog(`2K 프로젝트 폴더 저장: ${filename}`, 'success');
+      } catch (dlErr) {
+        broadcastLog(`2K 로컬 저장 실패: ${dlErr.message}`, 'warn');
+        sm.markSuccess({ downloaded: filename, uiDownloaded: true });
+        broadcastState(getExtendedSnapshot());
+      }
+    } else if (uiDownloaded) {
+      // UI가 이미 PC에 다운로드했고 dataUrl 없음 — 건너뛰기
       sm.markSuccess({ downloaded: filename, uiDownloaded: true });
       broadcastState(getExtendedSnapshot());
       broadcastLog(`UI 다운로드 완료 (재다운로드 건너뛰기): ${filename}`, 'success');
@@ -1318,7 +1348,20 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       }
 
       // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
-      if (uiDownloaded) {
+      if (uiDownloaded && mediaDataUrl) {
+        // 2K dataUrl이 있으므로 프로젝트 폴더에 저장
+        try {
+          const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+          await chrome.downloads.download({
+            url: mediaDataUrl,
+            filename: dlFilename,
+            saveAs: false
+          });
+          broadcastLog(`2K 프로젝트 폴더 저장 (concurrent): ${filename}`, 'info');
+        } catch (dlErr) {
+          broadcastLog(`2K 로컬 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
+        }
+      } else if (uiDownloaded) {
         broadcastLog('UI 다운로드 완료 상태 — 로컬 재다운로드 건너뛰기 (concurrent)', 'info');
       } else {
         try {
@@ -1340,7 +1383,22 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
         }
       }
     } else {
-      if (uiDownloaded) {
+      if (uiDownloaded && mediaDataUrl) {
+        // 2K dataUrl → 프로젝트 폴더에 저장
+        try {
+          const dlFilename = getDownloadPath(filename, false);
+          await chrome.downloads.download({
+            url: mediaDataUrl,
+            filename: dlFilename,
+            saveAs: false
+          });
+          broadcastLog(`2K 프로젝트 폴더 저장 (concurrent): ${filename}`, 'success');
+          sm.results.push({ success: true, index: itemIndex, downloaded: filename });
+        } catch (dlErr) {
+          broadcastLog(`2K 로컬 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
+          sm.results.push({ success: true, index: itemIndex, downloaded: filename, uiDownloaded: true });
+        }
+      } else if (uiDownloaded) {
         broadcastLog(`UI 다운로드 완료 (재다운로드 건너뛰기, concurrent): ${filename}`, 'success');
         sm.results.push({ success: true, index: itemIndex, downloaded: filename, uiDownloaded: true });
       } else {
