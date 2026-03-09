@@ -259,21 +259,25 @@
           }
         }
 
-        // UI 다운로드: ⋮ → 다운로드 → 1080p (브라우저 네이티브 다운로드)
-        console.log(LOG_PREFIX, '1080p UI 다운로드 시도...');
+        // UI 다운로드: ⋮ → 다운로드 → 1080p/720p (브라우저 네이티브 다운로드)
+        const videoQuality = settings?.download?.videoQuality || '720p';
+        console.log(LOG_PREFIX, `${videoQuality} UI 다운로드 시도...`);
         const downloaded = await downloadVideoViaMenu();
         if (downloaded) {
-          console.log(LOG_PREFIX, '✓ 1080p 다운로드 트리거됨');
+          console.log(LOG_PREFIX, `✓ ${videoQuality} 다운로드 트리거됨 (UI)`);
         } else {
           console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패');
           // URL도 없고 UI 다운로드도 실패하면 에러
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
+        // UI가 이미 최적 품질로 다운로드했으므로 uiDownloaded=true 전달
+        // videoUrl이 있으면 MangoHub 업로드용으로 함께 전달 (background에서 업로드에 사용)
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
-          mediaUrl: videoUrl || 'ui-download',
-          mediaType: 'video'
+          mediaUrl: videoUrl || null,
+          mediaType: 'video',
+          uiDownloaded: downloaded
         });
       } else {
         // 이미지: 품질 설정에 따라 UI 메뉴 다운로드 or dataUrl 변환
@@ -284,6 +288,9 @@
           // 2K/4K: UI 호버 메뉴를 통해 업스케일 다운로드 (최대 3회 시도)
           const maxUpscaleAttempts = 3;
           let mediaDataUrl = null;
+
+          // inject.js blob 캡처 활성화 (2K 업스케일 다운로드 캡처용)
+          window.postMessage({ type: 'ENABLE_BLOB_CAPTURE', enabled: true }, '*');
 
           for (let attempt = 1; attempt <= maxUpscaleAttempts; attempt++) {
             lastUpscaledDataUrl = null; // 이전 캡처 초기화
@@ -319,6 +326,9 @@
               }
             }
           }
+
+          // inject.js blob 캡처 비활성화
+          window.postMessage({ type: 'ENABLE_BLOB_CAPTURE', enabled: false }, '*');
 
           if (mediaDataUrl) {
             // 2K 캡처 성공
