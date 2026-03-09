@@ -282,9 +282,9 @@
 
           if (downloaded) {
             console.log(LOG_PREFIX, `✓ ${imageQuality} 이미지 다운로드 트리거됨`);
-            // UI가 이미 2K/4K를 PC에 다운로드했으므로:
-            // - mediaUrl: 원본 API URL (MangoHub 업로드용, 1K이지만 업로드 가능)
-            // - uiDownloaded: true → background가 로컬 재다운로드 건너뛰기
+            // UI가 이미 2K/4K를 PC에 다운로드했으므로 로컬 재다운로드 불필요
+            // MangoHub 업로드용: 원본 API URL로 fetch (업스케일 URL은 인증 필요)
+            // 원본 URL도 고해상도는 아니지만 MangoHub에 업로드 가능
             chrome.runtime.sendMessage({
               type: 'GENERATION_COMPLETE',
               mediaUrl: imgUrl || '',
@@ -2752,7 +2752,13 @@
       } else {
         console.log(LOG_PREFIX, `[img-download] ${quality} 선택`);
         qualityBtn.click();
-        await delay(1000);
+        // 2K/4K는 업스케일 후 다운로드이므로 충분히 대기
+        if (quality !== '1k') {
+          console.log(LOG_PREFIX, `[img-download] 업스케일 대기 중... (${quality})`);
+          await waitForUpscaleComplete(60000);
+        } else {
+          await delay(1000);
+        }
         return true;
       }
     }
@@ -2784,6 +2790,48 @@
 
     console.warn(LOG_PREFIX, '[img-download] 품질 옵션 못찾음');
     document.body.click();
+    return false;
+  }
+
+  /**
+   * 업스케일 완료 대기: "Upscaling" 토스트가 사라지고 다운로드 완료될 때까지 대기
+   */
+  async function waitForUpscaleComplete(timeoutMs = 60000) {
+    const start = Date.now();
+    let sawUpscaling = false;
+
+    while (Date.now() - start < timeoutMs) {
+      // 페이지의 모든 텍스트에서 업스케일 관련 메시지 감지
+      const allText = document.body.innerText || '';
+      const isUpscaling = allText.includes('Upscaling') || allText.includes('업스케일');
+      const isComplete = allText.includes('downloaded') || allText.includes('다운로드되었습니다') ||
+                         allText.includes('다운로드됐습니다') || allText.includes('완료되었으며');
+
+      if (isUpscaling) {
+        if (!sawUpscaling) {
+          console.log(LOG_PREFIX, '[img-download] 업스케일 진행 중 감지');
+          sawUpscaling = true;
+        }
+      }
+
+      // 업스케일 완료 메시지가 나타났거나, 업스케일 시작 후 메시지가 사라졌으면 완료
+      if (isComplete) {
+        console.log(LOG_PREFIX, '[img-download] 업스케일 + 다운로드 완료 감지');
+        await delay(2000); // 다운로드 안정화 대기
+        return true;
+      }
+
+      if (sawUpscaling && !isUpscaling) {
+        console.log(LOG_PREFIX, '[img-download] 업스케일 메시지 사라짐 → 완료 추정');
+        await delay(3000); // 다운로드 안정화 대기
+        return true;
+      }
+
+      await delay(1000);
+    }
+
+    console.warn(LOG_PREFIX, '[img-download] 업스케일 대기 타임아웃');
+    await delay(3000); // 타임아웃이어도 좀 더 대기
     return false;
   }
 

@@ -1099,7 +1099,31 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
       sm.markUploading();
       try {
         let blob;
-        if (mediaDataUrl) {
+        if (uiDownloaded) {
+          // UI가 2K/4K를 다운로드했으므로, chrome.downloads에서 완료된 파일 찾아서 업로드
+          broadcastLog('UI 다운로드 완료 — chrome.downloads에서 2K/4K 파일 검색...', 'info');
+          const dlInfo = await findRecentDownloadUrl(120000, 'image');
+          if (dlInfo?.url) {
+            // 다운로드 진행 중이면 완료 대기
+            if (dlInfo.state === 'in_progress' && dlInfo.downloadId) {
+              broadcastLog('이미지 다운로드 진행 중, 완료 대기...', 'info');
+              const completed = await waitForDownloadComplete(dlInfo.downloadId, 60000);
+              if (completed?.url) {
+                blob = await fetchMediaWithCookies(completed.url);
+                broadcastLog(`2K/4K 다운로드 파일로 업로드 (완료 대기 후)`, 'info');
+              }
+            } else {
+              blob = await fetchMediaWithCookies(dlInfo.url);
+              broadcastLog(`2K/4K 다운로드 파일로 업로드`, 'info');
+            }
+          }
+          // 다운로드 파일 못 찾으면 원본 API URL 폴백
+          if (!blob && mediaUrl) {
+            broadcastLog('다운로드 파일 못 찾음 → 원본 API URL로 폴백', 'warn');
+            blob = await fetchMediaWithCookies(mediaUrl);
+          }
+          if (!blob) throw new Error('No media data available (uiDownloaded)');
+        } else if (mediaDataUrl) {
           blob = await fetch(mediaDataUrl).then(r => r.blob());
         } else if (mediaUrl) {
           blob = await fetchMediaWithCookies(mediaUrl);
