@@ -144,6 +144,7 @@
 
   // ─── Listen for messages from inject.js (MAIN world) ───
   let lastApiResult = null;
+  let lastUpscaledDataUrl = null;  // inject.js가 캡처한 업스케일 이미지 blob
   window.addEventListener('message', (event) => {
     if (event.data?.type === 'VEO3_API_RESULT') {
       console.log(LOG_PREFIX, 'API result received:', event.data);
@@ -151,6 +152,10 @@
     }
     if (event.data?.type === 'SET_FLOW_PROMPT_RESULT') {
       console.log(LOG_PREFIX, 'Prompt injection confirmed by inject.js:', event.data.ok);
+    }
+    if (event.data?.type === 'UPSCALED_IMAGE_BLOB') {
+      lastUpscaledDataUrl = event.data.dataUrl;
+      console.log(LOG_PREFIX, `업스케일 이미지 수신: ${Math.round(event.data.size / 1024)}KB`);
     }
   });
 
@@ -269,34 +274,43 @@
 
         if (imageQuality !== '1k') {
           // 2K/4K: UI 호버 메뉴를 통해 업스케일 다운로드
+          lastUpscaledDataUrl = null; // 이전 캡처 초기화
           console.log(LOG_PREFIX, `${imageQuality} UI 다운로드 시도...`);
           const downloaded = await downloadImageViaMenu(imageQuality);
 
-          // API URL도 함께 전달 (MangoHub 업로드용 폴백)
-          let imgUrl = '';
-          if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
-            imgUrl = lastApiResult.mediaUrls[0];
-          } else {
-            imgUrl = await getGeneratedImageUrl() || '';
-          }
-
           if (downloaded) {
-            console.log(LOG_PREFIX, `✓ ${imageQuality} PC 다운로드 완료 (2K/4K는 다운로드 폴더에만 존재)`);
-            // PC: 2K/4K UI 다운로드 완료 (다운로드 폴더)
-            // MangoHub: 원본 이미지 업로드 (2K는 PC 다운로드 전용, MangoHub는 원본)
-            let mediaDataUrl = null;
-            if (imgUrl) {
-              try {
-                mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
-                console.log(LOG_PREFIX, `원본 이미지 dataUrl 변환 완료 (${Math.round(mediaDataUrl.length / 1024)}KB)`);
-              } catch (e) {
-                console.warn(LOG_PREFIX, `원본 이미지 fetch 실패: ${e.message}`);
+            // inject.js의 FileReader가 비동기이므로 dataUrl 수신 대기 (최대 10초)
+            if (!lastUpscaledDataUrl) {
+              console.log(LOG_PREFIX, '업스케일 blob dataUrl 대기 중...');
+              for (let i = 0; i < 20 && !lastUpscaledDataUrl; i++) {
+                await delay(500);
+              }
+            }
+            // inject.js가 blob을 가로채서 dataUrl로 변환한 것이 있으면 사용 (2K)
+            // 없으면 원본 API URL로 폴백 (1K)
+            let mediaDataUrl = lastUpscaledDataUrl || null;
+            if (mediaDataUrl) {
+              console.log(LOG_PREFIX, `✓ 업스케일 이미지 캡처 성공 (${Math.round(mediaDataUrl.length / 1024)}KB) → MangoHub + 프로젝트 폴더에 2K 저장`);
+            } else {
+              console.log(LOG_PREFIX, '업스케일 blob 캡처 안 됨 → 원본 API URL 폴백');
+              let imgUrl = '';
+              if (lastApiResult?.ok && lastApiResult.mediaUrls?.length > 0) {
+                imgUrl = lastApiResult.mediaUrls[0];
+              } else {
+                imgUrl = await getGeneratedImageUrl() || '';
+              }
+              if (imgUrl) {
+                try {
+                  mediaDataUrl = await MangoDom.fetchAsDataUrl(imgUrl);
+                  console.log(LOG_PREFIX, `원본 이미지 dataUrl (${Math.round(mediaDataUrl.length / 1024)}KB)`);
+                } catch (e) {
+                  console.warn(LOG_PREFIX, `원본 이미지 fetch 실패: ${e.message}`);
+                }
               }
             }
             chrome.runtime.sendMessage({
               type: 'GENERATION_COMPLETE',
               mediaDataUrl: mediaDataUrl || null,
-              mediaUrl: !mediaDataUrl ? (imgUrl || '') : '',
               mediaType: 'image',
               uiDownloaded: true
             });
