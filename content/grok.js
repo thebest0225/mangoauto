@@ -211,28 +211,28 @@
         showToast('이미지 첨부 완료!', 'success');
         checkStopped();
 
-        // Step 4: 결과 페이지 대기 (이미지 첨부 후 자동 이동될 수 있음)
-        showToast('Step 4: 결과 페이지 대기...', 'info');
-        await waitForResultPage(timeoutMs);
-        await delay(2000);
-        checkStopped();
-
-        // Step 5: 검열 확인
-        if (isModerated()) throw new ModerationError();
-
-        // Step 6: 프롬프트 입력
+        // Step 4: 프롬프트 입력 (새 UI: 메인 페이지에서 프롬프트 + 이미지 함께 전송)
         if (prompt?.trim()) {
-          showToast('Step 6: 비디오 프롬프트 입력...', 'info');
+          showToast('Step 4: 비디오 프롬프트 입력...', 'info');
           await typePrompt(prompt);
           await delay(500);
         }
         checkStopped();
 
-        // Step 7: 전송 버튼 클릭 → 영상 생성 시작
-        showToast('Step 7: 전송...', 'info');
+        // Step 5: 전송 버튼 클릭 → 영상 생성 시작
+        showToast('Step 5: 전송...', 'info');
         const submitted = await tryClickSubmit();
         if (!submitted) throw new Error('전송 실패');
         checkStopped();
+
+        // Step 6: 결과 페이지 대기 (전송 후 결과 페이지로 이동)
+        showToast('Step 6: 결과 페이지 대기...', 'info');
+        await waitForResultPage(timeoutMs);
+        await delay(2000);
+        checkStopped();
+
+        // Step 7: 검열 확인
+        if (isModerated()) throw new ModerationError();
 
         // Step 8: 비디오 생성 대기
         const videoResult = await waitForVideoReady(timeoutMs);
@@ -243,7 +243,7 @@
         let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
-        // Step 10: 480p면 자동 업스케일 시도
+        // Step 10: 업스케일 시도
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('Step 10: 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(timeoutMs);
@@ -608,7 +608,15 @@
       }
       if (aspectRatio) {
         clickButtonInList(barBtns, [aspectRatio], 'aspectRatio');
-        await delay(200);
+        await delay(300);
+        // 비율 버튼은 드롭다운 팝오버를 열 수 있음 → 이미 선택된 값이면 토글로 열린 채 남음
+        // 팝오버가 열려있으면 닫기 (빈 영역 클릭)
+        const popover = document.querySelector('[role="listbox"], [data-radix-popper-content-wrapper], [role="menu"]');
+        if (popover && popover.offsetParent !== null) {
+          console.log(LOG_PREFIX, '비율 드롭다운 열림 감지 → 닫기');
+          document.body.click();
+          await delay(300);
+        }
       }
 
       showToast('비디오 모드 전환 + 설정 완료!', 'success');
