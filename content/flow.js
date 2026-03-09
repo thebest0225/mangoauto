@@ -282,12 +282,14 @@
 
           if (downloaded) {
             console.log(LOG_PREFIX, `✓ ${imageQuality} 이미지 다운로드 트리거됨`);
-            // 항상 'ui-download'로 전달 — background가 chrome.downloads에서 2K 파일을 찾아 처리
-            // imgUrl을 보내면 background가 별도로 1K를 다운로드하는 이중 다운로드 발생
+            // UI가 이미 2K/4K를 PC에 다운로드했으므로:
+            // - mediaUrl: 원본 API URL (MangoHub 업로드용, 1K이지만 업로드 가능)
+            // - uiDownloaded: true → background가 로컬 재다운로드 건너뛰기
             chrome.runtime.sendMessage({
               type: 'GENERATION_COMPLETE',
-              mediaUrl: 'ui-download',
-              mediaType: 'image'
+              mediaUrl: imgUrl || '',
+              mediaType: 'image',
+              uiDownloaded: true
             });
           } else {
             // UI 다운로드 실패 → dataUrl 폴백

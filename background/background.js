@@ -997,15 +997,16 @@ async function handleGenerationComplete(msg, sender) {
     return;
   }
 
-  const { mediaDataUrl, mediaUrl } = msg;
+  const { mediaDataUrl, mediaUrl, uiDownloaded } = msg;
   const senderTabId = sender?.tab?.id;
 
   // mediaUrl = raw HTTP URL (비디오 다운로드 시 사용)
   // mediaDataUrl = data:// URL (이미지 등 기존 방식)
+  // uiDownloaded = true → UI가 이미 PC에 다운로드 완료 (재다운로드/삭제 불필요)
   if (concurrentCount > 1 && activeTasks.size > 0) {
-    await handleConcurrentComplete(senderTabId, mediaDataUrl, true, null, mediaUrl);
+    await handleConcurrentComplete(senderTabId, mediaDataUrl, true, null, mediaUrl, uiDownloaded);
   } else {
-    await handleSequentialComplete(mediaDataUrl, mediaUrl);
+    await handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded);
   }
 }
 
@@ -1030,7 +1031,7 @@ async function handleGenerationError(msg, sender) {
 }
 
 // ─── Sequential complete handler ───
-async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
+async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = false) {
   const item = sm.currentItem;
   sm.markDownloading();
 
@@ -1132,17 +1133,53 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
     }
 
     // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
-    try {
-      const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
-      const downloadUrl = mediaUrl || mediaDataUrl;
-      if (downloadUrl) {
+    if (uiDownloaded) {
+      // UI가 이미 2K/4K를 PC에 다운로드했으므로 재다운로드 불필요
+      broadcastLog('UI 다운로드 완료 상태 — 로컬 재다운로드 건너뛰기', 'info');
+    } else {
+      try {
+        const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+        const downloadUrl = mediaUrl || mediaDataUrl;
+        if (downloadUrl) {
+          await chrome.downloads.download({
+            url: downloadUrl,
+            filename: dlFilename,
+            saveAs: false
+          });
+          broadcastLog(`로컬 다운로드: ${filename}`, 'info');
+          // UI 다운로드 파일 정리 (중복 방지: 올바른 이름으로 재다운로드했으므로 원본 삭제)
+          if (_uiDownloadId) {
+            try {
+              await chrome.downloads.removeFile(_uiDownloadId);
+              chrome.downloads.erase({ id: _uiDownloadId });
+              broadcastLog('UI 다운로드 원본 파일 삭제', 'info');
+            } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
+          }
+        }
+      } catch (dlErr) {
+        broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
+      }
+    }
+  } else {
+    // Standalone - download locally via chrome.downloads (브라우저 쿠키 자동 포함)
+    if (uiDownloaded) {
+      // UI가 이미 PC에 다운로드했으므로 재다운로드 불필요
+      sm.markSuccess({ downloaded: filename, uiDownloaded: true });
+      broadcastState(getExtendedSnapshot());
+      broadcastLog(`UI 다운로드 완료 (재다운로드 건너뛰기): ${filename}`, 'success');
+    } else {
+      try {
+        const dlFilename = getDownloadPath(filename, false);
+        const downloadUrl = mediaUrl || mediaDataUrl;
         await chrome.downloads.download({
           url: downloadUrl,
           filename: dlFilename,
           saveAs: false
         });
-        broadcastLog(`로컬 다운로드: ${filename}`, 'info');
-        // UI 다운로드 파일 정리 (중복 방지: 올바른 이름으로 재다운로드했으므로 원본 삭제)
+        sm.markSuccess({ downloaded: filename });
+        broadcastState(getExtendedSnapshot());
+        broadcastLog(`다운로드: ${filename}`, 'success');
+        // UI 다운로드 파일 정리 (standalone 모드)
         if (_uiDownloadId) {
           try {
             await chrome.downloads.removeFile(_uiDownloadId);
@@ -1150,36 +1187,12 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
             broadcastLog('UI 다운로드 원본 파일 삭제', 'info');
           } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
         }
+      } catch (err) {
+        // 다운로드 실패: 기록 후 다음 진행
+        broadcastLog(`다운로드 실패: ${err.message} (다음 항목 진행)`, 'error');
+        sm.results.push({ success: false, index: sm._resultIndex(), error: err.message });
+        sm.transition(AutoState.COOLDOWN);
       }
-    } catch (dlErr) {
-      broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
-    }
-  } else {
-    // Standalone - download locally via chrome.downloads (브라우저 쿠키 자동 포함)
-    try {
-      const dlFilename = getDownloadPath(filename, false);
-      const downloadUrl = mediaUrl || mediaDataUrl;
-      await chrome.downloads.download({
-        url: downloadUrl,
-        filename: dlFilename,
-        saveAs: false
-      });
-      sm.markSuccess({ downloaded: filename });
-      broadcastState(getExtendedSnapshot());
-      broadcastLog(`다운로드: ${filename}`, 'success');
-      // UI 다운로드 파일 정리 (standalone 모드)
-      if (_uiDownloadId) {
-        try {
-          await chrome.downloads.removeFile(_uiDownloadId);
-          chrome.downloads.erase({ id: _uiDownloadId });
-          broadcastLog('UI 다운로드 원본 파일 삭제', 'info');
-        } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
-      }
-    } catch (err) {
-      // 다운로드 실패: 기록 후 다음 진행
-      broadcastLog(`다운로드 실패: ${err.message} (다음 항목 진행)`, 'error');
-      sm.results.push({ success: false, index: sm._resultIndex(), error: err.message });
-      sm.transition(AutoState.COOLDOWN);
     }
   }
 
@@ -1206,7 +1219,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl) {
 }
 
 // ─── Concurrent complete handler ───
-async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, mediaUrl) {
+async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, mediaUrl, uiDownloaded = false) {
   const task = activeTasks.get(tabId);
   if (!task) {
     MangoUtils.log('warn', 'Received completion from unknown tab:', tabId);
@@ -1304,42 +1317,49 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       }
 
       // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
-      try {
-        const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
-        const downloadUrl = mediaUrl || mediaDataUrl;
-        if (downloadUrl) {
+      if (uiDownloaded) {
+        broadcastLog('UI 다운로드 완료 상태 — 로컬 재다운로드 건너뛰기 (concurrent)', 'info');
+      } else {
+        try {
+          const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+          const downloadUrl = mediaUrl || mediaDataUrl;
+          if (downloadUrl) {
+            await chrome.downloads.download({
+              url: downloadUrl,
+              filename: dlFilename,
+              saveAs: false
+            });
+            broadcastLog(`로컬 다운로드: ${filename}`, 'info');
+            if (_uiDownloadId) {
+              try { await chrome.downloads.removeFile(_uiDownloadId); chrome.downloads.erase({ id: _uiDownloadId }); } catch (e) {}
+            }
+          }
+        } catch (dlErr) {
+          broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
+        }
+      }
+    } else {
+      if (uiDownloaded) {
+        broadcastLog(`UI 다운로드 완료 (재다운로드 건너뛰기, concurrent): ${filename}`, 'success');
+        sm.results.push({ success: true, index: itemIndex, downloaded: filename, uiDownloaded: true });
+      } else {
+        try {
+          const dlFilename = getDownloadPath(filename, false);
+          const downloadUrl = mediaUrl || mediaDataUrl;
           await chrome.downloads.download({
             url: downloadUrl,
             filename: dlFilename,
             saveAs: false
           });
-          broadcastLog(`로컬 다운로드: ${filename}`, 'info');
-          // UI 다운로드 원본 삭제 (concurrent)
+          broadcastLog(`다운로드: ${filename}`, 'success');
+          sm.results.push({ success: true, index: itemIndex, downloaded: filename });
           if (_uiDownloadId) {
             try { await chrome.downloads.removeFile(_uiDownloadId); chrome.downloads.erase({ id: _uiDownloadId }); } catch (e) {}
           }
+        } catch (err) {
+          broadcastLog(`다운로드 실패: ${err.message}`, 'error');
+          sm.results.push({ success: false, index: itemIndex, error: err.message });
         }
-      } catch (dlErr) {
-        broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
-      }
-    } else {
-      try {
-        const dlFilename = getDownloadPath(filename, false);
-        const downloadUrl = mediaUrl || mediaDataUrl;
-        await chrome.downloads.download({
-          url: downloadUrl,
-          filename: dlFilename,
-          saveAs: false
-        });
-        broadcastLog(`다운로드: ${filename}`, 'success');
-        sm.results.push({ success: true, index: itemIndex, downloaded: filename });
-        // UI 다운로드 원본 삭제 (concurrent standalone)
-        if (_uiDownloadId) {
-          try { await chrome.downloads.removeFile(_uiDownloadId); chrome.downloads.erase({ id: _uiDownloadId }); } catch (e) {}
-        }
-      } catch (err) {
-        broadcastLog(`다운로드 실패: ${err.message}`, 'error');
-        sm.results.push({ success: false, index: itemIndex, error: err.message });
       }
     }
 
