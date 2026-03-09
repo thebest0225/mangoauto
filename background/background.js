@@ -1099,16 +1099,8 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
       sm.markUploading();
       try {
         let blob;
-        if (uiDownloaded) {
-          // UI가 2K/4K를 PC에 다운로드 완료
-          // chrome.downloads URL은 blob: 등 서비스워커에서 fetch 불가한 경우가 많음
-          // → 원본 API URL로 MangoHub 업로드 (1K이지만 업로드 가능)
-          if (mediaUrl) {
-            broadcastLog('UI 다운로드 완료 — 원본 API URL로 MangoHub 업로드', 'info');
-            blob = await fetchMediaWithCookies(mediaUrl);
-          }
-          if (!blob) throw new Error('No media data available (uiDownloaded)');
-        } else if (mediaDataUrl) {
+        if (mediaDataUrl) {
+          // dataUrl 있으면 우선 사용 (2K/4K fife URL에서 변환된 경우 포함)
           blob = await fetch(mediaDataUrl).then(r => r.blob());
         } else if (mediaUrl) {
           blob = await fetchMediaWithCookies(mediaUrl);
