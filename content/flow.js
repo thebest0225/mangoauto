@@ -264,20 +264,36 @@
         // UI 다운로드: ⋮ → 다운로드 → 1080p/720p (브라우저 네이티브 다운로드)
         const videoQuality = settings?.download?.videoQuality || '720p';
         console.log(LOG_PREFIX, `${videoQuality} UI 다운로드 시도...`);
-        const downloaded = await downloadVideoViaMenu();
+        const dlResult = await downloadVideoViaMenu(videoQuality);
+        const downloaded = !!dlResult;
+        const actualQuality = dlResult || null; // '1080p', '720p', 등 실제 선택된 품질
         if (downloaded) {
-          console.log(LOG_PREFIX, `✓ ${videoQuality} 다운로드 트리거됨 (UI)`);
+          console.log(LOG_PREFIX, `✓ ${actualQuality} 다운로드 트리거됨 (UI)`);
         } else {
           console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패');
           // URL도 없고 UI 다운로드도 실패하면 에러
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
-        // UI 다운로드 성공 시 'ui-download' 마커 + 원본 URL 둘 다 전달
-        // background: 1080p 다운로드 완료 대기 → 실패 시 원본 URL로 폴백
+        // 1080p 업스케일 트리거 시 → inject.js API 인터셉트로 완료 대기
+        // inject.js가 batchCheckAsyncVideoGenerationStatu 응답에서 업스케일 URL 캡처
+        let upscaledVideoUrl = null;
+        if (downloaded && actualQuality === '1080p') {
+          console.log(LOG_PREFIX, '[upscale] 1080p 업스케일 완료 대기 (inject.js API 캡처)...');
+          lastApiResult = null; // 이전 생성 결과 초기화 → 업스케일 결과만 캡처
+          upscaledVideoUrl = await waitForUpscaleVideoUrl(300000); // 최대 5분
+          if (upscaledVideoUrl) {
+            console.log(LOG_PREFIX, `[upscale] ✓ 1080p URL 캡처 성공: ${upscaledVideoUrl.substring(0, 80)}`);
+          } else {
+            console.warn(LOG_PREFIX, '[upscale] ⚠ 1080p URL 캡처 실패 → ui-download 폴백');
+          }
+        }
+
+        // 업스케일 URL이 있으면 직접 전달, 없으면 기존 ui-download 방식
+        const finalMediaUrl = upscaledVideoUrl || (downloaded ? 'ui-download' : (videoUrl || null));
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
-          mediaUrl: downloaded ? 'ui-download' : (videoUrl || null),
+          mediaUrl: finalMediaUrl,
           fallbackUrl: videoUrl || null,
           mediaType: 'video',
           uiDownloaded: downloaded
@@ -2462,7 +2478,7 @@
   }
 
   // ─── Download via UI: ⋮ → 다운로드 → 1080p/720p (New UI Mar 2026) ───
-  async function downloadVideoViaMenu() {
+  async function downloadVideoViaMenu(preferredQuality = '1080p') {
     // 생성된 비디오 요소를 우선 탐색 (이미지 ⋮와 비디오 ⋮의 메뉴가 다름)
     let target = null;
 
@@ -2620,34 +2636,47 @@
     const subItems = getVisibleMenuItems();
     console.log(LOG_PREFIX, `[download] 서브메뉴: ${subItems.join(', ')}`);
 
-    // 1080p 선택 (단, "Upgrade" 버튼 있으면 스킵)
-    if (quality1080) {
-      const hasUpgrade = quality1080.querySelector('button') ||
-        /upgrade/i.test(quality1080.textContent || '');
-      if (!hasUpgrade) {
-        console.log(LOG_PREFIX, '[download] 1080p 선택 (Upgrade 없음)');
+    // 품질 선택 헬퍼: 선택 성공 시 품질 문자열 반환
+    const can1080 = quality1080 && !(quality1080.querySelector('button') || /upgrade/i.test(quality1080.textContent || ''));
+
+    // 사용자 설정에 따라 우선순위 결정
+    if (preferredQuality === '1080p') {
+      if (can1080) {
+        console.log(LOG_PREFIX, '[download] 1080p 선택 (사용자 설정)');
         quality1080.click();
         await delay(1000);
-        return true;
+        return '1080p';
       }
-      console.log(LOG_PREFIX, '[download] 1080p에 Upgrade 버튼 → 720p로 폴백');
-    }
-
-    // 720p 폴백
-    if (quality720) {
-      console.log(LOG_PREFIX, '[download] 720p 선택');
-      quality720.click();
-      await delay(1000);
-      return true;
+      if (quality720) {
+        console.log(LOG_PREFIX, '[download] 1080p 불가 → 720p 폴백');
+        quality720.click();
+        await delay(1000);
+        return '720p';
+      }
+    } else {
+      // 720p 이하 설정
+      if (quality720) {
+        console.log(LOG_PREFIX, '[download] 720p 선택 (사용자 설정)');
+        quality720.click();
+        await delay(1000);
+        return '720p';
+      }
+      if (can1080) {
+        console.log(LOG_PREFIX, '[download] 720p 불가 → 1080p 폴백');
+        quality1080.click();
+        await delay(1000);
+        return '1080p';
+      }
     }
 
     // 아무 품질이라도 선택 (270p 등)
     const anyQuality = findMenuItemByText(['270p', 'Original', 'original']);
     if (anyQuality) {
-      console.log(LOG_PREFIX, `[download] 대체 품질 선택: "${anyQuality.textContent?.trim()?.substring(0, 30)}"`);
+      const label = anyQuality.textContent?.trim()?.substring(0, 20) || 'other';
+      console.log(LOG_PREFIX, `[download] 대체 품질 선택: "${label}"`);
       anyQuality.click();
       await delay(1000);
-      return true;
+      return label;
     }
 
     // 품질 서브메뉴 없음 — Download 자체를 클릭 (직접 다운로드 지원하는 경우)
@@ -2659,18 +2688,21 @@
     quality1080 = findMenuItemByText(['1080p', '1080']);
     quality720 = findMenuItemByText(['720p', '720']);
     if (quality1080 || quality720) {
-      const qualityBtn = quality720 || quality1080; // 720p 우선 (안전)
-      const hasUpgrade1080 = quality1080 && (/upgrade/i.test(quality1080.textContent || ''));
-      const finalBtn = (quality1080 && !hasUpgrade1080) ? quality1080 : qualityBtn;
-      console.log(LOG_PREFIX, `[download] 품질 선택: "${finalBtn.textContent?.trim()?.substring(0, 20)}"`);
-      finalBtn.click();
-      await delay(1000);
-      return true;
+      const can1080Post = quality1080 && !(/upgrade/i.test(quality1080.textContent || ''));
+      const finalBtn = (preferredQuality === '1080p' && can1080Post) ? quality1080 :
+                        quality720 || (can1080Post ? quality1080 : null);
+      if (finalBtn) {
+        const selected = finalBtn === quality1080 ? '1080p' : '720p';
+        console.log(LOG_PREFIX, `[download] 품질 선택: ${selected}`);
+        finalBtn.click();
+        await delay(1000);
+        return selected;
+      }
     }
 
     console.warn(LOG_PREFIX, '[download] 품질 옵션 못찾음');
     document.body.click();
-    return false;
+    return null;
   }
 
   /**
@@ -2878,6 +2910,36 @@
    * - blob 캡처가 가장 확실한 완료 시그널 (언어 무관)
    * - 토스트 텍스트는 보조 시그널 (다국어 대응)
    */
+  // 비디오 1080p 업스케일 완료 대기 (inject.js API 인터셉트 방식)
+  // inject.js가 batchCheckAsyncVideoGenerationStatu 응답에서 업스케일 URL 캡처 시 VEO3_API_RESULT 전달
+  async function waitForUpscaleVideoUrl(timeoutMs = 300000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      checkStopped();
+      if (lastApiResult) {
+        if (lastApiResult.ok && lastApiResult.videoCompleted && lastApiResult.mediaUrls?.length > 0) {
+          return lastApiResult.mediaUrls[0]; // 업스케일된 1080p URL
+        }
+        if (!lastApiResult.ok) {
+          // 업스케일 실패 → URL 없이 반환
+          console.warn(LOG_PREFIX, `[upscale] 업스케일 실패: ${lastApiResult.error || 'unknown'}`);
+          return null;
+        }
+        // ok=true지만 URL 없음 → 계속 대기 (videoCompleted=true, mediaUrls=[] 가능)
+        if (lastApiResult.ok && lastApiResult.videoCompleted && (!lastApiResult.mediaUrls || lastApiResult.mediaUrls.length === 0)) {
+          console.log(LOG_PREFIX, '[upscale] videoCompleted but no URL yet, continuing...');
+          lastApiResult = null; // 재시도를 위해 초기화
+        }
+      }
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      if (elapsed % 15 === 0 && elapsed > 0) {
+        console.log(LOG_PREFIX, `[upscale] 대기 중... ${elapsed}초`);
+      }
+      await delay(3000);
+    }
+    return null;
+  }
+
   async function waitForUpscaleComplete(timeoutMs = 60000) {
     const start = Date.now();
     let sawUpscaling = false;
