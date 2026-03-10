@@ -997,16 +997,17 @@ async function handleGenerationComplete(msg, sender) {
     return;
   }
 
-  const { mediaDataUrl, mediaUrl, uiDownloaded } = msg;
+  const { mediaDataUrl, mediaUrl, fallbackUrl, uiDownloaded } = msg;
   const senderTabId = sender?.tab?.id;
 
-  // mediaUrl = raw HTTP URL (비디오 다운로드 시 사용)
+  // mediaUrl = raw HTTP URL 또는 'ui-download' 마커
+  // fallbackUrl = 원본 URL (ui-download 실패 시 폴백)
   // mediaDataUrl = data:// URL (이미지 등 기존 방식)
   // uiDownloaded = true → UI가 이미 PC에 다운로드 완료 (재다운로드/삭제 불필요)
   if (concurrentCount > 1 && activeTasks.size > 0) {
-    await handleConcurrentComplete(senderTabId, mediaDataUrl, true, null, mediaUrl, uiDownloaded);
+    await handleConcurrentComplete(senderTabId, mediaDataUrl, true, null, mediaUrl, uiDownloaded, fallbackUrl);
   } else {
-    await handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded);
+    await handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded, fallbackUrl);
   }
 }
 
@@ -1031,12 +1032,12 @@ async function handleGenerationError(msg, sender) {
 }
 
 // ─── Sequential complete handler ───
-async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = false) {
+async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = false, fallbackUrl = null) {
   const item = sm.currentItem;
   sm.markDownloading();
 
   const filename = generateFilename(sm.currentIndex, sm.platform, sm.mediaType);
-  broadcastLog(`handleSequentialComplete: mode=${sm.mode}, mediaType=${sm.mediaType}, hasUrl=${!!mediaUrl}, hasDataUrl=${!!mediaDataUrl}`, 'info');
+  broadcastLog(`handleSequentialComplete: mode=${sm.mode}, mediaType=${sm.mediaType}, hasUrl=${!!mediaUrl}, hasDataUrl=${!!mediaDataUrl}, hasFallback=${!!fallbackUrl}`, 'info');
 
   // ui-download 마커 처리: chrome.downloads에서 실제 URL 찾기
   let _uiDownloadId = null; // UI 다운로드 ID (나중에 삭제용)
@@ -1048,12 +1049,17 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
-      broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
+      broadcastLog(`다운로드 URL 복구 (1080p): ${mediaUrl.substring(0, 80)}`, 'info');
     } else if (dlInfo?.filePath) {
       // URL은 없지만 파일 경로 있음 — file:// URL로 시도
       mediaUrl = 'file:///' + dlInfo.filePath.replace(/\\/g, '/');
       _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 파일 경로 사용: ${mediaUrl.substring(0, 80)}`, 'info');
+    } else if (fallbackUrl) {
+      // 1080p 다운로드 못 찾음 → 원본 URL로 폴백 (720p라도 업로드)
+      broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
+      mediaUrl = fallbackUrl;
+      uiDownloaded = false; // 폴백이므로 품질 변환 시도 허용
     } else {
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음 — 업로드 스킵', 'warn');
       mediaUrl = null;
@@ -1255,7 +1261,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
 }
 
 // ─── Concurrent complete handler ───
-async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, mediaUrl, uiDownloaded = false) {
+async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, mediaUrl, uiDownloaded = false, fallbackUrl = null) {
   const task = activeTasks.get(tabId);
   if (!task) {
     MangoUtils.log('warn', 'Received completion from unknown tab:', tabId);
@@ -1280,7 +1286,11 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
-      broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
+      broadcastLog(`다운로드 URL 복구 (1080p): ${mediaUrl.substring(0, 80)}`, 'info');
+    } else if (fallbackUrl) {
+      broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
+      mediaUrl = fallbackUrl;
+      uiDownloaded = false;
     } else {
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음', 'warn');
       mediaUrl = null;

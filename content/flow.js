@@ -273,12 +273,12 @@
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
-        // UI 다운로드 성공 시 'ui-download' 마커 전달 → background가 chrome.downloads에서 완료 대기
-        // (1080p 업스케일은 서버에서 처리 후 다운로드 시작되므로 완료까지 대기 필요)
-        // UI 다운로드 실패 시 원본 videoUrl로 폴백
+        // UI 다운로드 성공 시 'ui-download' 마커 + 원본 URL 둘 다 전달
+        // background: 1080p 다운로드 완료 대기 → 실패 시 원본 URL로 폴백
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
           mediaUrl: downloaded ? 'ui-download' : (videoUrl || null),
+          fallbackUrl: videoUrl || null,
           mediaType: 'video',
           uiDownloaded: downloaded
         });
