@@ -66,18 +66,24 @@
     'generation failed', 'audio generation failed', 'video generation failed',
     'something went wrong', 'could not generate', 'unable to generate',
     'error generating', 'violate our policies', 'might violate',
-    'content policy violation', 'against our content policy'
+    'content policy violation', 'against our content policy',
+    // 한국어 정책위반/에러 패턴
+    '정책을 위반', '정책 위반', '생성할 수 없습니다', '생성에 실패',
+    '콘텐츠 정책', '오디오 생성 실패', '동영상 생성 실패'
   ];
 
   // ─── Error Classification ───
   function classifyError(errorText) {
     const lower = (errorText || '').toLowerCase();
+    const raw = errorText || '';
     if (lower.includes('audio') && lower.includes('failed')) return 'AUDIO_FAILED';
+    if (raw.includes('오디오') && raw.includes('실패')) return 'AUDIO_FAILED';
     if (lower.includes('something went wrong')) return 'SOMETHING_WRONG';
     if (lower.includes('violat') || lower.includes('policies') || lower.includes('policy') ||
         lower.includes('harmful') || lower.includes('content filter') ||
         lower.includes('prohibited') || lower.includes('not allowed') ||
-        lower.includes('inappropriate') || lower.includes('safety')) return 'CENSORSHIP';
+        lower.includes('inappropriate') || lower.includes('safety') ||
+        raw.includes('정책') || raw.includes('위반')) return 'CENSORSHIP';
     return 'GENERATION_FAILED';
   }
 
