@@ -1050,11 +1050,6 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 URL 복구 (1080p): ${mediaUrl.substring(0, 80)}`, 'info');
-    } else if (dlInfo?.filePath) {
-      // URL은 없지만 파일 경로 있음 — file:// URL로 시도
-      mediaUrl = 'file:///' + dlInfo.filePath.replace(/\\/g, '/');
-      _uiDownloadId = dlInfo.downloadId || null;
-      broadcastLog(`다운로드 파일 경로 사용: ${mediaUrl.substring(0, 80)}`, 'info');
     } else if (fallbackUrl) {
       // 1080p 다운로드 못 찾음 → 원본 URL로 폴백 (720p라도 업로드)
       broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
@@ -1328,6 +1323,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   }
 
   if (success && (mediaDataUrl || mediaUrl)) {
+    let _uploadBlob = null; // blob 재사용 (프로젝트 폴더 저장용)
     if (sm.mode === 'mangohub' && sm.projectId) {
       if (reviewModeEnabled) {
         // 검토 모드: 즉시 업로드하지 않고 검토 큐에 추가
@@ -1362,6 +1358,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           } else if (mediaUrl) {
             blob = await fetchMediaWithCookies(mediaUrl);
           }
+          _uploadBlob = blob;
           if (item._isThumbnail) {
             await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename);
             broadcastLog(`썸네일 업로드 완료: concept ${item.segmentIndex}`, 'success');
@@ -1383,18 +1380,18 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
         }
       }
 
-      // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
-      if (uiDownloaded && (mediaDataUrl || mediaUrl)) {
-        // 프로젝트 폴더에 올바른 이름으로 저장 (이미지: dataUrl, 비디오: mediaUrl)
-        const saveUrl = mediaDataUrl || mediaUrl;
+      // MangoHub 업로드 시 받은 blob을 프로젝트 폴더에 저장 (URL 재다운로드 대신 blob 재사용)
+      if (_uploadBlob && uiDownloaded) {
         try {
           const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+          const blobUrl = URL.createObjectURL(_uploadBlob);
           await chrome.downloads.download({
-            url: saveUrl,
+            url: blobUrl,
             filename: dlFilename,
             saveAs: false
           });
-          broadcastLog(`프로젝트 폴더 저장 (concurrent): ${filename}`, 'info');
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          broadcastLog(`프로젝트 폴더 저장 (blob, concurrent): ${filename}`, 'info');
         } catch (dlErr) {
           broadcastLog(`프로젝트 폴더 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
         }

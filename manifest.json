@@ -20,6 +20,8 @@
     "https://*.grok.com/*",
     "https://imagine-public.x.ai/*",
     "https://labs.google/*",
+    "https://*.googleapis.com/*",
+    "https://*.googleusercontent.com/*",
     "https://*.mangois.love/*",
     "https://api.kie.ai/*"
   ],
