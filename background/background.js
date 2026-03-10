@@ -1041,8 +1041,10 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
   // ui-download 마커 처리: chrome.downloads에서 실제 URL 찾기
   let _uiDownloadId = null; // UI 다운로드 ID (나중에 삭제용)
   if (mediaUrl === 'ui-download') {
-    broadcastLog(`ui-download 감지 (${sm.mediaType}) — chrome.downloads에서 실제 URL 검색...`, 'info');
-    const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType);
+    // 비디오 1080p 업스케일은 서버 처리 시간이 길므로 폴링 대기 (최대 5분)
+    const pollTimeout = sm.mediaType === 'video' ? 300000 : 0;
+    broadcastLog(`ui-download 감지 (${sm.mediaType}) — chrome.downloads에서 실제 URL 검색${pollTimeout ? ` (업스케일 대기 최대 ${pollTimeout/1000}초)` : ''}...`, 'info');
+    const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType, pollTimeout);
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
@@ -1272,8 +1274,9 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   // ui-download 마커 처리 (concurrent)
   let _uiDownloadId = null;
   if (mediaUrl === 'ui-download') {
-    broadcastLog(`ui-download 감지 (concurrent, ${sm.mediaType}) — chrome.downloads에서 실제 URL 검색...`, 'info');
-    const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType);
+    const pollTimeout = sm.mediaType === 'video' ? 300000 : 0;
+    broadcastLog(`ui-download 감지 (concurrent, ${sm.mediaType}) — chrome.downloads에서 실제 URL 검색${pollTimeout ? ` (업스케일 대기 최대 ${pollTimeout/1000}초)` : ''}...`, 'info');
+    const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType, pollTimeout);
     if (dlInfo?.url) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
@@ -1933,49 +1936,81 @@ async function fetchMediaWithCookies(url) {
 }
 
 // ─── Find recent download URL from chrome.downloads (for ui-download fallback) ───
-async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video') {
-  try {
-    const results = await chrome.downloads.search({
-      orderBy: ['-startTime'],
-      limit: 10
-    });
-    const now = Date.now();
-    for (const dl of results) {
-      // 최근 다운로드만 확인
-      const startTime = new Date(dl.startTime).getTime();
-      if (now - startTime > maxAgeMs) continue;
-      const filename = (dl.filename || '').toLowerCase();
-      const url = dl.finalUrl || dl.url || '';
-      const mime = dl.mime || '';
-      // 미디어 타입에 따라 필터링
-      if (targetMediaType === 'image') {
-        const isImage = filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg') ||
-                        filename.endsWith('.webp') || mime.includes('image') ||
-                        url.includes('image') || url.includes('googleapis');
-        if (!isImage) continue;
-      } else {
-        const isVideo = filename.endsWith('.mp4') || filename.endsWith('.webm') ||
-                        url.includes('video') || mime.includes('video');
-        if (!isVideo) continue;
+// pollTimeoutMs: 다운로드가 아직 시작되지 않았을 때 폴링 대기 (1080p 업스케일 등)
+async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video', pollTimeoutMs = 0) {
+  const searchStartTime = Date.now(); // 최초 호출 시점 기준
+  const searchOnce = async () => {
+    try {
+      const results = await chrome.downloads.search({
+        orderBy: ['-startTime'],
+        limit: 10
+      });
+      const now = Date.now();
+      // 폴링 중 경과 시간만큼 maxAgeMs 확장 (최초 호출 시점 기준 유지)
+      const effectiveMaxAge = maxAgeMs + (now - searchStartTime);
+      for (const dl of results) {
+        // 최근 다운로드만 확인
+        const startTime = new Date(dl.startTime).getTime();
+        if (now - startTime > effectiveMaxAge) continue;
+        const filename = (dl.filename || '').toLowerCase();
+        const url = dl.finalUrl || dl.url || '';
+        const mime = dl.mime || '';
+        // 미디어 타입에 따라 필터링
+        if (targetMediaType === 'image') {
+          const isImage = filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg') ||
+                          filename.endsWith('.webp') || mime.includes('image') ||
+                          url.includes('image') || url.includes('googleapis');
+          if (!isImage) continue;
+        } else {
+          const isVideo = filename.endsWith('.mp4') || filename.endsWith('.webm') ||
+                          url.includes('video') || mime.includes('video');
+          if (!isVideo) continue;
+        }
+        // Google Labs / storage.googleapis.com에서 온 다운로드 우선
+        const isGoogleDl = url.includes('google') || url.includes('googleapis');
+        if (dl.state === 'complete') {
+          broadcastLog(`최근 다운로드 발견 (완료): ${filename.substring(filename.length - 40)}`, 'info');
+          return { url, filePath: dl.filename, state: 'complete', downloadId: dl.id };
+        }
+        if (dl.state === 'in_progress' && isGoogleDl) {
+          // 진행 중이면 완료 대기 (비디오는 최대 5분, 이미지는 60초)
+          const waitMs = targetMediaType === 'video' ? 300000 : 60000;
+          broadcastLog(`다운로드 진행 중, 완료 대기 (최대 ${waitMs/1000}초): ${dl.id}`, 'info');
+          const completedInfo = await waitForDownloadComplete(dl.id, waitMs);
+          if (completedInfo) return completedInfo;
+        }
       }
-      // Google Labs / storage.googleapis.com에서 온 다운로드 우선
-      const isGoogleDl = url.includes('google') || url.includes('googleapis');
-      if (dl.state === 'complete') {
-        broadcastLog(`최근 다운로드 발견 (완료): ${filename.substring(filename.length - 40)}`, 'info');
-        return { url, filePath: dl.filename, state: 'complete', downloadId: dl.id };
-      }
-      if (dl.state === 'in_progress' && isGoogleDl) {
-        // 진행 중이면 완료 대기 (최대 60초)
-        broadcastLog(`다운로드 진행 중, 완료 대기: ${dl.id}`, 'info');
-        const completedInfo = await waitForDownloadComplete(dl.id, 60000);
-        if (completedInfo) return completedInfo;
+      return null;
+    } catch (e) {
+      broadcastLog(`chrome.downloads.search 실패: ${e.message}`, 'warn');
+      return null;
+    }
+  };
+
+  // 즉시 검색
+  const immediate = await searchOnce();
+  if (immediate) return immediate;
+
+  // 폴링 모드: 다운로드가 아직 시작 안 됐으면 주기적으로 재검색
+  // (1080p 업스케일 등 서버 처리 후 다운로드 시작되는 경우)
+  if (pollTimeoutMs > 0) {
+    broadcastLog(`다운로드 대기 중 (업스케일 처리, 최대 ${Math.round(pollTimeoutMs/1000)}초)...`, 'info');
+    const pollStart = Date.now();
+    const pollInterval = 5000; // 5초마다 재검색
+    while (Date.now() - pollStart < pollTimeoutMs) {
+      await MangoUtils.sleep(pollInterval);
+      // maxAgeMs를 경과 시간만큼 늘려서 원래 시점 기준 검색 유지
+      const elapsed = Date.now() - pollStart;
+      const result = await searchOnce();
+      if (result) {
+        broadcastLog(`업스케일 다운로드 감지 (${Math.round(elapsed/1000)}초 후)`, 'info');
+        return result;
       }
     }
-    return null;
-  } catch (e) {
-    broadcastLog(`chrome.downloads.search 실패: ${e.message}`, 'warn');
-    return null;
+    broadcastLog(`업스케일 다운로드 타임아웃 (${Math.round(pollTimeoutMs/1000)}초)`, 'warn');
   }
+
+  return null;
 }
 
 // ─── Wait for a specific download to complete ───

@@ -273,11 +273,12 @@
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
-        // UI가 이미 최적 품질로 다운로드했으므로 uiDownloaded=true 전달
-        // videoUrl이 있으면 MangoHub 업로드용으로 함께 전달 (background에서 업로드에 사용)
+        // UI 다운로드 성공 시 'ui-download' 마커 전달 → background가 chrome.downloads에서 완료 대기
+        // (1080p 업스케일은 서버에서 처리 후 다운로드 시작되므로 완료까지 대기 필요)
+        // UI 다운로드 실패 시 원본 videoUrl로 폴백
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
-          mediaUrl: videoUrl || null,
+          mediaUrl: downloaded ? 'ui-download' : (videoUrl || null),
           mediaType: 'video',
           uiDownloaded: downloaded
         });
