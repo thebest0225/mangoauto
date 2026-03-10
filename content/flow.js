@@ -2067,8 +2067,9 @@
         console.log(LOG_PREFIX, `Generating... ${elapsed}s (${generating} items in progress)`);
 
         // 20초 이상: 스피너 있어도 DOM 에러 체크 (생성 실패 시 스피너와 에러가 공존)
+        // strict=true: 스피너 활성 시 개수 비교 비활성화 (이전 에러 오탐 방지)
         if (elapsed > 20) {
-          const errText = checkForErrors();
+          const errText = checkForErrors(true);
           if (errText) {
             const recovered = await tryInlineRecovery(errText, inlineRetryCount);
             if (recovered) {
@@ -2466,26 +2467,29 @@
   }
 
   // ─── Error Detection ───
-  function checkForErrors() {
-    // 1차: 시맨틱 셀렉터 (alert, error class 등)
+  // strict=true: 스피너 활성 시 호출 — 확실히 새 텍스트만 반환 (개수 비교 비활성)
+  // strict=false: 스피너 없을 때 — 개수 비교도 사용 (이전 에러와 동일 텍스트라도 감지)
+  function checkForErrors(strict = false) {
+    // 1차: 시맨틱 셀렉터 (alert, error class 등) — 항상 작동
     const alerts = document.querySelectorAll(
       '[role="alert"], [class*="error"], [class*="warning"], ' +
       '.snackbar, [class*="snack"], mat-snack-bar, [class*="toast"]'
     );
     for (const el of alerts) {
-      const text = el.textContent.trim().toLowerCase();
+      const text = el.textContent.trim();
+      const lower = text.toLowerCase();
       if (text.length > 0 && text.length < 300) {
+        // strict 모드에서도 시맨틱 셀렉터는 스냅샷 체크
+        if (strict && _errorSnapshotTexts.has(text)) continue;
         for (const phrase of ERROR_PHRASES) {
-          if (text.includes(phrase.toLowerCase())) return el.textContent.trim();
+          if (lower.includes(phrase.toLowerCase())) return text;
         }
       }
     }
 
-    // 2차: 에러 텍스트가 포함된 일반 DOM 영역 탐색 (Flow 비디오 생성 실패/검열 패턴)
-    // Flow는 비디오 영역에 직접 에러 텍스트를 표시 (role="alert" 없이)
+    // 2차: 에러 텍스트가 포함된 일반 DOM 영역 탐색
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     let currentErrorCount = 0;
-    let firstNewErrorText = null;
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
       if (el.children.length > 5) continue;
@@ -2493,7 +2497,6 @@
       if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
 
-      // STRONG_ERROR_PATTERNS 매칭
       let isError = false;
       for (const pattern of STRONG_ERROR_PATTERNS) {
         if (lower.includes(pattern)) { isError = true; break; }
@@ -2501,15 +2504,14 @@
       if (!isError) continue;
 
       currentErrorCount++;
-      // 스냅샷에 없는 새 텍스트면 바로 반환 (확실히 새 에러)
+      // 스냅샷에 없는 새 텍스트면 바로 반환 (strict/non-strict 모두)
       if (!_errorSnapshotTexts.has(text)) {
         return text;
       }
     }
 
-    // 텍스트는 동일해도 에러 요소 개수가 증가했으면 새 에러 발생
-    if (currentErrorCount > _errorSnapshotCount) {
-      // 가장 짧은 에러 텍스트 반환 (핵심 메시지)
+    // 개수 비교: strict 모드에서는 비활성 (스피너 활성 시 이전 에러 DOM 변동으로 오탐 방지)
+    if (!strict && currentErrorCount > _errorSnapshotCount) {
       let shortest = null;
       for (const t of _errorSnapshotTexts) {
         if (!shortest || t.length < shortest.length) shortest = t;
