@@ -1693,29 +1693,65 @@
     }
     console.log(LOG_PREFIX, `업스케일 대상 비디오: ${video.src?.substring(0, 60)}, 총 ${allVideos.length}개`);
 
-    // 비디오 부모를 올라가며 아이콘 버튼 그룹이 있는 컨테이너 찾기
+    // 비디오 부모를 올라가며 "..." 버튼 찾기
+    // 비디오 플레이어 컨트롤(음소거/재생/전체화면)과 구별해야 함
+    const videoControlLabels = ['mute', 'unmute', 'volume', 'sound', 'play', 'pause',
+      'fullscreen', 'full screen', '음소거', '재생', '일시정지', '전체화면', '볼륨'];
+
+    function isVideoControlBtn(btn) {
+      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (videoControlLabels.some(l => ariaLabel.includes(l))) return true;
+      // 비디오 요소 내부에 있는 버튼 (native controls 근처)
+      const parent = btn.closest('video, [class*="player-control" i], [class*="video-control" i]');
+      if (parent) return true;
+      return false;
+    }
+
+    function isThreeDotsBtn(btn) {
+      // aria-label로 판별
+      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (ariaLabel.includes('more') || ariaLabel.includes('더보기') || ariaLabel.includes('옵션')) return true;
+      // SVG에 circle 3개 (점 세 개 패턴)
+      const circles = btn.querySelectorAll('svg circle');
+      if (circles.length === 3) return true;
+      // SVG에 "..." 텍스트 또는 path가 있는 경우
+      const svgText = (btn.querySelector('svg')?.textContent || '').trim();
+      if (svgText === '...' || svgText === '⋯' || svgText === '⋮') return true;
+      return false;
+    }
+
     let container = video.parentElement;
-    for (let depth = 0; depth < 10 && container; depth++) {
+    for (let depth = 0; depth < 15 && container; depth++) {
       const btns = Array.from(container.querySelectorAll('button'));
-      // 아이콘 버튼: 텍스트 짧고 textarea/input 없는 버튼
       const iconBtns = btns.filter(b => {
         const t = (b.textContent || '').trim();
         return t.length <= 20 && !b.querySelector('textarea, input');
       });
 
-      if (iconBtns.length >= 3) {
-        // 비디오 영역 버튼 그룹 발견
-        // "..." 버튼 찾기: aria-label이 "더보기"/"More"이거나, SVG만 가진 마지막 버튼
-        let dotBtn = iconBtns.find(b => {
-          const ariaLabel = (b.getAttribute('aria-label') || '').toLowerCase();
-          return ariaLabel.includes('more') || ariaLabel.includes('더보기') || ariaLabel.includes('옵션');
-        });
-        // aria-label 없으면 마지막 아이콘 버튼 (전통적인 "..." 위치)
-        if (!dotBtn) dotBtn = iconBtns[iconBtns.length - 1];
+      // 1순위: "..." 패턴에 정확히 맞는 버튼 (비디오 컨트롤 제외)
+      const dotBtn = iconBtns.find(b => isThreeDotsBtn(b) && !isVideoControlBtn(b));
+      if (dotBtn) {
         moreBtn = dotBtn;
-        const btnTexts = iconBtns.map(b => `"${(b.textContent || '').trim().substring(0, 15)}"`).join(', ');
-        console.log(LOG_PREFIX, `비디오 컨테이너 발견 (depth=${depth}, 버튼 ${iconBtns.length}개): [${btnTexts}]`);
-        console.log(LOG_PREFIX, `"..." 버튼 후보: "${(moreBtn.textContent || '').trim().substring(0, 20)}"`);
+        const btnTexts = iconBtns.map(b => {
+          const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
+          return `"${label}"`;
+        }).join(', ');
+        console.log(LOG_PREFIX, `"..." 버튼 발견 (depth=${depth}): [${btnTexts}]`);
+        console.log(LOG_PREFIX, `"..." 버튼: aria-label="${moreBtn.getAttribute('aria-label') || 'N/A'}"`);
+        break;
+      }
+
+      // 2순위: 아이콘 버튼 5개 이상인 그룹 (Grok 액션 버튼 그룹) — 비디오 컨트롤 제외
+      const nonControlBtns = iconBtns.filter(b => !isVideoControlBtn(b));
+      if (nonControlBtns.length >= 5) {
+        // 비디오 컨트롤 아닌 버튼 중 마지막이 "..."일 가능성 높음
+        moreBtn = nonControlBtns[nonControlBtns.length - 1];
+        const btnTexts = nonControlBtns.map(b => {
+          const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
+          return `"${label}"`;
+        }).join(', ');
+        console.log(LOG_PREFIX, `Grok 버튼 그룹 발견 (depth=${depth}, 버튼 ${nonControlBtns.length}개): [${btnTexts}]`);
+        console.log(LOG_PREFIX, `"..." 버튼 후보(마지막): "${(moreBtn.textContent || '').trim().substring(0, 20)}"`);
         break;
       }
       container = container.parentElement;
@@ -1724,15 +1760,18 @@
     // 못 찾으면 디버그
     if (!moreBtn) {
       console.warn(LOG_PREFIX, '=== UPSCALE: 비디오 근처 "..." 버튼 못 찾음 ===');
-      // 비디오 주변 버튼들 로그
+      // 비디오 주변 버튼들 상세 로그
       let dbgContainer = video.parentElement;
-      for (let d = 0; d < 10 && dbgContainer; d++) {
+      for (let d = 0; d < 15 && dbgContainer; d++) {
         const btns = dbgContainer.querySelectorAll('button');
         if (btns.length > 0) {
           console.log(LOG_PREFIX, `  depth=${d}: 버튼 ${btns.length}개`);
           btns.forEach((b, i) => {
             const t = (b.textContent || '').trim().substring(0, 30);
-            console.log(LOG_PREFIX, `    [${i}] "${t}"`);
+            const aria = b.getAttribute('aria-label') || '';
+            const circles = b.querySelectorAll('svg circle').length;
+            const isCtrl = isVideoControlBtn(b);
+            console.log(LOG_PREFIX, `    [${i}] "${t}" aria="${aria}" circles=${circles} isControl=${isCtrl}`);
           });
         }
         dbgContainer = dbgContainer.parentElement;
@@ -1741,19 +1780,42 @@
       return false;
     }
 
-    // Step 2: "..." 메뉴 열기 (최대 3회 시도 — 2개 영상 UI에서 클릭이 안 먹힐 수 있음)
+    // Step 2: "..." 메뉴 열기 전에 비디오 일시정지 (컨트롤 오버레이 방지)
+    if (video && !video.paused) {
+      video.pause();
+      console.log(LOG_PREFIX, '비디오 일시정지 (컨트롤 오버레이 방지)');
+      await delay(300);
+    }
+    // 비디오 영역 밖으로 마우스 이동하여 컨트롤 숨기기
+    document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 0, clientY: 0 }));
+    await delay(300);
+
     let upscaleItem = null;
 
     for (let menuAttempt = 1; menuAttempt <= 3 && !upscaleItem; menuAttempt++) {
       console.log(LOG_PREFIX, `"..." 메뉴 열기 시도 ${menuAttempt}/3...`);
       if (menuAttempt === 1) {
         showToast('"..." 메뉴 열기...', 'info');
-        MangoDom.simulateClick(moreBtn);
+        // scrollIntoView 후 직접 클릭 이벤트 발생 (겹친 요소 무시)
+        moreBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+        await delay(200);
+        moreBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        moreBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        moreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       } else {
-        // 재시도: 직접 .click() + 더 긴 대기
+        // 재시도: 다른 클릭 방식 시도
         document.body.click(); // 기존 메뉴 닫기
         await delay(500);
-        moreBtn.click();
+        if (menuAttempt === 2) {
+          // .click() 직접 호출
+          moreBtn.click();
+        } else {
+          // focus + Enter 키
+          moreBtn.focus();
+          await delay(100);
+          moreBtn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+          moreBtn.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+        }
       }
       await delay(1200);
 
