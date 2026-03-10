@@ -275,24 +275,17 @@
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
-        // 1080p 업스케일 트리거 시 → inject.js API 인터셉트로 완료 대기
-        // inject.js가 batchCheckAsyncVideoGenerationStatu 응답에서 업스케일 URL 캡처
-        let upscaledVideoUrl = null;
-        if (downloaded && actualQuality === '1080p') {
-          console.log(LOG_PREFIX, '[upscale] 1080p 업스케일 완료 대기 (inject.js API 캡처)...');
-          lastApiResult = null; // 이전 생성 결과 초기화 → 업스케일 결과만 캡처
-          upscaledVideoUrl = await waitForUpscaleVideoUrl(300000); // 최대 5분
-          if (upscaledVideoUrl) {
-            console.log(LOG_PREFIX, `[upscale] ✓ 1080p URL 캡처 성공: ${upscaledVideoUrl.substring(0, 80)}`);
-          } else {
-            console.warn(LOG_PREFIX, '[upscale] ⚠ 1080p URL 캡처 실패 → ui-download 폴백');
-          }
+        // 1080p: API 응답에 URL이 포함되지 않음 → 'ui-download' 마커로 background가 chrome.downloads 폴링
+        // 720p: videoUrl을 직접 전달 (업스케일 없이 즉시 다운로드)
+        let finalMediaUrl;
+        if (actualQuality === '1080p') {
+          // 1080p 업스케일: background에서 자동 다운로드 완료 감지 + finalUrl re-fetch
+          finalMediaUrl = 'ui-download';
+          console.log(LOG_PREFIX, '[1080p] ui-download 마커 → background가 chrome.downloads 폴링');
+        } else {
+          // 720p/기타: videoUrl 직접 전달 (폴링 불필요)
+          finalMediaUrl = videoUrl || (downloaded ? 'ui-download' : null);
         }
-
-        // URL 우선순위: 1080p 업스케일 URL > 원본 videoUrl > ui-download 폴백
-        // videoUrl이 있으면 직접 전달 (background에서 fetchMediaWithCookies로 다운로드)
-        // ui-download는 URL이 전혀 없을 때만 사용 (chrome.downloads 폴링 필요)
-        const finalMediaUrl = upscaledVideoUrl || videoUrl || (downloaded ? 'ui-download' : null);
         console.log(LOG_PREFIX, `GENERATION_COMPLETE: mediaUrl=${(finalMediaUrl || '').substring(0, 60)}, quality=${actualQuality}, uiDownloaded=${downloaded}`);
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
