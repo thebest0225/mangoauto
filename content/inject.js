@@ -272,6 +272,19 @@
     const isVideoCheck = url.includes('batchCheckAsyncVideo');
 
     if (!isImageApi && !isVideoStart && !isVideoStartImage && !isVideoCheck) {
+      // 비디오 다운로드 URL 캡처 (1080p 업스케일 등)
+      // Flow가 fetch()로 비디오를 받아 blob→다운로드하는 경우, HTTP URL을 캡처
+      if (url.includes('storage.googleapis.com') || url.includes('googleusercontent.com') || url.includes('googlevideo.com')) {
+        const response = await originalFetch.apply(this, args);
+        try {
+          const ct = response.headers.get('content-type') || '';
+          if (ct.includes('video') || url.match(/\.(mp4|webm)(\?|$)/i)) {
+            console.log(LOG_PREFIX, `🎬 비디오 다운로드 URL 캡처: ${url.substring(0, 120)}`);
+            window.postMessage({ type: 'VIDEO_DOWNLOAD_URL_CAPTURED', url }, '*');
+          }
+        } catch (e) {}
+        return response;
+      }
       return originalFetch.apply(this, args);
     }
 

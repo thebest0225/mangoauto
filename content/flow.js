@@ -18,6 +18,7 @@
   const LOG_PREFIX = '[MangoAuto:Flow]';
   let isProcessing = false;
   let shouldStop = false;
+  let capturedVideoDownloadUrl = null; // inject.js에서 캡처된 비디오 HTTP URL
 
   // ─── XPath Selectors (verified) ───
   const SELECTORS = {
@@ -154,6 +155,10 @@
     if (event.data?.type === 'SET_FLOW_PROMPT_RESULT') {
       console.log(LOG_PREFIX, 'Prompt injection confirmed by inject.js:', event.data.ok);
     }
+    if (event.data?.type === 'VIDEO_DOWNLOAD_URL_CAPTURED') {
+      capturedVideoDownloadUrl = event.data.url;
+      console.log(LOG_PREFIX, `비디오 다운로드 URL 캡처됨: ${event.data.url?.substring(0, 100)}`);
+    }
     if (event.data?.type === 'UPSCALED_IMAGE_BLOB') {
       // 여러 blob이 감지될 수 있으므로 가장 큰 것만 유지 (= 업스케일 이미지)
       const newSize = event.data.size || 0;
@@ -177,6 +182,17 @@
 
   function checkStopped() {
     if (shouldStop) throw new Error('Stopped by user');
+  }
+
+  // inject.js가 캡처한 비디오 다운로드 HTTP URL 대기 (1080p 업스케일용)
+  async function waitForCapturedVideoUrl(timeoutMs = 300000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (capturedVideoDownloadUrl) return capturedVideoDownloadUrl;
+      if (shouldStop) return null;
+      await delay(2000);
+    }
+    return null;
   }
 
   async function handleExecutePrompt(msg) {
@@ -275,13 +291,22 @@
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
-        // 1080p: API 응답에 URL이 포함되지 않음 → 'ui-download' 마커로 background가 chrome.downloads 폴링
+        // 1080p: inject.js가 캡처한 HTTP URL 대기 → 직접 전달
         // 720p: videoUrl을 직접 전달 (업스케일 없이 즉시 다운로드)
         let finalMediaUrl;
         if (actualQuality === '1080p') {
-          // 1080p 업스케일: background에서 자동 다운로드 완료 감지 + finalUrl re-fetch
-          finalMediaUrl = 'ui-download';
-          console.log(LOG_PREFIX, '[1080p] ui-download 마커 → background가 chrome.downloads 폴링');
+          // 1080p 업스케일: inject.js가 storage.googleapis.com fetch URL 캡처 대기
+          capturedVideoDownloadUrl = null; // 이전 캡처 초기화
+          console.log(LOG_PREFIX, '[1080p] 업스케일 비디오 URL 대기 (inject.js 캡처, 최대 5분)...');
+          const capturedUrl = await waitForCapturedVideoUrl(300000);
+          if (capturedUrl) {
+            finalMediaUrl = capturedUrl;
+            console.log(LOG_PREFIX, `[1080p] 캡처된 HTTP URL 사용: ${capturedUrl.substring(0, 100)}`);
+          } else {
+            // 캡처 실패 → ui-download 마커 폴백 (chrome.downloads 폴링)
+            finalMediaUrl = 'ui-download';
+            console.log(LOG_PREFIX, '[1080p] URL 캡처 실패 → ui-download 폴백');
+          }
         } else {
           // 720p/기타: videoUrl 직접 전달 (폴링 불필요)
           finalMediaUrl = videoUrl || (downloaded ? 'ui-download' : null);

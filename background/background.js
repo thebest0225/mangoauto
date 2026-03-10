@@ -1046,15 +1046,19 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     const pollTimeout = sm.mediaType === 'video' ? 300000 : 0;
     broadcastLog(`ui-download 감지 (${sm.mediaType}) — chrome.downloads에서 실제 URL 검색${pollTimeout ? ` (업스케일 대기 최대 ${pollTimeout/1000}초)` : ''}...`, 'info');
     const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType, pollTimeout);
-    if (dlInfo?.url) {
+    if (dlInfo?.url && !dlInfo.url.startsWith('blob:')) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
-      broadcastLog(`다운로드 URL 복구 (1080p): ${mediaUrl.substring(0, 80)}`, 'info');
+      broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
+    } else if (dlInfo?.url?.startsWith('blob:') && fallbackUrl) {
+      // blob: URL은 service worker에서 fetch 불가 → fallbackUrl 사용
+      broadcastLog(`blob URL 감지 (${dlInfo.url.substring(0, 40)}) → 원본 URL 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
+      mediaUrl = fallbackUrl;
+      _uiDownloadId = dlInfo.downloadId || null;
     } else if (fallbackUrl) {
-      // 1080p 다운로드 못 찾음 → 원본 URL로 폴백 (720p라도 업로드)
       broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
       mediaUrl = fallbackUrl;
-      uiDownloaded = false; // 폴백이므로 품질 변환 시도 허용
+      uiDownloaded = false;
     } else {
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음 — 업로드 스킵', 'warn');
       mediaUrl = null;
@@ -1298,10 +1302,14 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     const pollTimeout = sm.mediaType === 'video' ? 300000 : 0;
     broadcastLog(`ui-download 감지 (concurrent, ${sm.mediaType}) — chrome.downloads에서 실제 URL 검색${pollTimeout ? ` (업스케일 대기 최대 ${pollTimeout/1000}초)` : ''}...`, 'info');
     const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType, pollTimeout);
-    if (dlInfo?.url) {
+    if (dlInfo?.url && !dlInfo.url.startsWith('blob:')) {
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
-      broadcastLog(`다운로드 URL 복구 (1080p): ${mediaUrl.substring(0, 80)}`, 'info');
+      broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
+    } else if (dlInfo?.url?.startsWith('blob:') && fallbackUrl) {
+      broadcastLog(`blob URL 감지 → 원본 URL 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
+      mediaUrl = fallbackUrl;
+      _uiDownloadId = dlInfo.downloadId || null;
     } else if (fallbackUrl) {
       broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
       mediaUrl = fallbackUrl;
@@ -1982,6 +1990,11 @@ async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video
         const filename = (dl.filename || '').toLowerCase();
         const url = dl.finalUrl || dl.url || '';
         const mime = dl.mime || '';
+        const shortName = filename.substring(filename.lastIndexOf('\\') + 1).substring(filename.lastIndexOf('/') + 1);
+        // 디버그: 검토 중인 다운로드 표시
+        if (pollTimeoutMs > 0) {
+          broadcastLog(`  검토: ${shortName || '(no name)'} | state=${dl.state} | url=${url.substring(0, 50)} | mime=${mime}`, 'info');
+        }
         // 미디어 타입에 따라 필터링
         if (targetMediaType === 'image') {
           const isImage = filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg') ||
