@@ -289,8 +289,11 @@
           }
         }
 
-        // 업스케일 URL이 있으면 직접 전달, 없으면 기존 ui-download 방식
-        const finalMediaUrl = upscaledVideoUrl || (downloaded ? 'ui-download' : (videoUrl || null));
+        // URL 우선순위: 1080p 업스케일 URL > 원본 videoUrl > ui-download 폴백
+        // videoUrl이 있으면 직접 전달 (background에서 fetchMediaWithCookies로 다운로드)
+        // ui-download는 URL이 전혀 없을 때만 사용 (chrome.downloads 폴링 필요)
+        const finalMediaUrl = upscaledVideoUrl || videoUrl || (downloaded ? 'ui-download' : null);
+        console.log(LOG_PREFIX, `GENERATION_COMPLETE: mediaUrl=${(finalMediaUrl || '').substring(0, 60)}, quality=${actualQuality}, uiDownloaded=${downloaded}`);
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
           mediaUrl: finalMediaUrl,
