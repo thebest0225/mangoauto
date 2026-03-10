@@ -1700,7 +1700,15 @@
 
     function isVideoControlBtn(btn) {
       const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (videoControlLabels.some(l => ariaLabel.includes(l))) return true;
+      const textContent = (btn.textContent || '').trim().toLowerCase();
+      // aria-label 또는 텍스트에 비디오 컨트롤 키워드 포함
+      if (videoControlLabels.some(l => ariaLabel.includes(l) || textContent.includes(l))) return true;
+      // 시간 표시 패턴: "0:02 / 0:10" 등
+      if (/\d+:\d+\s*\/\s*\d+:\d+/.test(textContent)) return true;
+      // 퍼센트 표시: "79%", "100%" 등 (줌/볼륨 컨트롤)
+      if (/^\d+%$/.test(textContent)) return true;
+      // "음소거 해제" 같은 한국어 변형
+      if (textContent.includes('음소거') || textContent.includes('해제')) return true;
       // 비디오 요소 내부에 있는 버튼 (native controls 근처)
       const parent = btn.closest('video, [class*="player-control" i], [class*="video-control" i]');
       if (parent) return true;
@@ -1708,9 +1716,10 @@
     }
 
     function isThreeDotsBtn(btn) {
-      // aria-label로 판별
+      // aria-label로 판별 ("추가 옵션" 포함)
       const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (ariaLabel.includes('more') || ariaLabel.includes('더보기') || ariaLabel.includes('옵션')) return true;
+      if (ariaLabel.includes('more') || ariaLabel.includes('더보기') || ariaLabel.includes('옵션')
+          || ariaLabel.includes('추가')) return true;
       // SVG에 circle 3개 (점 세 개 패턴)
       const circles = btn.querySelectorAll('svg circle');
       if (circles.length === 3) return true;
