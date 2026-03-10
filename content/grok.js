@@ -243,6 +243,9 @@
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
 
+        // Step 8.5: 2개 영상 생성 시 선택 처리
+        await handleDualVideoSelection();
+
         // Step 9: 비디오 URL 추출
         showToast('Step 9: 비디오 URL 추출...', 'info');
         let videoUrl = await extractVideoUrl();
@@ -300,6 +303,9 @@
         // Step 3: 영상 생성 대기 (비디오 모드로 제출했으므로 바로 영상)
         const videoResult = await waitForVideoReady(timeoutMs);
         if (videoResult === 'moderated') throw new ModerationError();
+
+        // 2개 영상 생성 시 선택 처리
+        await handleDualVideoSelection();
 
         let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
@@ -1622,6 +1628,46 @@
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.dispatchEvent(new Event('change', { bubbles: true }));
     console.log(LOG_PREFIX, 'Result page prompt set');
+  }
+
+  // ─── 2개 영상 생성 시 자동 선택 ───
+  // 그록이 2개 영상을 만들면 사용자에게 선택하라고 함
+  // 자동화에서는 첫 번째 영상을 선택하고 진행
+  async function handleDualVideoSelection() {
+    const allVideos = document.querySelectorAll('video[src]');
+    const visibleVideos = Array.from(allVideos).filter(v => {
+      const rect = v.getBoundingClientRect();
+      const src = v.src || '';
+      return rect.width > 50 && rect.height > 30 && src.startsWith('http') && !src.startsWith('blob:');
+    });
+
+    if (visibleVideos.length < 2) return false; // 2개 아니면 패스
+
+    console.log(LOG_PREFIX, `2개 영상 감지 (${visibleVideos.length}개) — 첫 번째 영상 선택 시도`);
+    showToast('2개 영상 감지 — 첫 번째 선택...', 'info');
+
+    // 첫 번째 비디오 클릭 (선택)
+    const firstVideo = visibleVideos[0];
+    const clickTarget = firstVideo.closest('div[class]') || firstVideo;
+    MangoDom.simulateClick(clickTarget);
+    await delay(2000);
+
+    // 선택 확인 버튼이 있으면 클릭 (예: "이 영상 사용", "Select" 등)
+    const confirmKeywords = ['사용', '선택', 'select', 'use', 'choose', 'pick'];
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const text = (btn.textContent || '').trim().toLowerCase();
+      if (text.length > 0 && text.length < 30 && confirmKeywords.some(kw => text.includes(kw))) {
+        // 비디오 관련 선택 버튼인지 확인 (너무 일반적인 버튼 제외)
+        console.log(LOG_PREFIX, `영상 선택 확인 버튼 클릭: "${text}"`);
+        MangoDom.simulateClick(btn);
+        await delay(2000);
+        break;
+      }
+    }
+
+    console.log(LOG_PREFIX, '영상 선택 완료, 업스케일 진행');
+    return true;
   }
 
   // ─── Wait for Video Ready ───
