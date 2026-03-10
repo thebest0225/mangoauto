@@ -1105,6 +1105,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     } else {
       // 기존 동작: 즉시 업로드
       sm.markUploading();
+      let _uploadBlob = null; // 업로드용 blob (프로젝트 폴더 저장에도 재사용)
       try {
         let blob;
         if (mediaDataUrl) {
@@ -1115,6 +1116,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         } else {
           throw new Error('No media data available');
         }
+        _uploadBlob = blob; // 프로젝트 폴더 저장용 보관
         if (item._isThumbnail) {
           // 썸네일 이미지 업로드
           await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename);
@@ -1139,12 +1141,30 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message });
         sm.transition(AutoState.COOLDOWN);
       }
+
+      // MangoHub 업로드 시 받은 blob을 프로젝트 폴더에 저장 (URL 재다운로드 대신 blob 재사용)
+      if (_uploadBlob && uiDownloaded) {
+        try {
+          const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+          // blob을 object URL로 변환하여 다운로드 (서명 URL 만료 문제 회피)
+          const blobUrl = URL.createObjectURL(_uploadBlob);
+          await chrome.downloads.download({
+            url: blobUrl,
+            filename: dlFilename,
+            saveAs: false
+          });
+          // blob URL은 다운로드 시작 후 바로 해제해도 됨 (Chrome이 참조 유지)
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          broadcastLog(`프로젝트 폴더 저장 (blob): ${filename}`, 'info');
+        } catch (dlErr) {
+          broadcastLog(`프로젝트 폴더 저장 실패: ${dlErr.message}`, 'warn');
+        }
+      }
     }
 
-    // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관)
-    if (uiDownloaded && (mediaDataUrl || mediaUrl)) {
-      // UI가 이미 PC에 다운로드했지만, 프로젝트 폴더에 올바른 이름으로 저장
-      // 이미지 2K: mediaDataUrl 사용, 비디오: mediaUrl 사용
+    // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관) — blob 재사용이 안 된 경우
+    if (uiDownloaded && !sm._config?.projectId && (mediaDataUrl || mediaUrl)) {
+      // standalone 모드에서만 URL 기반 다운로드 시도
       const saveUrl = mediaDataUrl || mediaUrl;
       try {
         const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
