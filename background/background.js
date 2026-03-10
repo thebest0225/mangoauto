@@ -711,7 +711,7 @@ async function runSequentialLoop(loopId) {
       // 오디오 실패 / 일시적 오류 → LLM 프롬프트 수정 안 함 (프롬프트 문제가 아님)
       // 프롬프트/생성 검열 → LLM 프롬프트 수정 시도
       const llmCfg = automationSettings?.llm;
-      const llmMaxAttempts = llmCfg?.retryCount || 2;
+      const llmMaxAttempts = llmCfg?.retryCount || 3;
       const llmAttemptsSoFar = item._llmRewriteCount || 0;
       const skipLlm = isImageRejected || isAudioFailed || isSomethingWrong;
       const isCensorship = !skipLlm && isCensorshipError(resp.error, resp.errorCode);
@@ -1439,7 +1439,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
     // 실패 → 검열 에러이면 LLM 수정 후 큐에 재삽입
     // 오디오 실패/일시적 오류는 LLM 수정 불필요 (프롬프트 문제 아님)
     const llmCfg = automationSettings?.llm;
-    const llmMaxAttempts = llmCfg?.retryCount || 2;
+    const llmMaxAttempts = llmCfg?.retryCount || 3;
     const llmAttemptsSoFar = item._llmRewriteCount || 0;
     const errorLower = (errorMsg || '').toLowerCase();
     const isAudioFailedPipe = errorLower.includes('audio') && errorLower.includes('failed');
