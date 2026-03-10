@@ -28,10 +28,10 @@
       "(//button[.//i[normalize-space(text())='arrow_forward']])",
 
     VIDEOS_TAB_XPATH:
-      "//button[@role='radio' and (contains(., 'Videos') or contains(., '동영상'))]",
+      "//button[@role='radio' and (contains(., 'Videos') or contains(., '동영상') or contains(., 'Video'))]",
 
     IMAGES_TAB_XPATH:
-      "//button[@role='radio' and (contains(., 'Images') or contains(., '이미지'))]",
+      "//button[@role='radio' and (contains(., 'Images') or contains(., '이미지') or contains(., 'Hình'))]",
 
     MODE_DROPDOWN_XPATH:
       "//button[@role='combobox']",
@@ -413,8 +413,8 @@
     let newProjectBtn = null;
     for (const btn of buttons) {
       const text = btn.textContent?.trim() || '';
-      if (text.includes('새 프로젝트') || text.includes('New project') ||
-          text.includes('add') && text.includes('프로젝트')) {
+      if (text.includes('새 프로젝트') || text.includes('New project') || text.includes('new project') ||
+          text.includes('Dự án mới') || text.includes('add') && text.includes('프로젝트')) {
         newProjectBtn = btn;
         break;
       }
@@ -1785,8 +1785,8 @@
 
   async function clickAnimateMenuItem() {
     // 우선순위: Animate (이미지→영상) > Add to Prompt (폴백)
-    const animateTexts = ['Animate', '애니메이션', '애니메이트'];
-    const addTexts = ['Add to Prompt', 'Add to prompt', '프롬프트에 추가'];
+    const animateTexts = ['Animate', '애니메이션', '애니메이트', 'motion_blur'];
+    const addTexts = ['Add to Prompt', 'Add to prompt', '프롬프트에 추가', 'addTh'];
 
     // 메뉴가 나타날 때까지 대기 + 텍스트 매칭
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -1840,7 +1840,7 @@
       const iconText = icon?.textContent?.trim();
       const text = item.textContent?.trim() || '';
       if ((iconText === 'animation' || iconText === 'slow_motion_video' || iconText === 'movie' ||
-           iconText === 'animated_images' || iconText === 'play_arrow') &&
+           iconText === 'animated_images' || iconText === 'play_arrow' || iconText === 'motion_blur') &&
           text.length < 50 && item.offsetParent !== null) {
         console.log(LOG_PREFIX, `[frame] animation 아이콘 메뉴: icon="${iconText}", text="${text.substring(0, 40)}"`);
         item.click();
@@ -1850,7 +1850,7 @@
     }
 
     // 방법 3: XPath 텍스트 매칭
-    for (const txt of ['Animate', '애니메이션']) {
+    for (const txt of ['Animate', '애니메이션', 'motion_blur']) {
       const el = findElementByExactText(txt);
       if (el && el.offsetParent !== null) {
         console.log(LOG_PREFIX, `[frame] XPath "${txt}" 발견`);
@@ -2572,7 +2572,7 @@
     console.log(LOG_PREFIX, '[download] ⋮ 클릭 완료');
 
     // "Download" / "다운로드" 메뉴 아이템 찾기
-    const downloadItem = findMenuItemByText(['Download', '다운로드']);
+    const downloadItem = findMenuItemByText(['Download', '다운로드', 'download']);
     if (!downloadItem) {
       const items = getVisibleMenuItems();
       console.warn(LOG_PREFIX, `[download] 다운로드 메뉴 못찾음. 메뉴: ${items.join(', ')}`);
@@ -2754,7 +2754,7 @@
     console.log(LOG_PREFIX, '[img-download] ⋮ 클릭 완료');
 
     // "다운로드" 메뉴 아이템 찾기
-    const downloadItem = findMenuItemByText(['Download', '다운로드']);
+    const downloadItem = findMenuItemByText(['Download', '다운로드', 'download']);
     if (!downloadItem) {
       const items = getVisibleMenuItems();
       console.warn(LOG_PREFIX, `[img-download] 다운로드 메뉴 못찾음. 메뉴: ${items.join(', ')}`);
