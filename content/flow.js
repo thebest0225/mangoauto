@@ -285,36 +285,35 @@
 
         // UI 다운로드: ⋮ → 다운로드 → 1080p/720p (브라우저 네이티브 다운로드)
         const videoQuality = settings?.download?.videoQuality || '720p';
+        // 1080p 업스케일용: 다운로드 메뉴 클릭 전에 캡처 URL 초기화
+        // (클릭 후 바로 fetch 시작되므로 클릭 전에 초기화해야 함)
+        capturedVideoDownloadUrl = null;
         console.log(LOG_PREFIX, `${videoQuality} UI 다운로드 시도...`);
         const dlResult = await downloadVideoViaMenu(videoQuality);
         const downloaded = !!dlResult;
-        const actualQuality = dlResult || null; // '1080p', '720p', 등 실제 선택된 품질
+        const actualQuality = dlResult || null;
         if (downloaded) {
           console.log(LOG_PREFIX, `✓ ${actualQuality} 다운로드 트리거됨 (UI)`);
         } else {
           console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패');
-          // URL도 없고 UI 다운로드도 실패하면 에러
           if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
         }
 
         // 1080p: inject.js가 캡처한 HTTP URL 대기 → 직접 전달
-        // 720p: videoUrl을 직접 전달 (업스케일 없이 즉시 다운로드)
+        // 720p: videoUrl을 직접 전달
         let finalMediaUrl;
         if (actualQuality === '1080p') {
-          // 1080p 업스케일: inject.js가 storage.googleapis.com fetch URL 캡처 대기
-          capturedVideoDownloadUrl = null; // 이전 캡처 초기화
           console.log(LOG_PREFIX, '[1080p] 업스케일 비디오 URL 대기 (inject.js 캡처, 최대 5분)...');
           const capturedUrl = await waitForCapturedVideoUrl(300000);
           if (capturedUrl) {
             finalMediaUrl = capturedUrl;
             console.log(LOG_PREFIX, `[1080p] 캡처된 HTTP URL 사용: ${capturedUrl.substring(0, 100)}`);
           } else {
-            // 캡처 실패 → ui-download 마커 폴백 (chrome.downloads 폴링)
+            // 캡처 실패 → ui-download 마커 폴백
             finalMediaUrl = 'ui-download';
             console.log(LOG_PREFIX, '[1080p] URL 캡처 실패 → ui-download 폴백');
           }
         } else {
-          // 720p/기타: videoUrl 직접 전달 (폴링 불필요)
           finalMediaUrl = videoUrl || (downloaded ? 'ui-download' : null);
         }
         console.log(LOG_PREFIX, `GENERATION_COMPLETE: mediaUrl=${(finalMediaUrl || '').substring(0, 60)}, quality=${actualQuality}, uiDownloaded=${downloaded}`);
@@ -1435,8 +1434,6 @@
     return false;
   }
 
-  let _lastUploadedSourceUrl = null;  // 마지막 업로드한 소스 이미지 추적
-
   async function uploadFrame(imageDataUrl, position = 'first') {
     // 설정 패널이 열려있으면 갤러리 이미지를 가리므로 닫기
     if (isSettingsPanelOpen()) {
@@ -1444,11 +1441,6 @@
       await closeSettingsPanel();
       await delay(500);
     }
-
-    // 소스 이미지 URL 추적 (HTTP URL 기준, dataUrl이면 앞부분 비교)
-    const sourceKey = imageDataUrl.startsWith('http') ? imageDataUrl : imageDataUrl.substring(0, 200);
-    const isNewSource = _lastUploadedSourceUrl !== null && _lastUploadedSourceUrl !== sourceKey;
-    const isSameRetry = !isNewSource && _lastUploadedSourceUrl !== null;
 
     // HTTP URL → dataUrl 변환 (MangoHub 이미지)
     if (imageDataUrl.startsWith('http')) {
@@ -1473,96 +1465,86 @@
     document.querySelectorAll('img[src]').forEach(img => {
       if (isGalleryImage(img)) prevGallerySrcs.add(img.src);
     });
-    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개 (src ${prevGallerySrcs.size}종), 새소스=${isNewSource}, 재시도=${isSameRetry}`);
+    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개 (src ${prevGallerySrcs.size}종)`);
 
-    // 재시도(같은 이미지) + 갤러리에 이미지 있으면 업로드 스킵
-    // 새 소스이미지면 갤러리 상태 무관하게 항상 업로드
-    const shouldUpload = isNewSource || imgCountBefore === 0;
-    if (shouldUpload) {
-      const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
-      console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
-      let uploaded = false;
-      let apiTriggered = false;  // API가 호출되었는지 (400이면 재시도 무의미)
+    // 항상 새로 업로드 (다음 영상 생성 시 기존 이미지 재사용하면 안 됨)
+    const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
+    console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
+    let uploaded = false;
+    let apiTriggered = false;
 
-      // ── 방법 1 (우선): hidden file input (확인된 방법 — 실제 uploadImage API 호출) ──
-      const fileInput = MangoDom.findFileInput();
-      if (fileInput) {
-        console.log(LOG_PREFIX, '[frame] file input으로 업로드:', fileInput.accept || 'any');
-        apiTriggered = true;  // file input은 확실히 API 호출
-        await MangoDom.attachFileToInput(fileInput, file);
-        uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
-        if (uploaded) {
-          console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
-        } else {
-          // API는 호출됐으나 갤러리 미등장 → 서버가 이미지 거부 (400 등)
-          console.error(LOG_PREFIX, '[frame] ✗ 서버가 이미지 거부 (API 호출됨, 갤러리 미등장)');
-          // 다른 방법 시도해봤자 같은 결과 → 바로 실패 반환
-          return false;
-        }
+    // ── 방법 1 (우선): hidden file input (확인된 방법 — 실제 uploadImage API 호출) ──
+    const fileInput = MangoDom.findFileInput();
+    if (fileInput) {
+      console.log(LOG_PREFIX, '[frame] file input으로 업로드:', fileInput.accept || 'any');
+      apiTriggered = true;
+      await MangoDom.attachFileToInput(fileInput, file);
+      uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
+      if (uploaded) {
+        console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
+      } else {
+        // API는 호출됐으나 갤러리 미등장 → 서버가 이미지 거부 (400 등)
+        console.error(LOG_PREFIX, '[frame] ✗ 서버가 이미지 거부 (API 호출됨, 갤러리 미등장)');
+        return false;
       }
-
-      // ── 방법 2: ClipboardEvent paste (file input 없을 때만) ──
-      if (!uploaded && !apiTriggered) {
-        console.log(LOG_PREFIX, '[frame] 방법2: ClipboardEvent paste');
-        try {
-          const textarea = findPromptTextarea();
-          const pasteTarget = textarea || document.querySelector('[contenteditable]') || document.body;
-          if (textarea) { textarea.focus(); await delay(100); }
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          pasteTarget.dispatchEvent(new ClipboardEvent('paste', {
-            bubbles: true, cancelable: true, clipboardData: dt
-          }));
-          console.log(LOG_PREFIX, '[frame] paste 이벤트 발송 → 대기...');
-          uploaded = await waitForGalleryImage(imgCountBefore, 10000, prevGallerySrcs);
-          if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공');
-        } catch (e) {
-          console.warn(LOG_PREFIX, '[frame] paste 실패:', e.message);
-        }
-      }
-
-      // ── 방법 3: drag-drop (위 방법 모두 실패 시) ──
-      if (!uploaded && !apiTriggered) {
-        console.log(LOG_PREFIX, '[frame] 방법3: drag-drop');
-        const textarea = findPromptTextarea();
-        const targets = [
-          textarea,
-          document.querySelector('[class*="drop"]'),
-          document.querySelector('main'),
-          document.body
-        ].filter(Boolean);
-        for (const target of targets) {
-          const dt = new DataTransfer();
-          dt.items.add(file);
-          for (const evtName of ['dragenter', 'dragover', 'drop']) {
-            target.dispatchEvent(new DragEvent(evtName, {
-              bubbles: true, cancelable: true, dataTransfer: dt
-            }));
-            await delay(100);
-          }
-          await delay(2000);
-          if (countGalleryImages() > imgCountBefore) {
-            uploaded = true;
-            console.log(LOG_PREFIX, `[frame] ✓ drag-drop 성공: ${target.tagName}`);
-            break;
-          }
-        }
-      }
-
-      if (!uploaded) {
-        console.error(LOG_PREFIX, '[frame] ✗ 이미지 업로드 실패');
-      }
-      await delay(1000);
-    } else {
-      console.log(LOG_PREFIX, '[frame] 갤러리에 이미지 존재 → 업로드 스킵, 프롬프트에 추가만 수행');
     }
 
-    // 업로드 성공 또는 기존 이미지 사용 → 소스 추적 업데이트
-    _lastUploadedSourceUrl = sourceKey;
+    // ── 방법 2: ClipboardEvent paste (file input 없을 때만) ──
+    if (!uploaded && !apiTriggered) {
+      console.log(LOG_PREFIX, '[frame] 방법2: ClipboardEvent paste');
+      try {
+        const textarea = findPromptTextarea();
+        const pasteTarget = textarea || document.querySelector('[contenteditable]') || document.body;
+        if (textarea) { textarea.focus(); await delay(100); }
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        pasteTarget.dispatchEvent(new ClipboardEvent('paste', {
+          bubbles: true, cancelable: true, clipboardData: dt
+        }));
+        console.log(LOG_PREFIX, '[frame] paste 이벤트 발송 → 대기...');
+        uploaded = await waitForGalleryImage(imgCountBefore, 10000, prevGallerySrcs);
+        if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공');
+      } catch (e) {
+        console.warn(LOG_PREFIX, '[frame] paste 실패:', e.message);
+      }
+    }
+
+    // ── 방법 3: drag-drop (위 방법 모두 실패 시) ──
+    if (!uploaded && !apiTriggered) {
+      console.log(LOG_PREFIX, '[frame] 방법3: drag-drop');
+      const textarea = findPromptTextarea();
+      const targets = [
+        textarea,
+        document.querySelector('[class*="drop"]'),
+        document.querySelector('main'),
+        document.body
+      ].filter(Boolean);
+      for (const target of targets) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        for (const evtName of ['dragenter', 'dragover', 'drop']) {
+          target.dispatchEvent(new DragEvent(evtName, {
+            bubbles: true, cancelable: true, dataTransfer: dt
+          }));
+          await delay(100);
+        }
+        await delay(2000);
+        if (countGalleryImages() > imgCountBefore) {
+          uploaded = true;
+          console.log(LOG_PREFIX, `[frame] ✓ drag-drop 성공: ${target.tagName}`);
+          break;
+        }
+      }
+    }
+
+    if (!uploaded) {
+      console.error(LOG_PREFIX, '[frame] ✗ 이미지 업로드 실패');
+    }
+    await delay(1000);
 
     // 업로드 후 새로 추가된 이미지 찾기 (스냅샷 비교)
     let newlyUploadedImg = null;
-    if (shouldUpload) {
+    if (uploaded) {
       document.querySelectorAll('img[src]').forEach(img => {
         if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) {
           newlyUploadedImg = img;
@@ -2467,10 +2449,25 @@
   }
 
   // ─── Error Detection ───
-  // strict=true: 스피너 활성 시 호출 — 확실히 새 텍스트만 반환 (개수 비교 비활성)
-  // strict=false: 스피너 없을 때 — 개수 비교도 사용 (이전 에러와 동일 텍스트라도 감지)
+  // strict=true: 스피너 활성 시 호출 — 확실히 새로운 에러만 감지 (컨테이너 오탐 방지)
+  // strict=false: 스피너 없을 때 — 개수 비교도 사용
   function checkForErrors(strict = false) {
-    // 1차: 시맨틱 셀렉터 (alert, error class 등) — 항상 작동
+    // 스냅샷 텍스트가 현재 텍스트의 부분인지 체크 (컨테이너 요소가
+    // 프롬프트+이전에러를 합쳐서 새 텍스트처럼 보이는 오탐 방지)
+    function isKnownErrorText(text) {
+      if (_errorSnapshotTexts.has(text)) return true;
+      // 스냅샷 텍스트 중 하나라도 현재 텍스트에 포함되면 이전 에러의 일부
+      for (const snapshotText of _errorSnapshotTexts) {
+        if (text.includes(snapshotText)) return true;
+      }
+      return false;
+    }
+
+    // strict 모드: 리프 노드만 검사 (children.length === 0)
+    // 컨테이너 요소는 프롬프트+에러+UI텍스트가 합쳐져서 오탐 발생
+    const maxChildren = strict ? 0 : 5;
+
+    // 1차: 시맨틱 셀렉터 (alert, error class 등)
     const alerts = document.querySelectorAll(
       '[role="alert"], [class*="error"], [class*="warning"], ' +
       '.snackbar, [class*="snack"], mat-snack-bar, [class*="toast"]'
@@ -2479,20 +2476,19 @@
       const text = el.textContent.trim();
       const lower = text.toLowerCase();
       if (text.length > 0 && text.length < 300) {
-        // strict 모드에서도 시맨틱 셀렉터는 스냅샷 체크
-        if (strict && _errorSnapshotTexts.has(text)) continue;
+        if (strict && isKnownErrorText(text)) continue;
         for (const phrase of ERROR_PHRASES) {
           if (lower.includes(phrase.toLowerCase())) return text;
         }
       }
     }
 
-    // 2차: 에러 텍스트가 포함된 일반 DOM 영역 탐색
+    // 2차: STRONG_ERROR_PATTERNS이 포함된 일반 DOM 영역 탐색
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     let currentErrorCount = 0;
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
-      if (el.children.length > 5) continue;
+      if (el.children.length > maxChildren) continue;
       const text = el.textContent?.trim() || '';
       if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
@@ -2504,13 +2500,15 @@
       if (!isError) continue;
 
       currentErrorCount++;
-      // 스냅샷에 없는 새 텍스트면 바로 반환 (strict/non-strict 모두)
-      if (!_errorSnapshotTexts.has(text)) {
+      // 스냅샷 체크: 정확 일치 + 부분 포함 모두 검사
+      if (!isKnownErrorText(text)) {
+        // strict 모드: 텍스트가 100자 이상이면 대형 컨테이너 → 무시
+        if (strict && text.length > 100) continue;
         return text;
       }
     }
 
-    // 개수 비교: strict 모드에서는 비활성 (스피너 활성 시 이전 에러 DOM 변동으로 오탐 방지)
+    // 개수 비교: strict 모드에서는 비활성
     if (!strict && currentErrorCount > _errorSnapshotCount) {
       let shortest = null;
       for (const t of _errorSnapshotTexts) {

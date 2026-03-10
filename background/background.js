@@ -1413,7 +1413,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       }
 
       // MangoHub 업로드 시 받은 blob을 프로젝트 폴더에 저장 (URL 재다운로드 대신 blob 재사용)
-      if (_uploadBlob && uiDownloaded) {
+      if (_uploadBlob) {
         try {
           const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
           const blobUrl = URL.createObjectURL(_uploadBlob);
@@ -1426,9 +1426,35 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           broadcastLog(`프로젝트 폴더 저장 (blob, concurrent): ${filename}`, 'info');
         } catch (dlErr) {
           broadcastLog(`프로젝트 폴더 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
+          // blob URL 실패 시 원본 URL로 재시도
+          try {
+            const fallbackSaveUrl = mediaUrl || fallbackUrl;
+            if (fallbackSaveUrl && !fallbackSaveUrl.startsWith('blob:')) {
+              const dlFilename2 = getDownloadPath(filename, !!item._isThumbnail);
+              await chrome.downloads.download({
+                url: fallbackSaveUrl,
+                filename: dlFilename2,
+                saveAs: false
+              });
+              broadcastLog(`프로젝트 폴더 저장 (URL 폴백, concurrent): ${filename}`, 'info');
+            }
+          } catch (dlErr2) {
+            broadcastLog(`프로젝트 폴더 저장 최종 실패 (concurrent): ${dlErr2.message}`, 'warn');
+          }
         }
-      } else if (uiDownloaded) {
-        broadcastLog('UI 다운로드 완료 상태 — 로컬 재다운로드 건너뛰기 (concurrent)', 'info');
+      } else if (mediaUrl && !mediaUrl.startsWith('blob:')) {
+        // blob 없지만 URL은 있는 경우
+        try {
+          const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+          await chrome.downloads.download({
+            url: mediaUrl,
+            filename: dlFilename,
+            saveAs: false
+          });
+          broadcastLog(`프로젝트 폴더 저장 (URL, concurrent): ${filename}`, 'info');
+        } catch (dlErr) {
+          broadcastLog(`프로젝트 폴더 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
+        }
       } else {
         try {
           const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
