@@ -1741,16 +1741,16 @@
         break;
       }
 
-      // 2순위: 아이콘 버튼 5개 이상인 그룹 (Grok 액션 버튼 그룹) — 비디오 컨트롤 제외
+      // 2순위: 비디오 컨트롤 제외한 아이콘 버튼 그룹
       const nonControlBtns = iconBtns.filter(b => !isVideoControlBtn(b));
-      if (nonControlBtns.length >= 5) {
+      if (nonControlBtns.length >= 3) {
         // 비디오 컨트롤 아닌 버튼 중 마지막이 "..."일 가능성 높음
         moreBtn = nonControlBtns[nonControlBtns.length - 1];
         const btnTexts = nonControlBtns.map(b => {
           const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
           return `"${label}"`;
         }).join(', ');
-        console.log(LOG_PREFIX, `Grok 버튼 그룹 발견 (depth=${depth}, 버튼 ${nonControlBtns.length}개): [${btnTexts}]`);
+        console.log(LOG_PREFIX, `Grok 버튼 그룹 발견 (depth=${depth}, 비디오컨트롤제외 ${nonControlBtns.length}개): [${btnTexts}]`);
         console.log(LOG_PREFIX, `"..." 버튼 후보(마지막): "${(moreBtn.textContent || '').trim().substring(0, 20)}"`);
         break;
       }
