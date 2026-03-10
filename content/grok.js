@@ -1775,41 +1775,41 @@
       return false;
     }
 
+    // 1차: 전체 depth에서 isThreeDotsBtn 우선 검색 (가장 정확)
     let container = video.parentElement;
     for (let depth = 0; depth < 15 && container; depth++) {
       const btns = Array.from(container.querySelectorAll('button'));
-      const iconBtns = btns.filter(b => {
-        const t = (b.textContent || '').trim();
-        return t.length <= 20 && !b.querySelector('textarea, input');
-      });
-
-      // 1순위: "..." 패턴에 정확히 맞는 버튼 (비디오 컨트롤 제외)
-      const dotBtn = iconBtns.find(b => isThreeDotsBtn(b) && !isVideoControlBtn(b));
+      const dotBtn = btns.find(b => isThreeDotsBtn(b));
       if (dotBtn) {
         moreBtn = dotBtn;
-        const btnTexts = iconBtns.map(b => {
-          const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
-          return `"${label}"`;
-        }).join(', ');
-        console.log(LOG_PREFIX, `"..." 버튼 발견 (depth=${depth}): [${btnTexts}]`);
-        console.log(LOG_PREFIX, `"..." 버튼: aria-label="${moreBtn.getAttribute('aria-label') || 'N/A'}"`);
-        break;
-      }
-
-      // 2순위: 비디오 컨트롤 제외한 아이콘 버튼 그룹
-      const nonControlBtns = iconBtns.filter(b => !isVideoControlBtn(b));
-      if (nonControlBtns.length >= 3) {
-        // 비디오 컨트롤 아닌 버튼 중 마지막이 "..."일 가능성 높음
-        moreBtn = nonControlBtns[nonControlBtns.length - 1];
-        const btnTexts = nonControlBtns.map(b => {
-          const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
-          return `"${label}"`;
-        }).join(', ');
-        console.log(LOG_PREFIX, `Grok 버튼 그룹 발견 (depth=${depth}, 비디오컨트롤제외 ${nonControlBtns.length}개): [${btnTexts}]`);
-        console.log(LOG_PREFIX, `"..." 버튼 후보(마지막): "${(moreBtn.textContent || '').trim().substring(0, 20)}"`);
+        console.log(LOG_PREFIX, `"..." 버튼 발견 (depth=${depth}): aria-label="${moreBtn.getAttribute('aria-label') || 'N/A'}"`);
         break;
       }
       container = container.parentElement;
+    }
+
+    // 2차 폴백: 1차에서 못 찾으면, 전체 depth에서 비디오 컨트롤 제외 마지막 버튼
+    if (!moreBtn) {
+      console.log(LOG_PREFIX, 'isThreeDotsBtn 매칭 실패 — 폴백 검색...');
+      container = video.parentElement;
+      for (let depth = 0; depth < 15 && container; depth++) {
+        const btns = Array.from(container.querySelectorAll('button'));
+        const iconBtns = btns.filter(b => {
+          const t = (b.textContent || '').trim();
+          return t.length <= 20 && !b.querySelector('textarea, input');
+        });
+        const nonControlBtns = iconBtns.filter(b => !isVideoControlBtn(b));
+        if (nonControlBtns.length >= 5) {
+          moreBtn = nonControlBtns[nonControlBtns.length - 1];
+          const btnTexts = nonControlBtns.map(b => {
+            const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
+            return `"${label}"`;
+          }).join(', ');
+          console.log(LOG_PREFIX, `폴백: 버튼 그룹 발견 (depth=${depth}, ${nonControlBtns.length}개): [${btnTexts}]`);
+          break;
+        }
+        container = container.parentElement;
+      }
     }
 
     // 못 찾으면 디버그
