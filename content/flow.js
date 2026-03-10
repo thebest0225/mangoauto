@@ -1955,6 +1955,7 @@
 
   // 이전 에러 텍스트 스냅샷 (새 에러만 감지하기 위해)
   let _errorSnapshotTexts = new Set();
+  let _errorSnapshotCount = 0; // 스냅샷 시점의 에러 요소 개수
 
   // 화면에 남아있는 에러/경고 DOM 요소 강제 제거 + 스냅샷
   function dismissVisibleErrors() {
@@ -1978,22 +1979,23 @@
 
     // 현재 보이는 에러 텍스트를 스냅샷 (제거 안 되는 것도 기록하여 이후 무시)
     _errorSnapshotTexts.clear();
+    _errorSnapshotCount = 0;
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
-      if (el.children.length > 5) continue; // checkForErrors와 동일 기준
+      if (el.children.length > 5) continue;
       const text = el.textContent?.trim() || '';
       if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
-      // 모든 STRONG_ERROR_PATTERNS으로 스냅샷 (검열, 실패 등 모두 포함)
       for (const pattern of STRONG_ERROR_PATTERNS) {
         if (lower.includes(pattern)) {
           _errorSnapshotTexts.add(text);
-          console.log(LOG_PREFIX, `Snapshot existing error: "${text.substring(0, 80)}"`);
+          _errorSnapshotCount++;
           break;
         }
       }
     }
+    console.log(LOG_PREFIX, `에러 스냅샷: ${_errorSnapshotCount}개 요소, ${_errorSnapshotTexts.size}개 텍스트`);
   }
 
   async function waitForGenerationComplete(timeoutMin) {
@@ -2480,25 +2482,39 @@
     }
 
     // 2차: 에러 텍스트가 포함된 일반 DOM 영역 탐색 (Flow 비디오 생성 실패/검열 패턴)
-    // Flow는 비디오 영역에 "Failed\nAudio generation failed..." 또는
-    // "This prompt might violate our policies..." 같은 텍스트를 직접 표시 (role="alert" 없이)
+    // Flow는 비디오 영역에 직접 에러 텍스트를 표시 (role="alert" 없이)
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
+    let currentErrorCount = 0;
+    let firstNewErrorText = null;
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
-      if (el.children.length > 5) continue; // 큰 컨테이너 제외
+      if (el.children.length > 5) continue;
       const text = el.textContent?.trim() || '';
       if (text.length < 3 || text.length > 500) continue;
       const lower = text.toLowerCase();
 
-      // 이전 생성의 에러 텍스트인지 확인 (스냅샷에 있으면 무시)
-      if (_errorSnapshotTexts.has(text)) continue;
-
-      // STRONG_ERROR_PATTERNS 매칭 (false positive 낮은 패턴만)
+      // STRONG_ERROR_PATTERNS 매칭
+      let isError = false;
       for (const pattern of STRONG_ERROR_PATTERNS) {
-        if (lower.includes(pattern)) {
-          return text;
-        }
+        if (lower.includes(pattern)) { isError = true; break; }
       }
+      if (!isError) continue;
+
+      currentErrorCount++;
+      // 스냅샷에 없는 새 텍스트면 바로 반환 (확실히 새 에러)
+      if (!_errorSnapshotTexts.has(text)) {
+        return text;
+      }
+    }
+
+    // 텍스트는 동일해도 에러 요소 개수가 증가했으면 새 에러 발생
+    if (currentErrorCount > _errorSnapshotCount) {
+      // 가장 짧은 에러 텍스트 반환 (핵심 메시지)
+      let shortest = null;
+      for (const t of _errorSnapshotTexts) {
+        if (!shortest || t.length < shortest.length) shortest = t;
+      }
+      return shortest || '정책 위반 감지 (에러 요소 증가)';
     }
 
     return null;
