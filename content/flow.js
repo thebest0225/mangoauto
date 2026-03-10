@@ -1484,7 +1484,7 @@
         console.log(LOG_PREFIX, '[frame] file input으로 업로드:', fileInput.accept || 'any');
         apiTriggered = true;  // file input은 확실히 API 호출
         await MangoDom.attachFileToInput(fileInput, file);
-        uploaded = await waitForGalleryImage(imgCountBefore, 12000, prevGallerySrcs);
+        uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
         if (uploaded) {
           console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
         } else {
