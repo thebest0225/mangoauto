@@ -505,8 +505,8 @@
     } else {
       // Fallback: find by text
       const tabAliases = {
-        'Videos': ['Videos', '동영상'],
-        'Images': ['Images', '이미지']
+        'Videos': ['Videos', '동영상', 'Video', 'video'],
+        'Images': ['Images', '이미지', 'Image', 'Hình', 'image']
       };
       const names = tabAliases[tabName] || [tabName];
       const buttons = document.querySelectorAll('button[role="radio"]');
@@ -2831,10 +2831,11 @@
       } else {
         console.log(LOG_PREFIX, `[img-download] ${quality} 선택`);
         qualityBtn.click();
-        // 2K/4K는 업스케일 후 다운로드이므로 충분히 대기
+        // 2K/4K는 업스케일 후 다운로드이므로 충분히 대기 (4K는 더 오래 걸림)
         if (quality !== '1k') {
-          console.log(LOG_PREFIX, `[img-download] 업스케일 대기 중... (${quality})`);
-          await waitForUpscaleComplete(60000);
+          const upscaleTimeout = quality === '4k' ? 120000 : 60000;
+          console.log(LOG_PREFIX, `[img-download] 업스케일 대기 중... (${quality}, 최대 ${upscaleTimeout/1000}초)`);
+          await waitForUpscaleComplete(upscaleTimeout);
         } else {
           await delay(1000);
         }
@@ -2873,18 +2874,31 @@
   }
 
   /**
-   * 업스케일 완료 대기: "Upscaling" 토스트가 사라지고 다운로드 완료될 때까지 대기
+   * 업스케일 완료 대기: blob 캡처 완료 or 토스트 메시지 감지
+   * - blob 캡처가 가장 확실한 완료 시그널 (언어 무관)
+   * - 토스트 텍스트는 보조 시그널 (다국어 대응)
    */
   async function waitForUpscaleComplete(timeoutMs = 60000) {
     const start = Date.now();
     let sawUpscaling = false;
 
     while (Date.now() - start < timeoutMs) {
-      // 페이지의 모든 텍스트에서 업스케일 관련 메시지 감지
+      // 1순위: inject.js blob 캡처 완료 확인 (언어 무관, 가장 확실)
+      if (lastUpscaledDataUrl) {
+        console.log(LOG_PREFIX, '[img-download] blob 캡처 완료 감지 → 업스케일 성공');
+        await delay(1000); // 안정화 대기
+        return true;
+      }
+
+      // 2순위: 페이지 텍스트로 업스케일 상태 감지 (다국어)
       const allText = document.body.innerText || '';
-      const isUpscaling = allText.includes('Upscaling') || allText.includes('업스케일');
-      const isComplete = allText.includes('downloaded') || allText.includes('다운로드되었습니다') ||
-                         allText.includes('다운로드됐습니다') || allText.includes('완료되었으며');
+      const isUpscaling = allText.includes('Upscaling') || allText.includes('업스케일')
+        || allText.includes('nâng cấp') || allText.includes('อัปสเกล')
+        || allText.includes('upscaling');
+      const isComplete = allText.includes('downloaded') || allText.includes('다운로드되었습니다')
+        || allText.includes('다운로드됐습니다') || allText.includes('완료되었으며')
+        || allText.includes('đã được tải xuống') || allText.includes('đã hoàn tất')
+        || allText.includes('ดาวน์โหลดแล้ว');
 
       if (isUpscaling) {
         if (!sawUpscaling) {
