@@ -241,8 +241,8 @@
         <div class="setting-row">
           <label>비디오 해상도</label>
           <select id="grokVideoResolution" class="select-sm">
-            <option value="480p">480p (업스케일 추천)</option>
-            <option value="720p" selected>720p</option>
+            <option value="480p" selected>480p (업스케일 추천)</option>
+            <option value="720p">720p</option>
             <option value="1080p">1080p</option>
           </select>
         </div>
@@ -306,8 +306,8 @@
         <div class="setting-row">
           <label>이미지 모델</label>
           <select id="flowImageModel" class="select-sm">
-            <option value="nano-banana-pro" selected>Nano Banana Pro</option>
-            <option value="nano-banana-2">Nano Banana 2</option>
+            <option value="nano-banana-pro">Nano Banana Pro</option>
+            <option value="nano-banana-2" selected>Nano Banana 2</option>
             <option value="nano-banana">Nano Banana</option>
             <option value="imagen4">Imagen 4</option>
           </select>
@@ -371,16 +371,16 @@
         <div class="setting-row">
           <label>비디오 다운로드 품질</label>
           <select id="downloadVideoQuality" class="select-sm">
-            <option value="720p" selected>720p (원본)</option>
-            <option value="1080p">1080p (업스케일)</option>
+            <option value="720p">720p (원본)</option>
+            <option value="1080p" selected>1080p (업스케일)</option>
           </select>
         </div>
         <div class="setting-hint">Flow 비디오: 1080p 선택 시 다운로드 전 업스케일 적용</div>
         <div class="setting-row">
           <label>이미지 다운로드 품질</label>
           <select id="downloadImageQuality" class="select-sm">
-            <option value="1k" selected>1k</option>
-            <option value="2k">2k</option>
+            <option value="1k">1k</option>
+            <option value="2k" selected>2k</option>
             <option value="4k">4k</option>
           </select>
         </div>
@@ -426,7 +426,7 @@
         </div>
         <div class="setting-row">
           <label>최대 재시도 횟수</label>
-          <input type="number" id="maxRetries" class="input-sm" value="3" min="1" max="20">
+          <input type="number" id="maxRetries" class="input-sm" value="2" min="1" max="20">
         </div>
         <div class="setting-row">
           <label>기본 모드</label>
@@ -445,7 +445,7 @@
         <div class="setting-hint">생성 실패(검열) 시 LLM으로 프롬프트를 수정하여 재시도합니다</div>
         <div class="setting-row">
           <label class="check-label">
-            <input type="checkbox" id="llmRewriteEnabled">
+            <input type="checkbox" id="llmRewriteEnabled" checked>
             검열 실패 시 LLM 프롬프트 수정 사용
           </label>
         </div>

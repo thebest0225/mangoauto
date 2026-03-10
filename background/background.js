@@ -386,7 +386,7 @@ async function startAutomation(config) {
   broadcastLog(`동시처리: ${concurrentCount}개, 전송간격: ${promptDelay/1000}초`, 'info');
 
   // Max retries
-  sm.maxRetries = settings?.general?.maxRetries || 3;
+  sm.maxRetries = settings?.general?.maxRetries || 2;
   sm._defaultMaxRetries = sm.maxRetries;  // next()에서 원복용
 
   // Determine media type from mode
