@@ -1043,8 +1043,8 @@
       return false;
     }
 
-    // Wait for submit button to be enabled
-    const btn = await waitForSubmitEnabled(5000);
+    // Wait for submit button to be enabled (이미지 업로드 중 disabled일 수 있으므로 15초 대기)
+    const btn = await waitForSubmitEnabled(15000);
     if (!btn) {
       // 디버그: 전송 버튼 못 찾은 이유 파악
       console.error(LOG_PREFIX, '전송 버튼 못 찾음! 에디터 근처 버튼 목록:');
