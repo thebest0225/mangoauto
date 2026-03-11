@@ -1941,6 +1941,7 @@
 
   // 화면에 남아있는 에러/경고 DOM 요소 강제 제거 + 스냅샷
   function dismissVisibleErrors() {
+    // 1단계: 제거 가능한 에러 DOM 제거
     const selectors = [
       '[role="alert"]', '[class*="snackbar"]', '[class*="snack"]',
       'mat-snack-bar', '[class*="toast"]',
@@ -1959,15 +1960,15 @@
       });
     }
 
-    // 현재 보이는 에러 텍스트를 스냅샷 (제거 안 되는 것도 기록하여 이후 무시)
+    // 2단계: 남아있는 에러 텍스트를 스냅샷 (이후 checkForErrors에서 무시)
+    // children 제한 없이 넓게 수집 (갤러리 카드 안 에러 포함)
     _errorSnapshotTexts.clear();
     _errorSnapshotCount = 0;
     const candidates = document.querySelectorAll('div, span, p, h1, h2, h3');
     for (const el of candidates) {
       if (el.offsetParent === null) continue;
-      if (el.children.length > 5) continue;
       const text = el.textContent?.trim() || '';
-      if (text.length < 3 || text.length > 500) continue;
+      if (text.length < 3 || text.length > 1000) continue;
       const lower = text.toLowerCase();
       for (const pattern of STRONG_ERROR_PATTERNS) {
         if (lower.includes(pattern)) {
@@ -1977,6 +1978,25 @@
         }
       }
     }
+
+    // 3단계: 매칭된 패턴 자체도 스냅샷에 저장 (부모 요소 텍스트가 바뀌어도 패턴 매칭 가능)
+    // 예: "이 생성은 Google 정책을 위반할 수 있습니다" → "정책을 위반" 패턴도 저장
+    for (const text of [..._errorSnapshotTexts]) {
+      const lower = text.toLowerCase();
+      for (const pattern of STRONG_ERROR_PATTERNS) {
+        if (lower.includes(pattern)) {
+          // 패턴을 포함하는 짧은 문장 추출 (±30자)
+          const idx = lower.indexOf(pattern);
+          const start = Math.max(0, idx - 30);
+          const end = Math.min(text.length, idx + pattern.length + 30);
+          const excerpt = text.substring(start, end).trim();
+          if (excerpt.length > 5 && excerpt !== text) {
+            _errorSnapshotTexts.add(excerpt);
+          }
+        }
+      }
+    }
+
     console.log(LOG_PREFIX, `에러 스냅샷: ${_errorSnapshotCount}개 요소, ${_errorSnapshotTexts.size}개 텍스트`);
   }
 
@@ -2456,9 +2476,9 @@
     // 프롬프트+이전에러를 합쳐서 새 텍스트처럼 보이는 오탐 방지)
     function isKnownErrorText(text) {
       if (_errorSnapshotTexts.has(text)) return true;
-      // 스냅샷 텍스트 중 하나라도 현재 텍스트에 포함되면 이전 에러의 일부
       for (const snapshotText of _errorSnapshotTexts) {
-        if (text.includes(snapshotText)) return true;
+        // 양방향 부분 매칭: 스냅샷이 현재 텍스트에 포함 OR 현재 텍스트가 스냅샷에 포함
+        if (text.includes(snapshotText) || snapshotText.includes(text)) return true;
       }
       return false;
     }
@@ -2476,7 +2496,8 @@
       const text = el.textContent.trim();
       const lower = text.toLowerCase();
       if (text.length > 0 && text.length < 300) {
-        if (strict && isKnownErrorText(text)) continue;
+        // 항상 스냅샷 체크 (이전 에러가 DOM에 남아있는 경우 무시)
+        if (isKnownErrorText(text)) continue;
         for (const phrase of ERROR_PHRASES) {
           if (lower.includes(phrase.toLowerCase())) return text;
         }

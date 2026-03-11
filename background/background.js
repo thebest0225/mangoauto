@@ -701,7 +701,22 @@ async function runSequentialLoop(loopId) {
       broadcastState(getExtendedSnapshot());
       if (sm.state === AutoState.ERROR) {
         broadcastLog(`에러 (재시도 ${sm.retryCount}/${sm.maxRetries}): ${resp.error}`, 'error');
-        await MangoUtils.sleep(3000);
+
+        // 검열/정책위반 에러 → 탭 새로고침 (이전 에러 DOM 제거, 오탐 방지)
+        const isCensorRetry = !isImageRejected && !isAudioFailed && !isSomethingWrong &&
+          (resp.errorCode === 'CENSORSHIP' || isCensorshipError(resp.error, resp.errorCode));
+        if (isCensorRetry && activeTabIds[0]) {
+          broadcastLog('검열 에러 재시도 → 탭 새로고침 (이전 에러 DOM 정리)', 'info');
+          try {
+            await chrome.tabs.reload(activeTabIds[0]);
+            await MangoUtils.sleep(5000); // 페이지 로드 대기
+          } catch (e) {
+            broadcastLog(`탭 새로고침 실패: ${e.message}`, 'warn');
+          }
+        } else {
+          await MangoUtils.sleep(3000);
+        }
+
         sm.transition(AutoState.PREPARING);
         continue;
       }
@@ -741,6 +756,15 @@ async function runSequentialLoop(loopId) {
           sm.retryCount = 0;
           sm.maxRetries = 1;
           broadcastLog(`LLM 수정본 #${llmAttemptsSoFar + 1}: "${rewritten.substring(0, 60)}..."`, 'info');
+
+          // 탭 새로고침 (이전 에러 DOM 정리)
+          if (activeTabIds[0]) {
+            try {
+              await chrome.tabs.reload(activeTabIds[0]);
+              await MangoUtils.sleep(5000);
+            } catch (e) { /* ignore */ }
+          }
+
           sm.transition(AutoState.PREPARING);
           continue;
         }
@@ -752,6 +776,15 @@ async function runSequentialLoop(loopId) {
       }
 
       broadcastLog(`최종 실패: ${resp.error}`, 'error');
+
+      // 최종 실패 후 다음 항목으로 넘어가기 전 탭 새로고침 (이전 에러 DOM 정리)
+      if (activeTabIds[0]) {
+        try {
+          await chrome.tabs.reload(activeTabIds[0]);
+          await MangoUtils.sleep(5000);
+        } catch (e) { /* ignore */ }
+      }
+
       await handleCooldownAndNext();
       continue;
     }
