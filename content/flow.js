@@ -2892,21 +2892,28 @@
     }
     console.log(LOG_PREFIX, `[img-download] "Download" 발견: "${downloadItem.textContent?.trim()?.substring(0, 30)}"`);
 
-    // Download 아이템에 호버 → 서브메뉴 열기
+    // Download 아이템에 호버 → 서브메뉴 열기 (오른쪽 끝 → 중앙 순으로 시도)
     const diRect = downloadItem.getBoundingClientRect();
-    const diX = diRect.left + diRect.width / 2;
     const diY = diRect.top + diRect.height / 2;
+    // 1차: 오른쪽 가장자리 호버 (서브메뉴 화살표 영역)
+    const rightX = diRect.right - 5;
+    const rightOpts = { bubbles: true, cancelable: true, clientX: rightX, clientY: diY };
+    downloadItem.dispatchEvent(new PointerEvent('pointerenter', { ...rightOpts, pointerId: 1, pointerType: 'mouse' }));
+    downloadItem.dispatchEvent(new PointerEvent('pointermove', { ...rightOpts, pointerId: 1, pointerType: 'mouse' }));
+    downloadItem.dispatchEvent(new MouseEvent('mouseenter', rightOpts));
+    downloadItem.dispatchEvent(new MouseEvent('mouseover', rightOpts));
+    downloadItem.dispatchEvent(new MouseEvent('mousemove', rightOpts));
+    await delay(500);
+    // 2차: 중앙 호버
+    const diX = diRect.left + diRect.width / 2;
     const diOpts = { bubbles: true, cancelable: true, clientX: diX, clientY: diY };
-    downloadItem.dispatchEvent(new PointerEvent('pointerenter', { ...diOpts, pointerId: 1, pointerType: 'mouse' }));
     downloadItem.dispatchEvent(new PointerEvent('pointermove', { ...diOpts, pointerId: 1, pointerType: 'mouse' }));
-    downloadItem.dispatchEvent(new MouseEvent('mouseenter', diOpts));
-    downloadItem.dispatchEvent(new MouseEvent('mouseover', diOpts));
     downloadItem.dispatchEvent(new MouseEvent('mousemove', diOpts));
     await delay(800);
 
-    // 품질 매핑: '1k' → ['1K', '1k', 'Original'], '2k' → ['2K', '2k'], '4k' → ['4K', '4k']
+    // 품질 매핑 (한국어/영문 모두 대응)
     const qualityMap = {
-      '1k': ['1K', '1k', 'Original', 'original'],
+      '1k': ['1K', '1k', 'Original', 'original', '원본'],
       '2k': ['2K', '2k'],
       '4k': ['4K', '4k']
     };
@@ -2962,7 +2969,7 @@
             const fbUpgrade = checkHasUpgrade(fbBtn);
             if (!fbUpgrade) {
               console.log(LOG_PREFIX, `[img-download] 폴백 ${fb} 선택`);
-              fbBtn.click();
+              await robustClick(fbBtn);
               await delay(1000);
               return fb; // 실제 선택된 품질 반환
             }
@@ -2970,7 +2977,7 @@
         }
       } else {
         console.log(LOG_PREFIX, `[img-download] ${quality} 선택`);
-        qualityBtn.click();
+        await robustClick(qualityBtn);
         // 2K/4K는 업스케일 후 다운로드이므로 충분히 대기 (4K는 더 오래 걸림)
         if (quality !== '1k') {
           const upscaleTimeout = quality === '4k' ? 120000 : 60000;
@@ -2984,10 +2991,10 @@
     }
 
     // 원하는 품질 못 찾으면 아무 품질이나 선택
-    const any1k = findMenuItemByText(['1K', '1k', 'Original', 'original']);
+    const any1k = findMenuItemByText(['1K', '1k', 'Original', 'original', '원본']);
     if (any1k) {
       console.log(LOG_PREFIX, `[img-download] 대체: 1K 선택`);
-      any1k.click();
+      await robustClick(any1k);
       await delay(1000);
       return '1k';
     }
@@ -3001,7 +3008,7 @@
     qualityBtn = findMenuItemByText(targetTexts);
     if (qualityBtn) {
       if (!checkHasUpgrade(qualityBtn)) {
-        qualityBtn.click();
+        await robustClick(qualityBtn);
         await delay(1000);
         return quality;
       }
@@ -3115,6 +3122,27 @@
       }
     });
     return results;
+  }
+
+  // 메뉴 아이템 등 Angular/Material 요소에 대한 강화 클릭
+  // 단순 .click()이 안 먹히는 경우 pointer+mouse 이벤트 시퀀스 사용
+  async function robustClick(el) {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 };
+    const pOpts = { ...opts, pointerId: 1, pointerType: 'mouse' };
+
+    el.dispatchEvent(new PointerEvent('pointerenter', pOpts));
+    el.dispatchEvent(new MouseEvent('mouseenter', opts));
+    el.dispatchEvent(new PointerEvent('pointerdown', pOpts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    await delay(50);
+    el.dispatchEvent(new PointerEvent('pointerup', pOpts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+    // 최종 폴백: 네이티브 .click()
+    el.click();
   }
 
   function findMenuItemByText(texts) {
