@@ -337,13 +337,21 @@
           // inject.js blob 캡처 활성화 (2K 업스케일 다운로드 캡처용)
           window.postMessage({ type: 'ENABLE_BLOB_CAPTURE', enabled: true }, '*');
 
+          let fellBackTo1k = false;
           for (let attempt = 1; attempt <= maxUpscaleAttempts; attempt++) {
             lastUpscaledDataUrl = null; // 이전 캡처 초기화
             lastUpscaledSize = 0;
             console.log(LOG_PREFIX, `${imageQuality} UI 다운로드 시도 (${attempt}/${maxUpscaleAttempts})...`);
-            const downloaded = await downloadImageViaMenu(imageQuality);
+            const actualQuality = await downloadImageViaMenu(imageQuality);
 
-            if (downloaded) {
+            if (actualQuality) {
+              // 1K 폴백된 경우 blob 캡처 불필요 → 바로 원본 다운로드로
+              if (actualQuality === '1k') {
+                console.log(LOG_PREFIX, `[img-download] ${imageQuality} → 1K 폴백됨 (Upgrade 필요), blob 캡처 스킵`);
+                fellBackTo1k = true;
+                break;
+              }
+
               // inject.js의 FileReader가 비동기이므로 dataUrl 수신 대기 (최대 15초)
               if (!lastUpscaledDataUrl) {
                 console.log(LOG_PREFIX, '업스케일 blob dataUrl 대기 중...');
@@ -2927,10 +2935,22 @@
     const subItems = getVisibleMenuItems();
     console.log(LOG_PREFIX, `[img-download] 서브메뉴: ${subItems.join(', ')}`);
 
+    // 반환값: 실제 선택된 품질 문자열 ('1k'/'2k'/'4k') 또는 false
+    // 업그레이드 버튼 감지 함수: 텍스트에 upgrade/업그레이드 포함된 button만 검사
+    function checkHasUpgrade(el) {
+      const elText = (el.textContent || '').toLowerCase();
+      if (/upgrade|업그레이드/.test(elText)) return true;
+      // 자식 button 중 upgrade 텍스트가 있는 것만
+      const btns = el.querySelectorAll('button');
+      for (const btn of btns) {
+        if (/upgrade|업그레이드/i.test(btn.textContent || '')) return true;
+      }
+      return false;
+    }
+
     if (qualityBtn) {
       // Upgrade 버튼 있으면 해당 품질 사용 불가 → 한 단계 낮은 품질로 폴백
-      const hasUpgrade = qualityBtn.querySelector('button') ||
-        /upgrade|업그레이드/i.test(qualityBtn.textContent || '');
+      const hasUpgrade = checkHasUpgrade(qualityBtn);
       if (hasUpgrade) {
         console.log(LOG_PREFIX, `[img-download] ${quality}에 Upgrade 버튼 → 폴백`);
         // 4k → 2k → 1k 순으로 폴백
@@ -2939,12 +2959,12 @@
           const fbTexts = qualityMap[fb];
           const fbBtn = findMenuItemByText(fbTexts);
           if (fbBtn) {
-            const fbUpgrade = fbBtn.querySelector('button') || /upgrade|업그레이드/i.test(fbBtn.textContent || '');
+            const fbUpgrade = checkHasUpgrade(fbBtn);
             if (!fbUpgrade) {
               console.log(LOG_PREFIX, `[img-download] 폴백 ${fb} 선택`);
               fbBtn.click();
               await delay(1000);
-              return true;
+              return fb; // 실제 선택된 품질 반환
             }
           }
         }
@@ -2959,7 +2979,7 @@
         } else {
           await delay(1000);
         }
-        return true;
+        return quality; // 요청한 품질 그대로 선택됨
       }
     }
 
@@ -2969,7 +2989,7 @@
       console.log(LOG_PREFIX, `[img-download] 대체: 1K 선택`);
       any1k.click();
       await delay(1000);
-      return true;
+      return '1k';
     }
 
     // 품질 서브메뉴 없음 — Download 직접 클릭
@@ -2980,11 +3000,10 @@
     // 클릭 후 품질 옵션 재확인
     qualityBtn = findMenuItemByText(targetTexts);
     if (qualityBtn) {
-      const hasUpgrade = qualityBtn.querySelector('button') || /upgrade|업그레이드/i.test(qualityBtn.textContent || '');
-      if (!hasUpgrade) {
+      if (!checkHasUpgrade(qualityBtn)) {
         qualityBtn.click();
         await delay(1000);
-        return true;
+        return quality;
       }
     }
 
