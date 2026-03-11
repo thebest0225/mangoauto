@@ -1219,7 +1219,10 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     }
 
     // MangoHub 모드에서도 로컬 다운로드 (PC에 작업 내역 보관) — blob 재사용이 안 된 경우
-    if (uiDownloaded && !sm._config?.projectId && (mediaDataUrl || mediaUrl)) {
+    // _uploadBlob으로 프로젝트 폴더에 이미 저장했으면 중복 다운로드 방지
+    if (_uploadBlob) {
+      broadcastLog('프로젝트 폴더에 이미 저장됨 — 로컬 재다운로드 건너뛰기', 'info');
+    } else if (uiDownloaded && !sm._config?.projectId && (mediaDataUrl || mediaUrl)) {
       // standalone 모드에서만 URL 기반 다운로드 시도
       const saveUrl = mediaDataUrl || mediaUrl;
       try {
