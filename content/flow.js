@@ -1434,6 +1434,8 @@
     return false;
   }
 
+  let _lastUploadedSourceKey = null; // 마지막 업로드한 소스 이미지 식별키
+
   async function uploadFrame(imageDataUrl, position = 'first') {
     // 설정 패널이 열려있으면 갤러리 이미지를 가리므로 닫기
     if (isSettingsPanelOpen()) {
@@ -1441,6 +1443,10 @@
       await closeSettingsPanel();
       await delay(500);
     }
+
+    // 소스 이미지 식별키 (HTTP URL 또는 dataUrl 앞 200자)
+    const sourceKey = imageDataUrl.startsWith('http') ? imageDataUrl : imageDataUrl.substring(0, 200);
+    const isSameImage = _lastUploadedSourceKey === sourceKey;
 
     // HTTP URL → dataUrl 변환 (MangoHub 이미지)
     if (imageDataUrl.startsWith('http')) {
@@ -1465,9 +1471,23 @@
     document.querySelectorAll('img[src]').forEach(img => {
       if (isGalleryImage(img)) prevGallerySrcs.add(img.src);
     });
-    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개 (src ${prevGallerySrcs.size}종)`);
+    console.log(LOG_PREFIX, `[frame] 갤러리 이미지: ${imgCountBefore}개 (src ${prevGallerySrcs.size}종), 같은이미지=${isSameImage}`);
 
-    // 항상 새로 업로드 (다음 영상 생성 시 기존 이미지 재사용하면 안 됨)
+    // 같은 이미지로 재시도 + 갤러리에 이미지 있으면 업로드 스킵
+    // 다른 이미지(다른 세그먼트)면 반드시 새로 업로드
+    if (isSameImage && imgCountBefore > 0) {
+      console.log(LOG_PREFIX, '[frame] 같은 이미지 재시도 + 갤러리에 이미지 존재 → 업로드 스킵, Animate만 수행');
+      _lastUploadedSourceKey = sourceKey;
+      // Animate 실행 (갤러리 마지막 이미지에)
+      const animated = await addImageToPromptViaMenu(null);
+      if (animated) {
+        console.log(LOG_PREFIX, '[frame] ✓ Animate 완료 (재시도)');
+        return true;
+      }
+      console.error(LOG_PREFIX, '[frame] ✗ Animate 실패 (재시도)');
+      return false;
+    }
+
     const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
     console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
     let uploaded = false;
@@ -1559,6 +1579,9 @@
 
     // 항상 실행: ⋮ 메뉴 → "Animate" (프레임을 영상 생성용으로 설정)
     // 새로 업로드한 이미지를 명시적으로 전달하여 정확한 이미지에 Animate 실행
+    // 소스 추적 업데이트
+    _lastUploadedSourceKey = sourceKey;
+
     const animated = await addImageToPromptViaMenu(newlyUploadedImg);
     if (animated) {
       console.log(LOG_PREFIX, '[frame] ✓ Animate 완료');
@@ -2483,9 +2506,10 @@
       return false;
     }
 
-    // strict 모드: 리프 노드만 검사 (children.length === 0)
-    // 컨테이너 요소는 프롬프트+에러+UI텍스트가 합쳐져서 오탐 발생
-    const maxChildren = strict ? 0 : 5;
+    // strict 모드: 리프 노드만 (children === 0)
+    // non-strict: 소규모 컨테이너까지 (children <= 3)
+    // 큰 컨테이너(사이드바 등)는 에러+네비 텍스트가 합쳐져서 오탐
+    const maxChildren = strict ? 0 : 3;
 
     // 1차: 시맨틱 셀렉터 (alert, error class 등)
     const alerts = document.querySelectorAll(
@@ -2511,7 +2535,7 @@
       if (el.offsetParent === null) continue;
       if (el.children.length > maxChildren) continue;
       const text = el.textContent?.trim() || '';
-      if (text.length < 3 || text.length > 500) continue;
+      if (text.length < 3 || text.length > 200) continue;
       const lower = text.toLowerCase();
 
       let isError = false;
