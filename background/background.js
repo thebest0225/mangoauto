@@ -1108,6 +1108,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     }
   }
 
+  let _uploadBlob = null; // 업로드용 blob (프로젝트 폴더 저장 + 중복 다운로드 방지)
   if (sm.mode === 'mangohub' && sm.projectId) {
     if (reviewModeEnabled) {
       // 검토 모드: 즉시 업로드하지 않고 검토 큐에 추가
@@ -1137,7 +1138,6 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     } else {
       // 기존 동작: 즉시 업로드
       sm.markUploading();
-      let _uploadBlob = null; // 업로드용 blob (프로젝트 폴더 저장에도 재사용)
       try {
         let blob;
         if (mediaDataUrl) {
@@ -1174,44 +1174,19 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         sm.transition(AutoState.COOLDOWN);
       }
 
-      // MangoHub 업로드 시 받은 blob을 프로젝트 폴더에 저장 (URL 재다운로드 대신 blob 재사용)
+      // MangoHub 업로드 완료 → 프로젝트 폴더에도 저장 (URL 방식, service worker에서 blob URL 불가)
       const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
-      if (_uploadBlob) {
+      const saveUrl = (mediaUrl && !mediaUrl.startsWith('blob:')) ? mediaUrl
+                    : (fallbackUrl && !fallbackUrl.startsWith('blob:')) ? fallbackUrl
+                    : mediaDataUrl;
+      if (saveUrl) {
         try {
-          const blobUrl = URL.createObjectURL(_uploadBlob);
           await chrome.downloads.download({
-            url: blobUrl,
+            url: saveUrl,
             filename: dlFilename,
             saveAs: false
           });
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-          broadcastLog(`프로젝트 폴더 저장 (blob): ${filename}`, 'info');
-        } catch (dlErr) {
-          broadcastLog(`프로젝트 폴더 blob 저장 실패: ${dlErr.message}, URL 방식 시도...`, 'warn');
-          // blob URL 실패 시 원본 URL로 재시도
-          try {
-            const fallbackSaveUrl = mediaUrl || fallbackUrl;
-            if (fallbackSaveUrl && !fallbackSaveUrl.startsWith('blob:')) {
-              await chrome.downloads.download({
-                url: fallbackSaveUrl,
-                filename: dlFilename,
-                saveAs: false
-              });
-              broadcastLog(`프로젝트 폴더 저장 (URL 폴백): ${filename}`, 'info');
-            }
-          } catch (dlErr2) {
-            broadcastLog(`프로젝트 폴더 저장 최종 실패: ${dlErr2.message}`, 'warn');
-          }
-        }
-      } else if (mediaUrl && !mediaUrl.startsWith('blob:')) {
-        // blob 없지만 URL은 있는 경우 (fetchMediaWithCookies 실패 후)
-        try {
-          await chrome.downloads.download({
-            url: mediaUrl,
-            filename: dlFilename,
-            saveAs: false
-          });
-          broadcastLog(`프로젝트 폴더 저장 (URL): ${filename}`, 'info');
+          broadcastLog(`프로젝트 폴더 저장: ${filename}`, 'info');
         } catch (dlErr) {
           broadcastLog(`프로젝트 폴더 저장 실패: ${dlErr.message}`, 'warn');
         }
@@ -1448,66 +1423,21 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
         }
       }
 
-      // MangoHub 업로드 시 받은 blob을 프로젝트 폴더에 저장 (URL 재다운로드 대신 blob 재사용)
-      if (_uploadBlob) {
-        try {
-          const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
-          const blobUrl = URL.createObjectURL(_uploadBlob);
-          await chrome.downloads.download({
-            url: blobUrl,
-            filename: dlFilename,
-            saveAs: false
-          });
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-          broadcastLog(`프로젝트 폴더 저장 (blob, concurrent): ${filename}`, 'info');
-        } catch (dlErr) {
-          broadcastLog(`프로젝트 폴더 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
-          // blob URL 실패 시 원본 URL로 재시도
-          try {
-            const fallbackSaveUrl = mediaUrl || fallbackUrl;
-            if (fallbackSaveUrl && !fallbackSaveUrl.startsWith('blob:')) {
-              const dlFilename2 = getDownloadPath(filename, !!item._isThumbnail);
-              await chrome.downloads.download({
-                url: fallbackSaveUrl,
-                filename: dlFilename2,
-                saveAs: false
-              });
-              broadcastLog(`프로젝트 폴더 저장 (URL 폴백, concurrent): ${filename}`, 'info');
-            }
-          } catch (dlErr2) {
-            broadcastLog(`프로젝트 폴더 저장 최종 실패 (concurrent): ${dlErr2.message}`, 'warn');
-          }
-        }
-      } else if (mediaUrl && !mediaUrl.startsWith('blob:')) {
-        // blob 없지만 URL은 있는 경우
+      // MangoHub 업로드 완료 → 프로젝트 폴더에도 저장 (URL 방식, service worker에서 blob URL 불가)
+      const concSaveUrl = (mediaUrl && !mediaUrl.startsWith('blob:')) ? mediaUrl
+                        : (fallbackUrl && !fallbackUrl.startsWith('blob:')) ? fallbackUrl
+                        : mediaDataUrl;
+      if (concSaveUrl) {
         try {
           const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
           await chrome.downloads.download({
-            url: mediaUrl,
+            url: concSaveUrl,
             filename: dlFilename,
             saveAs: false
           });
-          broadcastLog(`프로젝트 폴더 저장 (URL, concurrent): ${filename}`, 'info');
+          broadcastLog(`프로젝트 폴더 저장 (concurrent): ${filename}`, 'info');
         } catch (dlErr) {
           broadcastLog(`프로젝트 폴더 저장 실패 (concurrent): ${dlErr.message}`, 'warn');
-        }
-      } else {
-        try {
-          const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
-          const downloadUrl = mediaUrl || mediaDataUrl;
-          if (downloadUrl) {
-            await chrome.downloads.download({
-              url: downloadUrl,
-              filename: dlFilename,
-              saveAs: false
-            });
-            broadcastLog(`로컬 다운로드: ${filename}`, 'info');
-            if (_uiDownloadId) {
-              try { await chrome.downloads.removeFile(_uiDownloadId); chrome.downloads.erase({ id: _uiDownloadId }); } catch (e) {}
-            }
-          }
-        } catch (dlErr) {
-          broadcastLog(`로컬 다운로드 실패 (업로드는 완료): ${dlErr.message}`, 'warn');
         }
       }
     } else {

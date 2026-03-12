@@ -2943,7 +2943,7 @@
     console.log(LOG_PREFIX, `[img-download] 서브메뉴: ${subItems.join(', ')}`);
 
     // 반환값: 실제 선택된 품질 문자열 ('1k'/'2k'/'4k') 또는 false
-    // 업그레이드 버튼 감지: 요소 및 인접 형제에서 upgrade/업그레이드 텍스트 검사
+    // 업그레이드 버튼 감지: 해당 요소 자체만 검사 (형제/부모 검사 제거 — 4K의 업그레이드를 2K로 오탐)
     function checkHasUpgrade(el) {
       const upgradeRe = /upgrade|업그레이드/i;
       // 1) 요소 전체 textContent 검사
@@ -2952,22 +2952,6 @@
       const btns = el.querySelectorAll('button, [role="button"]');
       for (const btn of btns) {
         if (upgradeRe.test(btn.textContent || '')) return true;
-      }
-      // 3) 인접 형제 요소 검사 (업그레이드 버튼이 형제로 배치될 수 있음)
-      const siblings = [el.nextElementSibling, el.previousElementSibling];
-      for (const sib of siblings) {
-        if (!sib) continue;
-        // 형제가 작은 요소(버튼 등)이고 upgrade 텍스트 포함
-        const sibText = (sib.textContent || '').trim();
-        if (sibText.length < 30 && upgradeRe.test(sibText)) return true;
-      }
-      // 4) 부모 컨테이너에서 동일 행(같은 li/div) 내 upgrade 버튼 검사
-      const parent = el.parentElement;
-      if (parent) {
-        const parentBtns = parent.querySelectorAll('button, [role="button"]');
-        for (const btn of parentBtns) {
-          if (btn !== el && upgradeRe.test(btn.textContent || '')) return true;
-        }
       }
       return false;
     }
