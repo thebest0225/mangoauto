@@ -1017,45 +1017,35 @@ async function sendToTab(tabId, msg) {
     }
   }
 
-  // EXECUTE_PROMPT 전송 전: 동의함 다이얼로그가 페이지 네비게이션 유발 → content script 사망
-  // 탭 URL 안정화 대기 + PING으로 content script 생존 확인
+  // EXECUTE_PROMPT: 동의함 다이얼로그가 페이지 네비게이션 유발할 수 있으므로
+  // 전송 후 응답 타임아웃 + 재시도 로직으로 대응
   if (msg.type === 'EXECUTE_PROMPT') {
-    // 1단계: 탭 URL이 안정될 때까지 대기 (네비게이션 완료)
-    let lastUrl = '';
-    for (let i = 0; i < 6; i++) { // 최대 12초 (2초 x 6)
-      await MangoUtils.sleep(2000);
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        if (tab.url === lastUrl && tab.status === 'complete') {
-          break; // URL 안정화 + 로드 완료
-        }
-        lastUrl = tab.url;
-        if (i > 0) broadcastLog(`탭 URL 변경 감지 (${i + 1}/6): ${tab.url?.substring(0, 60)}, status=${tab.status}`, 'info');
-      } catch (e) {
-        break; // 탭 접근 실패 → 진행
-      }
-    }
-
-    // 2단계: PING으로 content script 생존 확인
-    try {
-      await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    } catch (pingErr) {
-      broadcastLog('PING 실패 → content script 재주입', 'warn');
-      await ensureContentScript(tabId, sm.platform);
-      // 재주입 후 동의함 다이얼로그로 인한 추가 네비게이션 대기
-      await MangoUtils.sleep(8000);
-      try {
-        await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-      } catch (e2) {
-        broadcastLog('재주입 후 PING 실패 → 2차 재주입', 'warn');
-        await ensureContentScript(tabId, sm.platform);
-        await MangoUtils.sleep(3000);
-      }
-    }
+    // 전송 전 짧은 대기: content script 초기화(동의함 처리 등) 완료 여지
+    await MangoUtils.sleep(3000);
   }
 
   broadcastLog(`chrome.tabs.sendMessage 호출 (type=${msg.type})...`, 'info');
-  return chrome.tabs.sendMessage(tabId, msg);
+
+  // sendMessage with retry: content script가 동의함 리로드로 죽을 수 있음
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await Promise.race([
+        chrome.tabs.sendMessage(tabId, msg),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('sendMessage 타임아웃 (15초)')), 15000)
+        )
+      ]);
+      return result;
+    } catch (err) {
+      if (attempt < 2 && msg.type === 'EXECUTE_PROMPT') {
+        broadcastLog(`sendMessage 실패 (${attempt + 1}/3): ${err.message} → 재주입 후 재시도`, 'warn');
+        await ensureContentScript(tabId, sm.platform);
+        await MangoUtils.sleep(5000); // 동의함 처리 + 안정화 대기
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 // ─── Handle generation complete ───

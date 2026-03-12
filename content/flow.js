@@ -2946,23 +2946,31 @@
     // 업그레이드 버튼 감지: 해당 요소 자체만 검사 (형제/부모 검사 제거 — 4K의 업그레이드를 2K로 오탐)
     function checkHasUpgrade(el) {
       const upgradeRe = /upgrade|업그레이드/i;
+      const elText = el.textContent || '';
       // 1) 요소 전체 textContent 검사
-      if (upgradeRe.test(el.textContent || '')) return true;
+      if (upgradeRe.test(elText)) {
+        console.log(LOG_PREFIX, `[img-download] upgrade감지(textContent): "${elText.substring(0, 80)}"`);
+        return true;
+      }
       // 2) 자식 button 검사
       const btns = el.querySelectorAll('button, [role="button"]');
       for (const btn of btns) {
-        if (upgradeRe.test(btn.textContent || '')) return true;
+        if (upgradeRe.test(btn.textContent || '')) {
+          console.log(LOG_PREFIX, `[img-download] upgrade감지(자식btn): "${btn.textContent?.substring(0, 40)}"`);
+          return true;
+        }
       }
       return false;
     }
 
     if (qualityBtn) {
       const qText = (qualityBtn.textContent || '').trim();
-      console.log(LOG_PREFIX, `[img-download] qualityBtn 찾음: "${qText.substring(0, 50)}" tag=${qualityBtn.tagName} role=${qualityBtn.getAttribute('role') || ''}`);
+      console.log(LOG_PREFIX, `[img-download] qualityBtn 찾음: "${qText.substring(0, 80)}" tag=${qualityBtn.tagName} role=${qualityBtn.getAttribute('role') || ''} children=${qualityBtn.children.length}`);
       // Upgrade 버튼 있으면 해당 품질 사용 불가 → 한 단계 낮은 품질로 폴백
       const hasUpgrade = checkHasUpgrade(qualityBtn);
+      console.log(LOG_PREFIX, `[img-download] checkHasUpgrade=${hasUpgrade} for "${qText.substring(0, 80)}"`);
       if (hasUpgrade) {
-        console.log(LOG_PREFIX, `[img-download] ${quality}에 Upgrade 버튼 → 폴백 (text="${qText.substring(0, 50)}")`);
+        console.log(LOG_PREFIX, `[img-download] ${quality}에 Upgrade 버튼 → 폴백`);
         // 4k → 2k → 1k 순으로 폴백
         const fallbackOrder = quality === '4k' ? ['2k', '1k'] : ['1k'];
         for (const fb of fallbackOrder) {
