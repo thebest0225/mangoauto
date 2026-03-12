@@ -981,7 +981,29 @@ async function ensureContentScript(tabId, platform) {
         files
       });
       broadcastLog('Content script 주입 완료!', 'info');
-      await MangoUtils.sleep(1000); // Wait for scripts to initialize
+
+      // 동의함 다이얼로그 자동처리(2초 후) → 네비게이션 발생 가능
+      // 충분히 대기: 동의함(2초) + 네비게이션(2초) + 새 페이지 로드(2초)
+      await MangoUtils.sleep(7000);
+
+      // 네비게이션으로 content script 사망했을 수 있으므로 재확인
+      try {
+        const resp2 = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+        if (resp2?.ok) {
+          broadcastLog(`동의함 처리 후 content script 정상 (site: ${resp2.site})`, 'info');
+          return;
+        }
+      } catch {
+        // 네비게이션으로 죽음 → manifest가 자동 주입했을 수도 있고 아닐 수도
+        broadcastLog('동의함 네비게이션 감지 → 재주입', 'warn');
+        try {
+          await chrome.scripting.executeScript({ target: { tabId }, files });
+          broadcastLog('재주입 완료!', 'info');
+          await MangoUtils.sleep(3000);
+        } catch (e2) {
+          broadcastLog(`재주입 실패: ${e2.message}`, 'error');
+        }
+      }
     } catch (injectErr) {
       broadcastLog(`Content script 주입 실패: ${injectErr.message}`, 'error');
     }
@@ -1017,27 +1039,16 @@ async function sendToTab(tabId, msg) {
     }
   }
 
-  // EXECUTE_PROMPT: 전송 전 PING으로 content script 생존 확인
-  // 동의함 다이얼로그가 페이지 네비게이션을 유발할 수 있으므로, 전송 전 확인 필수
+  // EXECUTE_PROMPT: ensureContentScript에서 동의함 대기 완료됨
+  // 최종 PING 확인만 수행
   if (msg.type === 'EXECUTE_PROMPT') {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        // PING으로 content script 생존 확인
-        const pingResp = await Promise.race([
-          chrome.tabs.sendMessage(tabId, { type: 'PING' }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('PING 타임아웃')), 5000))
-        ]);
-        if (pingResp?.ok) {
-          broadcastLog(`PING 확인 (${attempt + 1}/3): site=${pingResp.site}`, 'info');
-          break; // content script 살아있음 → 전송 진행
-        }
-      } catch (pingErr) {
-        broadcastLog(`PING 실패 (${attempt + 1}/3): ${pingErr.message}`, 'warn');
-        if (attempt < 2) {
-          await ensureContentScript(tabId, sm.platform);
-          await MangoUtils.sleep(5000); // 동의함 처리 + 안정화 대기
-        }
-      }
+    try {
+      const pingResp = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      if (!pingResp?.ok) throw new Error('PING 응답 없음');
+      broadcastLog(`EXECUTE_PROMPT 전 최종 PING 확인: site=${pingResp.site}`, 'info');
+    } catch (pingErr) {
+      broadcastLog(`최종 PING 실패: ${pingErr.message} → 재주입`, 'warn');
+      await ensureContentScript(tabId, sm.platform);
     }
   }
 
