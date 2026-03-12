@@ -1017,31 +1017,39 @@ async function sendToTab(tabId, msg) {
     }
   }
 
-  // EXECUTE_PROMPT 전송 전: 다이얼로그 처리(동의함 등)로 페이지 리로드 가능성 대비
-  // 동의함 클릭 → 3~6초 후 소프트 리로드 → content script 사망
-  // 2회 PING (5초 간격)으로 안정성 확인
+  // EXECUTE_PROMPT 전송 전: 동의함 다이얼로그가 페이지 네비게이션 유발 → content script 사망
+  // 탭 URL 안정화 대기 + PING으로 content script 생존 확인
   if (msg.type === 'EXECUTE_PROMPT') {
-    for (let pingAttempt = 0; pingAttempt < 2; pingAttempt++) {
-      await MangoUtils.sleep(pingAttempt === 0 ? 3000 : 5000);
+    // 1단계: 탭 URL이 안정될 때까지 대기 (네비게이션 완료)
+    let lastUrl = '';
+    for (let i = 0; i < 6; i++) { // 최대 12초 (2초 x 6)
+      await MangoUtils.sleep(2000);
       try {
-        const ping = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-        if (pingAttempt === 1) {
-          broadcastLog(`EXECUTE_PROMPT 전 PING 안정 확인 (2/2): ${JSON.stringify(ping)}`, 'info');
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.url === lastUrl && tab.status === 'complete') {
+          break; // URL 안정화 + 로드 완료
         }
-      } catch (pingErr) {
-        broadcastLog(`EXECUTE_PROMPT 전 PING 실패 (${pingAttempt + 1}/2) → content script 재주입`, 'warn');
+        lastUrl = tab.url;
+        if (i > 0) broadcastLog(`탭 URL 변경 감지 (${i + 1}/6): ${tab.url?.substring(0, 60)}, status=${tab.status}`, 'info');
+      } catch (e) {
+        break; // 탭 접근 실패 → 진행
+      }
+    }
+
+    // 2단계: PING으로 content script 생존 확인
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+    } catch (pingErr) {
+      broadcastLog('PING 실패 → content script 재주입', 'warn');
+      await ensureContentScript(tabId, sm.platform);
+      // 재주입 후 동의함 다이얼로그로 인한 추가 네비게이션 대기
+      await MangoUtils.sleep(8000);
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      } catch (e2) {
+        broadcastLog('재주입 후 PING 실패 → 2차 재주입', 'warn');
         await ensureContentScript(tabId, sm.platform);
-        // 재주입 후 다이얼로그 처리 대기 (동의함 → 리로드 → 재주입 필요)
-        await MangoUtils.sleep(5000);
-        // 재주입 후 한번 더 확인
-        try {
-          await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-        } catch (e2) {
-          broadcastLog('재주입 후에도 PING 실패 → 한번 더 재주입', 'warn');
-          await ensureContentScript(tabId, sm.platform);
-          await MangoUtils.sleep(3000);
-        }
-        break; // 재주입 했으므로 루프 종료
+        await MangoUtils.sleep(3000);
       }
     }
   }
