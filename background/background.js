@@ -1017,35 +1017,32 @@ async function sendToTab(tabId, msg) {
     }
   }
 
-  // EXECUTE_PROMPT: 동의함 다이얼로그가 페이지 네비게이션 유발할 수 있으므로
-  // 전송 후 응답 타임아웃 + 재시도 로직으로 대응
+  // EXECUTE_PROMPT: 전송 전 PING으로 content script 생존 확인
+  // 동의함 다이얼로그가 페이지 네비게이션을 유발할 수 있으므로, 전송 전 확인 필수
   if (msg.type === 'EXECUTE_PROMPT') {
-    // 전송 전 짧은 대기: content script 초기화(동의함 처리 등) 완료 여지
-    await MangoUtils.sleep(3000);
-  }
-
-  broadcastLog(`chrome.tabs.sendMessage 호출 (type=${msg.type})...`, 'info');
-
-  // sendMessage with retry: content script가 동의함 리로드로 죽을 수 있음
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const result = await Promise.race([
-        chrome.tabs.sendMessage(tabId, msg),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('sendMessage 타임아웃 (15초)')), 15000)
-        )
-      ]);
-      return result;
-    } catch (err) {
-      if (attempt < 2 && msg.type === 'EXECUTE_PROMPT') {
-        broadcastLog(`sendMessage 실패 (${attempt + 1}/3): ${err.message} → 재주입 후 재시도`, 'warn');
-        await ensureContentScript(tabId, sm.platform);
-        await MangoUtils.sleep(5000); // 동의함 처리 + 안정화 대기
-      } else {
-        throw err;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        // PING으로 content script 생존 확인
+        const pingResp = await Promise.race([
+          chrome.tabs.sendMessage(tabId, { type: 'PING' }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('PING 타임아웃')), 5000))
+        ]);
+        if (pingResp?.ok) {
+          broadcastLog(`PING 확인 (${attempt + 1}/3): site=${pingResp.site}`, 'info');
+          break; // content script 살아있음 → 전송 진행
+        }
+      } catch (pingErr) {
+        broadcastLog(`PING 실패 (${attempt + 1}/3): ${pingErr.message}`, 'warn');
+        if (attempt < 2) {
+          await ensureContentScript(tabId, sm.platform);
+          await MangoUtils.sleep(5000); // 동의함 처리 + 안정화 대기
+        }
       }
     }
   }
+
+  broadcastLog(`chrome.tabs.sendMessage 호출 (type=${msg.type})...`, 'info');
+  return chrome.tabs.sendMessage(tabId, msg);
 }
 
 // ─── Handle generation complete ───
