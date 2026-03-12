@@ -1017,6 +1017,20 @@ async function sendToTab(tabId, msg) {
     }
   }
 
+  // EXECUTE_PROMPT 전송 전: 다이얼로그 처리 등으로 페이지 리로드 가능성 대비
+  // 3초 추가 대기 후 PING으로 content script 생존 확인
+  if (msg.type === 'EXECUTE_PROMPT') {
+    await MangoUtils.sleep(3000);
+    try {
+      const ping = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      broadcastLog(`EXECUTE_PROMPT 전 PING 확인: ${JSON.stringify(ping)}`, 'info');
+    } catch (pingErr) {
+      broadcastLog(`EXECUTE_PROMPT 전 PING 실패 → content script 재주입`, 'warn');
+      await ensureContentScript(tabId, sm.platform);
+      await MangoUtils.sleep(3000);
+    }
+  }
+
   broadcastLog(`chrome.tabs.sendMessage 호출 (type=${msg.type})...`, 'info');
   return chrome.tabs.sendMessage(tabId, msg);
 }
