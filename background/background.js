@@ -734,7 +734,6 @@ async function runSequentialLoop(loopId) {
       broadcastLog(`LLM 조건 체크: enabled=${!!llmCfg?.enabled}, hasKey=${!!llmCfg?.kieApiKey}, isThumbnail=${!!item._isThumbnail}, isCensorship=${isCensorship}, skipLlm=${skipLlm}, errorCode=${resp.errorCode || 'none'}, attempts=${llmAttemptsSoFar}/${llmMaxAttempts}, error="${(resp.error||'').substring(0,80)}"`, 'info');
 
       if (llmCfg?.enabled && llmCfg?.kieApiKey &&
-          !item._isThumbnail &&
           isCensorship &&
           llmAttemptsSoFar < llmMaxAttempts) {
         broadcastLog(`검열 에러 감지 → LLM 프롬프트 수정 시도 (${llmAttemptsSoFar + 1}/${llmMaxAttempts})`, 'info');
