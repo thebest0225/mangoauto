@@ -2957,10 +2957,12 @@
     }
 
     if (qualityBtn) {
+      const qText = (qualityBtn.textContent || '').trim();
+      console.log(LOG_PREFIX, `[img-download] qualityBtn 찾음: "${qText.substring(0, 50)}" tag=${qualityBtn.tagName} role=${qualityBtn.getAttribute('role') || ''}`);
       // Upgrade 버튼 있으면 해당 품질 사용 불가 → 한 단계 낮은 품질로 폴백
       const hasUpgrade = checkHasUpgrade(qualityBtn);
       if (hasUpgrade) {
-        console.log(LOG_PREFIX, `[img-download] ${quality}에 Upgrade 버튼 → 폴백`);
+        console.log(LOG_PREFIX, `[img-download] ${quality}에 Upgrade 버튼 → 폴백 (text="${qText.substring(0, 50)}")`);
         // 4k → 2k → 1k 순으로 폴백
         const fallbackOrder = quality === '4k' ? ['2k', '1k'] : ['1k'];
         for (const fb of fallbackOrder) {
@@ -3148,19 +3150,23 @@
 
   function findMenuItemByText(texts) {
     // role="menuitem" 또는 일반 클릭 가능 요소에서 텍스트 매칭
+    // 가장 짧은 textContent를 가진 요소 우선 (상위 컨테이너보다 구체적 요소 선호)
     const candidates = document.querySelectorAll(
       '[role="menuitem"], [role="option"], li, button, a, div[tabindex]'
     );
+    let bestMatch = null;
+    let bestLen = Infinity;
     for (const el of candidates) {
       const elText = el.textContent?.trim() || '';
       if (el.offsetParent === null) continue;
       for (const text of texts) {
-        if (elText.includes(text) && elText.length < text.length + 30) {
-          return el;
+        if (elText.includes(text) && elText.length < text.length + 30 && elText.length < bestLen) {
+          bestMatch = el;
+          bestLen = elText.length;
         }
       }
     }
-    return null;
+    return bestMatch;
   }
 
   // ─── Ensure inject.js (MAIN world) is loaded ───
