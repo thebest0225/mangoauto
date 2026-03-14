@@ -1208,22 +1208,27 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         sm.transition(AutoState.COOLDOWN);
       }
 
-      // MangoHub 업로드 완료 → 프로젝트 폴더에도 저장 (URL 방식, service worker에서 blob URL 불가)
-      const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
-      const saveUrl = (mediaUrl && !mediaUrl.startsWith('blob:')) ? mediaUrl
-                    : (fallbackUrl && !fallbackUrl.startsWith('blob:')) ? fallbackUrl
-                    : mediaDataUrl;
-      if (saveUrl) {
-        try {
-          await chrome.downloads.download({
-            url: saveUrl,
-            filename: dlFilename,
-            saveAs: false
-          });
-          broadcastLog(`프로젝트 폴더 저장: ${filename}`, 'info');
-        } catch (dlErr) {
-          broadcastLog(`프로젝트 폴더 저장 실패: ${dlErr.message}`, 'warn');
+      // MangoHub 업로드 완료 → 프로젝트 폴더에도 저장
+      // UI 다운로드가 이미 된 경우 (uiDownloaded=true) → 중복 다운로드 방지
+      if (!uiDownloaded) {
+        const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
+        const saveUrl = (mediaUrl && !mediaUrl.startsWith('blob:')) ? mediaUrl
+                      : (fallbackUrl && !fallbackUrl.startsWith('blob:')) ? fallbackUrl
+                      : mediaDataUrl;
+        if (saveUrl) {
+          try {
+            await chrome.downloads.download({
+              url: saveUrl,
+              filename: dlFilename,
+              saveAs: false
+            });
+            broadcastLog(`프로젝트 폴더 저장: ${filename}`, 'info');
+          } catch (dlErr) {
+            broadcastLog(`프로젝트 폴더 저장 실패: ${dlErr.message}`, 'warn');
+          }
         }
+      } else {
+        broadcastLog('UI 다운로드 완료 — 프로젝트 폴더 중복 저장 건너뛰기', 'info');
       }
     }
 
