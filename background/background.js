@@ -235,24 +235,24 @@ async function handleMessage(msg, sender) {
       return { loggedIn: await MangoHubAPI.checkAuth() };
 
     case 'API_LIST_PROJECTS':
-      return await MangoHubAPI.listProjects();
+      return await MangoHubAPI.listProjects(msg.apiType);
 
     case 'API_GET_PROJECT':
-      return await MangoHubAPI.getProject(msg.projectId);
+      return await MangoHubAPI.getProject(msg.projectId, msg.apiType);
 
     case 'API_UPLOAD_IMAGE': {
       const blob = await fetch(msg.dataUrl).then(r => r.blob());
-      return await MangoHubAPI.uploadImage(msg.projectId, msg.segmentIndex, blob, msg.filename);
+      return await MangoHubAPI.uploadImage(msg.projectId, msg.segmentIndex, blob, msg.filename, msg.apiType);
     }
 
     case 'API_UPLOAD_VIDEO': {
       const blob = await fetch(msg.dataUrl).then(r => r.blob());
-      return await MangoHubAPI.uploadVideo(msg.projectId, msg.segmentIndex, blob, msg.filename);
+      return await MangoHubAPI.uploadVideo(msg.projectId, msg.segmentIndex, blob, msg.filename, msg.apiType);
     }
 
     case 'API_UPLOAD_THUMBNAIL': {
       const blob = await fetch(msg.dataUrl).then(r => r.blob());
-      return await MangoHubAPI.uploadThumbnailImage(msg.projectId, msg.conceptIndex, blob, msg.filename);
+      return await MangoHubAPI.uploadThumbnailImage(msg.projectId, msg.conceptIndex, blob, msg.filename, msg.apiType);
     }
 
     // ── Automation Control ──
@@ -369,7 +369,7 @@ async function handleMessage(msg, sender) {
 // ─── Start Automation ───
 async function startAutomation(config) {
   const { source, platform, mode, settings, projectId, prompts, images,
-          useExistingImages, skipCompleted, contentType, selectedIndices } = config;
+          useExistingImages, skipCompleted, contentType, selectedIndices, apiType } = config;
 
   broadcastLog(`자동화 시작: source=${source}, platform=${platform}, mode=${mode}, contentType=${contentType || 'segments'}`, 'info');
 
@@ -394,8 +394,12 @@ async function startAutomation(config) {
 
   let queue = [];
 
+  // apiType 저장 (롱폼/숏폼)
+  sm.apiType = apiType || 'longform';
+  MangoHubAPI.setApiType(sm.apiType);
+
   if (source === 'mangohub' && projectId) {
-    const project = await MangoHubAPI.getProject(projectId);
+    const project = await MangoHubAPI.getProject(projectId, sm.apiType);
 
     if (contentType === 'thumbnail') {
       // 썸네일 프롬프트 큐 빌드 (문구 포함 최종 프롬프트)

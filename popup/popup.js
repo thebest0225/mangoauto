@@ -11,6 +11,7 @@ let currentPlatform = 'grok';
 let currentMode = 'text-image';  // text-image | text-video | image-video | image-image
 let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
+let currentApiType = 'longform';  // 'longform' | 'shortform'
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
 let reviewItems = [];
@@ -103,7 +104,7 @@ async function checkAuth() {
 // ─── Load Projects ───
 async function loadProjects() {
   try {
-    const projects = await sendBg({ type: 'API_LIST_PROJECTS' });
+    const projects = await sendBg({ type: 'API_LIST_PROJECTS', apiType: currentApiType });
     const select = $('#projectSelect');
     select.innerHTML = '<option value="">프로젝트 선택...</option>';
     if (Array.isArray(projects)) {
@@ -197,6 +198,21 @@ function bindEvents() {
   // Load project
   $('#loadProjectBtn').addEventListener('click', loadProject);
   $('#refreshProjectsBtn').addEventListener('click', loadProjects);
+
+  // 롱폼/숏폼 탭 전환
+  $$('.api-type-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      currentApiType = tab.dataset.api;
+      $$('.api-type-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.api === currentApiType);
+        t.style.background = t.dataset.api === currentApiType ? '#4f46e5' : 'transparent';
+        t.style.color = t.dataset.api === currentApiType ? '#fff' : '#aaa';
+      });
+      currentProject = null;
+      $('#projectInfo').classList.add('hidden');
+      loadProjects();
+    });
+  });
 
   // Image upload
   const imagesInput = $('#imagesInput');
@@ -431,7 +447,7 @@ async function loadProject() {
   const projectId = $('#projectSelect').value;
   if (!projectId) return;
   try {
-    const project = await sendBg({ type: 'API_GET_PROJECT', projectId });
+    const project = await sendBg({ type: 'API_GET_PROJECT', projectId, apiType: currentApiType });
     currentProject = project;
 
     $('#projectName').textContent = project.name || 'Unnamed';
@@ -720,6 +736,7 @@ async function startAutomation() {
     }
     config.projectName = currentProject?.name || '';
     config.contentType = currentContentType;
+    config.apiType = currentApiType;
     config.useExistingImages = $('#useExistingImages').checked;
     config.skipCompleted = $('#skipCompleted').checked;
 
