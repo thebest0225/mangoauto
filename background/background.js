@@ -1213,8 +1213,8 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
       }
 
       // MangoHub 업로드 완료 → 프로젝트 폴더에도 저장
-      // UI 다운로드가 이미 된 경우 (uiDownloaded=true) → 중복 다운로드 방지
-      if (!uiDownloaded) {
+      // UI 다운로드는 Chrome 기본 폴더로 가므로, URL이 있으면 프로젝트 폴더에 별도 저장
+      {
         const dlFilename = getDownloadPath(filename, !!item._isThumbnail);
         const saveUrl = (mediaUrl && !mediaUrl.startsWith('blob:')) ? mediaUrl
                       : (fallbackUrl && !fallbackUrl.startsWith('blob:')) ? fallbackUrl
@@ -1230,9 +1230,9 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
           } catch (dlErr) {
             broadcastLog(`프로젝트 폴더 저장 실패: ${dlErr.message}`, 'warn');
           }
+        } else {
+          broadcastLog('프로젝트 폴더 저장 스킵: 사용 가능한 URL 없음', 'warn');
         }
-      } else {
-        broadcastLog('UI 다운로드 완료 — 프로젝트 폴더 중복 저장 건너뛰기', 'info');
       }
     }
 
