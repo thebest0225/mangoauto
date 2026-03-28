@@ -108,16 +108,62 @@ async function loadProjects() {
     const select = $('#projectSelect');
     select.innerHTML = '<option value="">프로젝트 선택...</option>';
     if (Array.isArray(projects)) {
+      // 최신순 정렬 (created_at > id 역순)
+      projects.sort((a, b) => {
+        if (a.created_at && b.created_at) return new Date(b.created_at) - new Date(a.created_at);
+        return (b.id || 0) - (a.id || 0);
+      });
       projects.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p.id;
-        opt.textContent = p.name || `Project ${p.id}`;
+        opt.textContent = `⚪ ${p.name || `Project ${p.id}`}`;
         select.appendChild(opt);
       });
+      // 백그라운드에서 각 프로젝트 상태 가져와서 동그라미 업데이트
+      fetchProjectStatuses(projects);
     }
   } catch (err) {
     addLog('프로젝트 로드 실패: ' + err.message, 'error');
   }
+}
+
+// 프로젝트별 상태를 가져와서 select option에 동그라미 색 업데이트
+async function fetchProjectStatuses(projects) {
+  const select = $('#projectSelect');
+  const promises = projects.map(async (p) => {
+    try {
+      const detail = await sendBg({ type: 'API_GET_PROJECT', projectId: p.id, apiType: currentApiType });
+      return { id: p.id, status: getProjectStatus(detail) };
+    } catch {
+      return { id: p.id, status: 'unknown' };
+    }
+  });
+  const results = await Promise.all(promises);
+  results.forEach(({ id, status }) => {
+    const opt = select.querySelector(`option[value="${id}"]`);
+    if (!opt) return;
+    const name = opt.textContent.replace(/^[⚪🟢🟡🔵⚫]\s*/, '');
+    const icon = status === 'complete' ? '🟢'
+               : status === 'video_done' ? '🔵'
+               : status === 'image_done' ? '🟡'
+               : status === 'partial' ? '🟡'
+               : '⚪';
+    opt.textContent = `${icon} ${name}`;
+  });
+}
+
+// 프로젝트 상세 데이터로 완성도 판별
+function getProjectStatus(project) {
+  const segments = project.segments || [];
+  if (segments.length === 0) return 'empty';
+  const withImage = segments.filter(s => s.image_url).length;
+  const withVideo = segments.filter(s => s.video_url).length;
+  const total = segments.length;
+  if (withVideo === total && withImage === total) return 'complete';
+  if (withVideo === total) return 'video_done';
+  if (withImage === total) return 'image_done';
+  if (withImage > 0 || withVideo > 0) return 'partial';
+  return 'empty';
 }
 
 // ─── Bind All Events ───
