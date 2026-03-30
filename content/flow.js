@@ -243,15 +243,18 @@
           throw err;
         }
 
-        // Step 3-b: 종료 프레임 설정 (숏폼 전용 — 다음 세그먼트 이미지)
+        // Step 3-b: 종료 프레임 이미지 갤러리에만 업로드 (숏폼 전용)
+        // Animate 없이 갤러리에만 올려두고, 나중에 "종료" 버튼으로 선택
         if (endImageDataUrl) {
-          console.log(LOG_PREFIX, '[endFrame] 종료 프레임 업로드 시작...');
-          const endUploaded = await uploadEndFrame(endImageDataUrl);
-          if (endUploaded) {
-            console.log(LOG_PREFIX, '[endFrame] ✓ 종료 프레임 설정 완료');
-            await delay(1000);
+          console.log(LOG_PREFIX, '[endFrame] 종료 프레임 갤러리 업로드 시작...');
+          const endImg = await uploadImageToGalleryOnly(endImageDataUrl);
+          if (endImg) {
+            console.log(LOG_PREFIX, '[endFrame] ✓ 갤러리 업로드 완료');
+            // 나중에 선택할 수 있게 참조 보관
+            window._mangoEndFrameImg = endImg;
           } else {
-            console.warn(LOG_PREFIX, '[endFrame] ⚠ 종료 프레임 설정 실패 — 시작 프레임만으로 진행');
+            console.warn(LOG_PREFIX, '[endFrame] ⚠ 갤러리 업로드 실패 — 종료 프레임 없이 진행');
+            window._mangoEndFrameImg = null;
           }
         }
       }
@@ -272,6 +275,19 @@
       window.postMessage({ type: 'SET_FLOW_PROMPT', text: prompt }, '*');
       console.log(LOG_PREFIX, 'Prompt sent to inject.js for fetch injection');
       await delay(200);
+
+      // Step 5.9: 종료 프레임 설정 (숏폼 전용 — 프롬프트 입력 후, generate 직전)
+      if (endImageDataUrl && window._mangoEndFrameImg !== undefined) {
+        console.log(LOG_PREFIX, '[endFrame] "종료" 버튼 클릭 → 에셋 선택...');
+        const endSet = await setEndFrameFromAssets(window._mangoEndFrameImg);
+        if (endSet) {
+          console.log(LOG_PREFIX, '[endFrame] ✓ 종료 프레임 설정 완료');
+          await delay(500);
+        } else {
+          console.warn(LOG_PREFIX, '[endFrame] ⚠ 종료 프레임 설정 실패 — 시작 프레임만으로 진행');
+        }
+        window._mangoEndFrameImg = undefined;
+      }
 
       // Step 6: Click generate
       await clickGenerate();
@@ -1612,56 +1628,43 @@
     return false;
   }
 
-  // ─── End Frame Upload (숏폼 전용: 다음 세그먼트 이미지를 종료 프레임으로) ───
-  async function uploadEndFrame(imageDataUrl) {
-    // 1. 에셋 갤러리에 이미지 업로드 (시작 프레임과 동일 방식, Animate는 클릭 안 함)
-    const imgCountBefore = countGalleryImages();
+  // ─── End Frame: 갤러리에만 업로드 (Animate 없이) ───
+  // 반환값: 업로드된 img 요소 (나중에 에셋 선택 시 사용) 또는 null
+  async function uploadImageToGalleryOnly(imageDataUrl) {
     const prevGallerySrcs = new Set();
     document.querySelectorAll('img[src]').forEach(img => {
       if (isGalleryImage(img)) prevGallerySrcs.add(img.src);
     });
-
-    // HTTP URL → dataUrl 변환
-    if (imageDataUrl.startsWith('http')) {
-      try {
-        const resp = await fetch(imageDataUrl);
-        const blob = await resp.blob();
-        imageDataUrl = await new Promise(resolve => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.readAsDataURL(blob);
-        });
-      } catch (e) {
-        console.error(LOG_PREFIX, '[endFrame] URL→dataURL 변환 실패:', e);
-        return false;
-      }
-    }
+    const imgCountBefore = countGalleryImages();
 
     const file = MangoDom.dataUrlToFile(imageDataUrl, `endframe-${Date.now()}.png`);
-    console.log(LOG_PREFIX, `[endFrame] 업로드: ${file.size}bytes`);
+    console.log(LOG_PREFIX, `[endFrame] 갤러리 업로드: ${file.size}bytes`);
 
-    // file input으로 업로드
     const fileInput = MangoDom.findFileInput();
     if (!fileInput) {
       console.warn(LOG_PREFIX, '[endFrame] file input 없음');
-      return false;
+      return null;
     }
     await MangoDom.attachFileToInput(fileInput, file);
     const uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
     if (!uploaded) {
-      console.error(LOG_PREFIX, '[endFrame] 업로드 실패');
-      return false;
+      console.error(LOG_PREFIX, '[endFrame] 갤러리 업로드 실패');
+      return null;
     }
-    console.log(LOG_PREFIX, '[endFrame] ✓ 갤러리 업로드 완료');
-    await delay(1000);
+    await delay(500);
 
-    // 2. 방금 업로드된 이미지 찾기
-    let endImg = null;
+    // 새로 추가된 이미지 요소 반환
+    let newImg = null;
     document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) endImg = img;
+      if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) newImg = img;
     });
+    console.log(LOG_PREFIX, `[endFrame] 업로드된 이미지: ${newImg ? newImg.src.substring(0, 60) : '요소 못 찾음'}`);
+    return newImg;
+  }
 
-    // 3. 프롬프트 영역에서 "종료" 버튼 찾아 클릭
+  // ─── End Frame: 프롬프트 입력 후 "종료" 버튼 클릭 → 에셋에서 선택 ───
+  async function setEndFrameFromAssets(uploadedImg = null) {
+    // 1. 프롬프트 바의 "종료" 버튼 클릭
     const endBtnClicked = await clickEndFrameButton();
     if (!endBtnClicked) {
       console.warn(LOG_PREFIX, '[endFrame] "종료" 버튼 클릭 실패');
@@ -1669,19 +1672,39 @@
     }
     await delay(800);
 
-    // 4. 에셋 패널에서 첫 번째(가장 최근) 이미지 선택
-    const selected = await selectFirstAssetImage(endImg);
-    if (!selected) {
-      console.warn(LOG_PREFIX, '[endFrame] 에셋에서 이미지 선택 실패');
+    // 2. 에셋 패널에서 업로드된 이미지(또는 첫 번째 이미지) 선택
+    // 업로드된 img 요소가 있으면 직접 클릭, 없으면 갤러리 마지막 이미지
+    if (uploadedImg) {
+      const rect = uploadedImg.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        console.log(LOG_PREFIX, '[endFrame] 업로드된 이미지 직접 클릭');
+        uploadedImg.click();
+        uploadedImg.parentElement?.click();
+        await delay(300);
+        return true;
+      }
+    }
+
+    // 폴백: 에셋 패널 내 가장 첫 번째 이미지
+    await delay(300);
+    const galleryImgs = [];
+    document.querySelectorAll('img[src]').forEach(img => {
+      if (isGalleryImage(img) && img.offsetParent !== null) galleryImgs.push(img);
+    });
+    if (galleryImgs.length === 0) {
+      console.warn(LOG_PREFIX, '[endFrame] 에셋 이미지 없음');
       return false;
     }
-    await delay(500);
+    const target = galleryImgs[galleryImgs.length - 1];
+    console.log(LOG_PREFIX, `[endFrame] 갤러리 마지막 이미지 클릭: ${target.src.substring(0, 60)}`);
+    target.click();
+    target.parentElement?.click();
     return true;
   }
 
   // 프롬프트 바의 "종료" 버튼 클릭
   async function clickEndFrameButton() {
-    // "종료", "End", "end frame" 텍스트 또는 swap_horiz 아이콘 근처 버튼
+    // "종료", "End" 텍스트 또는 aria-label 매칭
     const candidates = [...document.querySelectorAll('button, [role="button"]')];
     for (const btn of candidates) {
       const text = btn.textContent?.trim() || '';
@@ -1692,57 +1715,26 @@
         return true;
       }
     }
-    // 폴백: swap_horiz 아이콘이 있는 영역 근처 버튼들 중 오른쪽 것
+    // 폴백: swap_horiz 아이콘 근처 오른쪽 버튼 (시작 왼쪽 / 종료 오른쪽)
     const swapIcon = [...document.querySelectorAll('i, mat-icon')].find(i => i.textContent?.trim() === 'swap_horiz');
     if (swapIcon) {
       const container = swapIcon.closest('[class*="frame"], [class*="prompt"], form') || swapIcon.parentElement?.parentElement;
       if (container) {
-        const btns = [...container.querySelectorAll('button, [role="button"]')];
-        // 오른쪽에 있는 버튼 = 종료 프레임
-        const sorted = btns.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-        const endBtn = sorted[sorted.length - 1];
+        const btns = [...container.querySelectorAll('button, [role="button"]')]
+          .filter(b => b.offsetParent !== null);
+        btns.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+        const endBtn = btns[btns.length - 1];
         if (endBtn) {
-          console.log(LOG_PREFIX, `[endFrame] swap_horiz 근처 오른쪽 버튼: "${endBtn.textContent?.trim()?.substring(0, 20)}"`);
+          console.log(LOG_PREFIX, `[endFrame] swap_horiz 근처 오른쪽 버튼 클릭: "${endBtn.textContent?.trim()?.substring(0, 20)}"`);
           endBtn.click();
           return true;
         }
       }
     }
-    console.warn(LOG_PREFIX, '[endFrame] "종료" 버튼 못 찾음');
+    console.warn(LOG_PREFIX, '[endFrame] "종료" 버튼 못 찾음. 페이지 버튼 목록:',
+      [...document.querySelectorAll('button')].filter(b => b.offsetParent !== null)
+        .slice(0, 10).map(b => `"${b.textContent?.trim()?.substring(0, 15)}"`).join(', '));
     return false;
-  }
-
-  // 에셋 패널에서 가장 최근(첫 번째) 이미지 클릭
-  async function selectFirstAssetImage(preferredImg = null) {
-    // 에셋 패널이 열릴 때까지 잠깐 대기
-    await delay(500);
-    // 선호 이미지가 있으면 먼저 시도
-    if (preferredImg) {
-      const rect = preferredImg.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        console.log(LOG_PREFIX, '[endFrame] 업로드된 이미지 직접 클릭');
-        preferredImg.click();
-        // 클릭 안 되면 부모 클릭
-        preferredImg.parentElement?.click();
-        await delay(300);
-        return true;
-      }
-    }
-    // 갤러리 이미지 중 첫 번째(가장 최근) 클릭
-    const galleryImgs = [];
-    document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img) && img.offsetParent !== null) galleryImgs.push(img);
-    });
-    if (galleryImgs.length === 0) {
-      console.warn(LOG_PREFIX, '[endFrame] 에셋 이미지 없음');
-      return false;
-    }
-    // 가장 마지막에 추가된 이미지 (DOM 순서상 마지막)
-    const target = galleryImgs[galleryImgs.length - 1];
-    console.log(LOG_PREFIX, `[endFrame] 갤러리 첫 이미지 클릭: ${target.src.substring(0, 60)}`);
-    target.click();
-    target.parentElement?.click();
-    return true;
   }
 
   function isGalleryImage(img) {
