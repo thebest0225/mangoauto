@@ -449,20 +449,6 @@ async function startAutomation(config) {
         }
 
         queue.push(item);
-        // endImageUrl은 큐 빌드 완료 후 인덱스 기반으로 붙임 (아래 참고)
-      }
-
-      // 숏폼 image-video: 다음 세그먼트 이미지를 endImageUrl로 첨부
-      if (mode === 'image-video' && useExistingImages && sm.apiType === 'shortform') {
-        const allSegs = project.segments || [];
-        const segByIndex = {};
-        allSegs.forEach(s => { segByIndex[s.index] = s; });
-        for (let i = 0; i < queue.length - 1; i++) {
-          const nextSeg = segByIndex[queue[i + 1].segmentIndex];
-          if (nextSeg?.image_url) {
-            queue[i].endImageUrl = nextSeg.image_url;
-          }
-        }
       }
     }
   } else {
@@ -925,28 +911,19 @@ function buildExecuteMessage(item) {
     message.sourceImageDataUrl = item.sourceImageDataUrl;
   }
 
-  // Attach end frame image if available (숏폼 frame-to-video)
-  if (item.endImageDataUrl) {
-    message.endImageDataUrl = item.endImageDataUrl;
-  }
-
   return message;
 }
 
 // ─── Fetch source image URL to dataUrl (for MangoHub images) ───
 async function fetchSourceImage(item) {
-  await _fetchImageUrlToDataUrl(item, 'sourceImageUrl', 'sourceImageDataUrl', '소스 이미지');
-  await _fetchImageUrlToDataUrl(item, 'endImageUrl', 'endImageDataUrl', '종료 프레임 이미지');
-}
-
-async function _fetchImageUrlToDataUrl(item, urlField, dataUrlField, label) {
-  if (item[dataUrlField]) return;
-  if (!item[urlField]) return;
+  if (item.sourceImageDataUrl) return;
+  if (!item.sourceImageUrl) return;
 
   try {
-    let imageUrl = item[urlField];
+    let imageUrl = item.sourceImageUrl;
     if (imageUrl.startsWith('/')) {
       imageUrl = MangoHubAPI.BASE_URL + imageUrl;
+      MangoUtils.log('info', 'Resolved relative image URL:', imageUrl.substring(0, 80));
     }
 
     const token = await MangoHubAPI.getSessionToken().catch(() => null);
@@ -961,16 +938,16 @@ async function _fetchImageUrlToDataUrl(item, urlField, dataUrlField, label) {
       throw new Error(`HTTP ${imgResp.status} for ${imageUrl.substring(0, 80)}`);
     }
     const imgBlob = await imgResp.blob();
-    item[dataUrlField] = await new Promise((resolve) => {
+    item.sourceImageDataUrl = await new Promise((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result);
       reader.readAsDataURL(imgBlob);
     });
-    MangoUtils.log('info', `${label} 로드 완료:`, Math.round(imgBlob.size / 1024) + 'KB');
-    broadcastLog(`${label} 로드 완료`, 'info');
+    MangoUtils.log('info', 'Source image loaded:', Math.round(imgBlob.size / 1024) + 'KB');
+    broadcastLog('소스 이미지 로드 완료', 'info');
   } catch (e) {
-    MangoUtils.log('warn', `${label} 로드 실패:`, e.message);
-    broadcastLog(`${label} 로드 실패: ${e.message}`, 'warn');
+    MangoUtils.log('warn', 'Source image fetch failed:', e.message);
+    broadcastLog(`소스 이미지 로드 실패: ${e.message}`, 'error');
   }
 }
 
@@ -1060,9 +1037,6 @@ async function sendToTab(tabId, msg) {
       await fetchSourceImage(task.item);
       if (task.item.sourceImageDataUrl) {
         msg.sourceImageDataUrl = task.item.sourceImageDataUrl;
-      }
-      if (task.item.endImageDataUrl) {
-        msg.endImageDataUrl = task.item.endImageDataUrl;
       }
     }
   }

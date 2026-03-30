@@ -214,7 +214,7 @@
     }
 
     try {
-      const { prompt, mediaType, sourceImageDataUrl, endImageDataUrl, settings } = msg;
+      const { prompt, mediaType, sourceImageDataUrl, settings } = msg;
       const mode = settings?._mode || 'image-video';
       console.log(LOG_PREFIX, 'Mode:', mode, '| Prompt:', prompt.substring(0, 60));
 
@@ -243,20 +243,6 @@
           throw err;
         }
 
-        // Step 3-b: 종료 프레임 이미지 갤러리에만 업로드 (숏폼 전용)
-        // Animate 없이 갤러리에만 올려두고, 나중에 "종료" 버튼으로 선택
-        if (endImageDataUrl) {
-          console.log(LOG_PREFIX, '[endFrame] 종료 프레임 갤러리 업로드 시작...');
-          const endImg = await uploadImageToGalleryOnly(endImageDataUrl);
-          if (endImg) {
-            console.log(LOG_PREFIX, '[endFrame] ✓ 갤러리 업로드 완료');
-            // 나중에 선택할 수 있게 참조 보관
-            window._mangoEndFrameImg = endImg;
-          } else {
-            console.warn(LOG_PREFIX, '[endFrame] ⚠ 갤러리 업로드 실패 — 종료 프레임 없이 진행');
-            window._mangoEndFrameImg = null;
-          }
-        }
       }
       checkStopped();
 
@@ -275,19 +261,6 @@
       window.postMessage({ type: 'SET_FLOW_PROMPT', text: prompt }, '*');
       console.log(LOG_PREFIX, 'Prompt sent to inject.js for fetch injection');
       await delay(200);
-
-      // Step 5.9: 종료 프레임 설정 (숏폼 전용 — 프롬프트 입력 후, generate 직전)
-      if (endImageDataUrl && window._mangoEndFrameImg !== undefined) {
-        console.log(LOG_PREFIX, '[endFrame] "종료" 버튼 클릭 → 에셋 선택...');
-        const endSet = await setEndFrameFromAssets(window._mangoEndFrameImg);
-        if (endSet) {
-          console.log(LOG_PREFIX, '[endFrame] ✓ 종료 프레임 설정 완료');
-          await delay(500);
-        } else {
-          console.warn(LOG_PREFIX, '[endFrame] ⚠ 종료 프레임 설정 실패 — 시작 프레임만으로 진행');
-        }
-        window._mangoEndFrameImg = undefined;
-      }
 
       // Step 6: Click generate
       await clickGenerate();
@@ -1625,115 +1598,6 @@
     }
 
     console.error(LOG_PREFIX, '[frame] ✗ Animate 실패');
-    return false;
-  }
-
-  // ─── End Frame: 갤러리에만 업로드 (Animate 없이) ───
-  // 반환값: 업로드된 img 요소 (나중에 에셋 선택 시 사용) 또는 null
-  async function uploadImageToGalleryOnly(imageDataUrl) {
-    const prevGallerySrcs = new Set();
-    document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img)) prevGallerySrcs.add(img.src);
-    });
-    const imgCountBefore = countGalleryImages();
-
-    const file = MangoDom.dataUrlToFile(imageDataUrl, `endframe-${Date.now()}.png`);
-    console.log(LOG_PREFIX, `[endFrame] 갤러리 업로드: ${file.size}bytes`);
-
-    const fileInput = MangoDom.findFileInput();
-    if (!fileInput) {
-      console.warn(LOG_PREFIX, '[endFrame] file input 없음');
-      return null;
-    }
-    await MangoDom.attachFileToInput(fileInput, file);
-    const uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
-    if (!uploaded) {
-      console.error(LOG_PREFIX, '[endFrame] 갤러리 업로드 실패');
-      return null;
-    }
-    await delay(500);
-
-    // 새로 추가된 이미지 요소 반환
-    let newImg = null;
-    document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) newImg = img;
-    });
-    console.log(LOG_PREFIX, `[endFrame] 업로드된 이미지: ${newImg ? newImg.src.substring(0, 60) : '요소 못 찾음'}`);
-    return newImg;
-  }
-
-  // ─── End Frame: 프롬프트 입력 후 "종료" 버튼 클릭 → 에셋에서 선택 ───
-  async function setEndFrameFromAssets(uploadedImg = null) {
-    // 1. 프롬프트 바의 "종료" 버튼 클릭
-    const endBtnClicked = await clickEndFrameButton();
-    if (!endBtnClicked) {
-      console.warn(LOG_PREFIX, '[endFrame] "종료" 버튼 클릭 실패');
-      return false;
-    }
-    await delay(800);
-
-    // 2. 에셋 패널에서 업로드된 이미지(또는 첫 번째 이미지) 선택
-    // 업로드된 img 요소가 있으면 직접 클릭, 없으면 갤러리 마지막 이미지
-    if (uploadedImg) {
-      const rect = uploadedImg.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        console.log(LOG_PREFIX, '[endFrame] 업로드된 이미지 직접 클릭');
-        uploadedImg.click();
-        uploadedImg.parentElement?.click();
-        await delay(300);
-        return true;
-      }
-    }
-
-    // 폴백: 에셋 패널 내 가장 첫 번째 이미지
-    await delay(300);
-    const galleryImgs = [];
-    document.querySelectorAll('img[src]').forEach(img => {
-      if (isGalleryImage(img) && img.offsetParent !== null) galleryImgs.push(img);
-    });
-    if (galleryImgs.length === 0) {
-      console.warn(LOG_PREFIX, '[endFrame] 에셋 이미지 없음');
-      return false;
-    }
-    const target = galleryImgs[galleryImgs.length - 1];
-    console.log(LOG_PREFIX, `[endFrame] 갤러리 마지막 이미지 클릭: ${target.src.substring(0, 60)}`);
-    target.click();
-    target.parentElement?.click();
-    return true;
-  }
-
-  // 프롬프트 바의 "종료" 버튼 클릭
-  async function clickEndFrameButton() {
-    // "종료", "End" 텍스트 또는 aria-label 매칭
-    const candidates = [...document.querySelectorAll('button, [role="button"]')];
-    for (const btn of candidates) {
-      const text = btn.textContent?.trim() || '';
-      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (text === '종료' || text === 'End' || label.includes('end frame') || label.includes('종료')) {
-        console.log(LOG_PREFIX, `[endFrame] "종료" 버튼 발견: "${text || label}"`);
-        btn.click();
-        return true;
-      }
-    }
-    // 폴백: swap_horiz 아이콘 근처 오른쪽 버튼 (시작 왼쪽 / 종료 오른쪽)
-    const swapIcon = [...document.querySelectorAll('i, mat-icon')].find(i => i.textContent?.trim() === 'swap_horiz');
-    if (swapIcon) {
-      const container = swapIcon.closest('[class*="frame"], [class*="prompt"], form') || swapIcon.parentElement?.parentElement;
-      if (container) {
-        const btns = [...container.querySelectorAll('button, [role="button"]')]
-          .filter(b => b.offsetParent !== null);
-        btns.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-        const endBtn = btns[btns.length - 1];
-        if (endBtn) {
-          console.log(LOG_PREFIX, `[endFrame] swap_horiz 근처 오른쪽 버튼 클릭: "${endBtn.textContent?.trim()?.substring(0, 20)}"`);
-          endBtn.click();
-          return true;
-        }
-      }
-    }
-    console.warn(LOG_PREFIX, '[endFrame] "종료" 버튼 못 찾음. 페이지 버튼 목록:',
-      [...document.querySelectorAll('button')].filter(b => b.offsetParent !== null)
-        .slice(0, 10).map(b => `"${b.textContent?.trim()?.substring(0, 15)}"`).join(', '));
     return false;
   }
 
