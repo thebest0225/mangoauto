@@ -427,8 +427,26 @@ async function startAutomation(config) {
       }
       broadcastLog(`썸네일 프롬프트 ${queue.length}개 로드 (전체 ${concepts.length}개, 문구 포함)`, 'info');
     } else {
-      // 세그먼트 프롬프트 큐 빌드 (기존)
-      const segments = project.segments || [];
+      // 세그먼트 프롬프트 큐 빌드
+      // mangomaker: scenes 배열을 segment 형식으로 변환
+      let segments;
+      if (sm.apiType === 'mangomaker') {
+        const scenes = project.scenes || [];
+        const analysisSces = project._analysis?.scenes || [];
+        segments = scenes.map((sc, i) => {
+          const asc = analysisSces[i] || {};
+          return {
+            index: i,
+            text: sc.script_text || asc.text || '',
+            prompt: asc.image_prompt || asc.keyword_en || '',
+            video_prompt: asc.video_prompt || '',
+            image_url: (sc.bg?.type === 'image') ? sc.bg.value : '',
+            video_url: (sc.bg?.type === 'video') ? sc.bg.value : '',
+          };
+        });
+      } else {
+        segments = project.segments || [];
+      }
 
       for (const seg of segments) {
         const promptField = mediaType === 'video' ? 'video_prompt' : 'prompt';
@@ -1154,6 +1172,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         projectId: sm.projectId,
         projectName: sm._config?.projectName || sm._config?.projectId || sm.projectId,
         platform: sm.platform,
+        apiType: sm.apiType || 'longform',
         mediaType: sm.mediaType,
         prompt: item.prompt,
         text: item.text,
@@ -1187,12 +1206,12 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         _uploadBlob = blob; // 프로젝트 폴더 저장용 보관
         if (item._isThumbnail) {
           // 썸네일 이미지 업로드
-          await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename);
+          await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
           broadcastLog(`썸네일 업로드 완료: concept ${item.segmentIndex}`, 'success');
         } else if (sm.mediaType === 'video') {
-          await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
+          await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
         } else {
-          await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
+          await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
         }
         sm.markSuccess({ segmentIndex: item.segmentIndex });
         broadcastState(getExtendedSnapshot());
@@ -1417,6 +1436,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           projectId: sm.projectId,
           projectName: sm._config?.projectName || sm._config?.projectId || sm.projectId,
           platform: sm.platform,
+          apiType: sm.apiType || 'longform',
           mediaType: sm.mediaType,
           prompt: item.prompt,
           text: item.text,
@@ -1444,12 +1464,12 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
           }
           _uploadBlob = blob;
           if (item._isThumbnail) {
-            await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename);
+            await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
             broadcastLog(`썸네일 업로드 완료: concept ${item.segmentIndex}`, 'success');
           } else if (sm.mediaType === 'video') {
-            await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename);
+            await MangoHubAPI.uploadVideo(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
           } else {
-            await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename);
+            await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
           }
           broadcastLog(`업로드 완료: ${filename}`, 'success');
           sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex });
@@ -2276,11 +2296,11 @@ async function uploadApprovedItems() {
 
       const filename = `${String(item.segmentIndex + 1).padStart(3, '0')}_review_${Date.now()}.${item.mediaType === 'video' ? 'mp4' : 'png'}`;
       if (item._isThumbnail) {
-        await MangoHubAPI.uploadThumbnailImage(item.projectId, item.segmentIndex, blob, filename);
+        await MangoHubAPI.uploadThumbnailImage(item.projectId, item.segmentIndex, blob, filename, item.apiType || 'longform');
       } else if (item.mediaType === 'video') {
-        await MangoHubAPI.uploadVideo(item.projectId, item.segmentIndex, blob, filename);
+        await MangoHubAPI.uploadVideo(item.projectId, item.segmentIndex, blob, filename, item.apiType || 'longform');
       } else {
-        await MangoHubAPI.uploadImage(item.projectId, item.segmentIndex, blob, filename);
+        await MangoHubAPI.uploadImage(item.projectId, item.segmentIndex, blob, filename, item.apiType || 'longform');
       }
 
       item.status = 'uploaded';
