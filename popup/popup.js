@@ -11,7 +11,7 @@ let currentPlatform = 'grok';
 let currentMode = 'text-image';  // text-image | text-video | image-video | image-image
 let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
-let currentApiType = 'longform';  // 'longform' | 'shortform'
+let currentApiType = 'longform';  // 'longform' | 'shortform' | 'mangomaker'
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
 let reviewItems = [];
@@ -154,7 +154,17 @@ async function fetchProjectStatuses(projects) {
 
 // 프로젝트 상세 데이터로 완성도 판별
 function getProjectStatus(project) {
-  const segments = project.segments || [];
+  // mangomaker: scenes 배열 사용
+  let segments;
+  if (currentApiType === 'mangomaker') {
+    const scenes = project.scenes || [];
+    segments = scenes.map(sc => ({
+      image_url: sc.bg?.type === 'image' ? sc.bg.value : '',
+      video_url: sc.bg?.type === 'video' ? sc.bg.value : '',
+    }));
+  } else {
+    segments = project.segments || [];
+  }
   if (segments.length === 0) return 'empty';
   const withImage = segments.filter(s => s.image_url).length;
   const withVideo = segments.filter(s => s.video_url).length;
@@ -503,7 +513,10 @@ async function loadProject() {
     updateQueuePreview();
 
     const thumbCount = (project.thumbnail_concepts?.concepts || []).filter(c => c.prompt).length;
-    addLog(`불러옴: ${project.name} (세그먼트 ${(project.segments || []).length}개, 썸네일 ${thumbCount}개)`, 'info');
+    const sceneCount = currentApiType === 'mangomaker'
+      ? (project.scenes || []).length
+      : (project.segments || []).length;
+    addLog(`불러옴: ${project.name} (${currentApiType === 'mangomaker' ? '씬' : '세그먼트'} ${sceneCount}개, 썸네일 ${thumbCount}개)`, 'info');
   } catch (err) {
     addLog('프로젝트 로드 실패: ' + err.message, 'error');
   }
