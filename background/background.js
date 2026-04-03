@@ -428,16 +428,16 @@ async function startAutomation(config) {
       broadcastLog(`썸네일 프롬프트 ${queue.length}개 로드 (전체 ${concepts.length}개, 문구 포함)`, 'info');
     } else {
       // 세그먼트 프롬프트 큐 빌드
-      // mangomaker: scenes 배열을 segment 형식으로 변환
+      // mangomaker: _analysis.scenes 기준으로 변환 (scenes[]는 이미지 생성 전 비어있을 수 있음)
       let segments;
       if (sm.apiType === 'mangomaker') {
-        const scenes = project.scenes || [];
         const analysisSces = project._analysis?.scenes || [];
-        segments = scenes.map((sc, i) => {
-          const asc = analysisSces[i] || {};
+        const scenes = project.scenes || [];
+        segments = analysisSces.map((asc, i) => {
+          const sc = scenes[i] || {};
           return {
             index: i,
-            text: sc.script_text || asc.text || '',
+            text: asc.text || sc.script_text || '',
             prompt: asc.image_prompt || asc.keyword_en || '',
             video_prompt: asc.video_prompt || '',
             image_url: (sc.bg?.type === 'image') ? sc.bg.value : '',

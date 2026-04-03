@@ -523,14 +523,15 @@ async function loadProject() {
 }
 
 // mangomaker scenes → segment 형식으로 변환 (popup용)
+// _analysis.scenes 기준으로 순회 (scenes[]는 이미지 생성 전 비어있을 수 있음)
 function getMakerSegments(project) {
-  const scenes = project.scenes || [];
   const analysisScenes = project._analysis?.scenes || [];
-  return scenes.map((sc, i) => {
-    const asc = analysisScenes[i] || {};
+  const scenes = project.scenes || [];
+  return analysisScenes.map((asc, i) => {
+    const sc = scenes[i] || {};
     return {
       index: i,
-      text: sc.script_text || asc.text || '',
+      text: asc.text || sc.script_text || '',
       prompt: asc.image_prompt || asc.keyword_en || '',
       video_prompt: asc.video_prompt || '',
       image_url: sc.bg?.type === 'image' ? sc.bg.value : '',
