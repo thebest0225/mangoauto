@@ -522,6 +522,23 @@ async function loadProject() {
   }
 }
 
+// mangomaker scenes → segment 형식으로 변환 (popup용)
+function getMakerSegments(project) {
+  const scenes = project.scenes || [];
+  const analysisScenes = project._analysis?.scenes || [];
+  return scenes.map((sc, i) => {
+    const asc = analysisScenes[i] || {};
+    return {
+      index: i,
+      text: sc.script_text || asc.text || '',
+      prompt: asc.image_prompt || asc.keyword_en || '',
+      video_prompt: asc.video_prompt || '',
+      image_url: sc.bg?.type === 'image' ? sc.bg.value : '',
+      video_url: sc.bg?.type === 'video' ? sc.bg.value : '',
+    };
+  });
+}
+
 // ─── Update Project Info based on content type ───
 function updateProjectInfo() {
   if (!currentProject) return;
@@ -542,14 +559,17 @@ function updateProjectInfo() {
     thumbInfo.classList.add('hidden');
   } else {
     // 세그먼트 정보 표시
-    const segments = currentProject.segments || [];
+    const segments = currentApiType === 'mangomaker'
+      ? getMakerSegments(currentProject)
+      : (currentProject.segments || []);
     const withImagePrompt = segments.filter(s => s.prompt).length;
     const withVideoPrompt = segments.filter(s => s.video_prompt).length;
     const withImage = segments.filter(s => s.image_url).length;
     const withVideo = segments.filter(s => s.video_url).length;
+    const unitName = currentApiType === 'mangomaker' ? '씬' : '세그먼트';
 
     segmentCount.textContent =
-      `${segments.length}개 세그먼트 | 이미지프롬프트 ${withImagePrompt} | 영상프롬프트 ${withVideoPrompt} | 이미지 ${withImage}장 | 영상 ${withVideo}개`;
+      `${segments.length}개 ${unitName} | 이미지프롬프트 ${withImagePrompt} | 영상프롬프트 ${withVideoPrompt} | 이미지 ${withImage}장 | 영상 ${withVideo}개`;
 
     // 썸네일 요약도 하단에 표시
     const concepts = currentProject.thumbnail_concepts?.concepts || [];
@@ -596,8 +616,10 @@ function updateQueuePreview() {
         });
       }
     } else {
-      // 세그먼트 큐 (기존)
-      const segments = currentProject.segments || [];
+      // 세그먼트 큐
+      const segments = currentApiType === 'mangomaker'
+        ? getMakerSegments(currentProject)
+        : (currentProject.segments || []);
       for (const seg of segments) {
         let prompt, hasExisting;
         if (currentMode === 'text-image') {
