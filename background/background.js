@@ -1097,7 +1097,7 @@ async function handleGenerationComplete(msg, sender) {
   if (concurrentCount > 1 && activeTasks.size > 0) {
     await handleConcurrentComplete(senderTabId, mediaDataUrl, true, null, mediaUrl, uiDownloaded, fallbackUrl);
   } else {
-    await handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded, fallbackUrl);
+    await handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded, fallbackUrl, senderTabId);
   }
 }
 
@@ -1122,7 +1122,7 @@ async function handleGenerationError(msg, sender) {
 }
 
 // ─── Sequential complete handler ───
-async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = false, fallbackUrl = null) {
+async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = false, fallbackUrl = null, senderTabId = null) {
   const item = sm.currentItem;
   sm.markDownloading();
 
@@ -1140,11 +1140,35 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
-    } else if (dlInfo?.url?.startsWith('blob:') && fallbackUrl) {
-      // blob: URL은 service worker에서 fetch 불가 → fallbackUrl 사용
-      broadcastLog(`blob URL 감지 (${dlInfo.url.substring(0, 40)}) → 원본 URL 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
-      mediaUrl = fallbackUrl;
+    } else if (dlInfo?.url?.startsWith('blob:')) {
+      // blob: URL → content script 경유 fetch 시도 (SW에서 blob: 직접 접근 불가)
       _uiDownloadId = dlInfo.downloadId || null;
+      let fetchedViaContentScript = false;
+      if (senderTabId) {
+        try {
+          broadcastLog(`blob URL 감지 → content script 경유 fetch 시도...`, 'info');
+          const result = await chrome.tabs.sendMessage(senderTabId, { type: 'FETCH_BLOB_AS_BASE64', url: dlInfo.url });
+          if (result?.ok && result.dataUrl) {
+            mediaDataUrl = result.dataUrl;
+            mediaUrl = null;
+            fetchedViaContentScript = true;
+            broadcastLog(`✓ blob fetch 성공 (${Math.round(result.size / 1024)}KB) — 다운로드 파일 직접 사용`, 'info');
+          } else {
+            broadcastLog(`content script blob fetch 실패: ${result?.error || '알 수 없음'} → 원본 URL 폴백`, 'warn');
+          }
+        } catch (e) {
+          broadcastLog(`content script 연결 실패: ${e.message} → 원본 URL 폴백`, 'warn');
+        }
+      }
+      if (!fetchedViaContentScript) {
+        if (fallbackUrl) {
+          mediaUrl = fallbackUrl;
+          broadcastLog(`폴백: 원본 URL 사용 (${fallbackUrl.substring(0, 60)})`, 'warn');
+        } else {
+          mediaUrl = null;
+          broadcastLog('blob fetch 실패, fallbackUrl 없음 — 업로드 스킵', 'error');
+        }
+      }
     } else if (fallbackUrl) {
       broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
       mediaUrl = fallbackUrl;
@@ -1405,10 +1429,34 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       mediaUrl = dlInfo.url;
       _uiDownloadId = dlInfo.downloadId || null;
       broadcastLog(`다운로드 URL 복구: ${mediaUrl.substring(0, 80)}`, 'info');
-    } else if (dlInfo?.url?.startsWith('blob:') && fallbackUrl) {
-      broadcastLog(`blob URL 감지 → 원본 URL 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
-      mediaUrl = fallbackUrl;
+    } else if (dlInfo?.url?.startsWith('blob:')) {
+      // blob: URL → content script 경유 fetch 시도 (concurrent)
       _uiDownloadId = dlInfo.downloadId || null;
+      let fetchedViaContentScript = false;
+      if (tabId) {
+        try {
+          broadcastLog(`blob URL 감지 (concurrent) → content script 경유 fetch 시도...`, 'info');
+          const result = await chrome.tabs.sendMessage(tabId, { type: 'FETCH_BLOB_AS_BASE64', url: dlInfo.url });
+          if (result?.ok && result.dataUrl) {
+            mediaDataUrl = result.dataUrl;
+            mediaUrl = null;
+            fetchedViaContentScript = true;
+            broadcastLog(`✓ blob fetch 성공 (${Math.round(result.size / 1024)}KB)`, 'info');
+          } else {
+            broadcastLog(`content script blob fetch 실패: ${result?.error || '알 수 없음'} → 원본 URL 폴백`, 'warn');
+          }
+        } catch (e) {
+          broadcastLog(`content script 연결 실패: ${e.message} → 원본 URL 폴백`, 'warn');
+        }
+      }
+      if (!fetchedViaContentScript) {
+        if (fallbackUrl) {
+          mediaUrl = fallbackUrl;
+          broadcastLog(`폴백: 원본 URL 사용 (${fallbackUrl.substring(0, 60)})`, 'warn');
+        } else {
+          mediaUrl = null;
+        }
+      }
     } else if (fallbackUrl) {
       broadcastLog(`ui-download 타임아웃 → 원본 URL로 폴백: ${fallbackUrl.substring(0, 60)}`, 'warn');
       mediaUrl = fallbackUrl;

@@ -147,6 +147,28 @@
       sendResponse({ ok: true });
       return;
     }
+    // ─── blob: URL → base64 변환 (SW에서 blob: 접근 불가이므로 content script 경유) ───
+    if (msg.type === 'FETCH_BLOB_AS_BASE64') {
+      (async () => {
+        try {
+          const resp = await fetch(msg.url);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const blob = await resp.blob();
+          // 40MB 초과 시 SW 메시지 한도 초과 위험 → 거부
+          if (blob.size > 40 * 1024 * 1024) {
+            sendResponse({ ok: false, error: `too_large:${blob.size}` });
+            return;
+          }
+          const reader = new FileReader();
+          reader.onloadend = () => sendResponse({ ok: true, dataUrl: reader.result, size: blob.size });
+          reader.onerror = () => sendResponse({ ok: false, error: 'FileReader error' });
+          reader.readAsDataURL(blob);
+        } catch (e) {
+          sendResponse({ ok: false, error: e.message });
+        }
+      })();
+      return true; // async response
+    }
   });
 
   // ─── Listen for messages from inject.js (MAIN world) ───
