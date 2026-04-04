@@ -1003,12 +1003,12 @@ function updateQueueListFromState(state) {
 
   const isCompleted = state.state === 'COMPLETED';
 
-  // 결과 맵 빌드 (segmentIndex → success)
+  // 결과 맵 빌드 (segmentIndex → result object)
   // MangoHub: segmentIndex(1-based)로 매칭, Standalone: index(0-based)로 매칭
   const doneMap = new Map();
   for (const r of state.results) {
     const key = r.segmentIndex !== undefined ? r.segmentIndex : r.index;
-    doneMap.set(key, r.success);
+    doneMap.set(key, r);
   }
 
   // 파이프라인 모드: 현재 진행 중인 항목 인덱스 (segmentIndex 기준)
@@ -1026,9 +1026,34 @@ function updateQueueListFromState(state) {
 
     if (doneMap.has(segIdx)) {
       // 완료 또는 실패
-      const success = doneMap.get(segIdx);
+      const result = doneMap.get(segIdx);
+      const success = result.success;
       statusEl.textContent = success ? '완료' : '실패';
       statusEl.className = `queue-status ${success ? 'qs-done' : 'qs-fail'}`;
+      // 업로드 실패 시 재업로드 버튼 추가
+      if (!success && result.uploadFailed && !item.querySelector('.reupload-btn')) {
+        const btn = document.createElement('button');
+        btn.className = 'reupload-btn';
+        btn.textContent = '재업';
+        btn.title = 'MangoHub에 재업로드';
+        btn.style.cssText = 'margin-left:4px;padding:1px 6px;font-size:10px;background:#f59e0b;color:#000;border:none;border-radius:3px;cursor:pointer;font-weight:600;';
+        btn.onclick = async (e) => {
+          e.stopPropagation();
+          btn.disabled = true; btn.textContent = '...';
+          const res = await sendBg({ type: 'REUPLOAD_ITEM', segmentIndex: segIdx });
+          if (res?.success) {
+            btn.textContent = '✓';
+            btn.style.background = '#22c55e';
+            statusEl.textContent = '완료';
+            statusEl.className = 'queue-status qs-done';
+          } else {
+            btn.textContent = '재업';
+            btn.disabled = false;
+            addLog(`재업로드 실패: ${res?.error || '알 수 없는 오류'}`, 'error');
+          }
+        };
+        statusEl.parentElement.appendChild(btn);
+      }
     } else if (activeSet.size > 0 ? activeSet.has(segIdx) : segIdx === currentSegIdx) {
       // 진행중 (파이프라인: activeIndices, 순차: currentItem.segmentIndex)
       statusEl.textContent = '진행중';

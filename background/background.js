@@ -357,6 +357,9 @@ async function handleMessage(msg, sender) {
     case 'REVIEW_CLEAR_COMPLETED':
       return await clearCompletedReviewItems();
 
+    case 'REUPLOAD_ITEM':
+      return await reuploadItem(msg.segmentIndex);
+
     // ── API Key Export (cross-profile sharing) ──
     case 'EXPORT_API_KEY':
       return await exportApiKey(msg.apiKey);
@@ -1224,8 +1227,9 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         }
         // 업로드 실패: 생성은 성공했으므로 실패 기록 후 다음으로 진행
         // markError 대신 직접 결과에 실패 기록 + COOLDOWN으로 전환
+        // mediaUrl/mediaDataUrl 보관 — 재업로드용
         broadcastLog(`업로드 실패: ${err.message} (다음 항목 진행)`, 'error');
-        sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message });
+        sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message, uploadFailed: true, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
         sm.transition(AutoState.COOLDOWN);
       }
 
@@ -1687,6 +1691,44 @@ async function handleCooldownAndNext() {
     if (sm.state === AutoState.PREPARING) {
       await runLoop();
     }
+  }
+}
+
+// ─── Re-upload a single item (upload failed but generation succeeded) ───
+async function reuploadItem(segmentIndex) {
+  const result = sm.results.find(r => r.segmentIndex === segmentIndex && r.uploadFailed);
+  if (!result) return { error: '재업로드 가능한 항목을 찾을 수 없습니다' };
+  if (!sm.projectId) return { error: '프로젝트 ID가 없습니다' };
+
+  const mediaUrl = result.mediaUrl;
+  const mediaDataUrl = result.mediaDataUrl;
+  if (!mediaUrl && !mediaDataUrl) return { error: '미디어 URL이 없습니다 — 재생성이 필요합니다' };
+
+  broadcastLog(`재업로드 시도: segment ${segmentIndex}`, 'info');
+  try {
+    let blob;
+    if (mediaDataUrl) {
+      blob = await fetch(mediaDataUrl).then(r => r.blob());
+    } else {
+      blob = await fetchMediaWithCookies(mediaUrl);
+    }
+    const filename = generateFilename(segmentIndex - 1, sm.platform, sm.mediaType);
+    if (result.isThumbnail) {
+      await MangoHubAPI.uploadThumbnailImage(sm.projectId, segmentIndex, blob, filename, sm.apiType);
+    } else if (sm.mediaType === 'video') {
+      await MangoHubAPI.uploadVideo(sm.projectId, segmentIndex, blob, filename, sm.apiType);
+    } else {
+      await MangoHubAPI.uploadImage(sm.projectId, segmentIndex, blob, filename, sm.apiType);
+    }
+    result.success = true;
+    result.uploadFailed = false;
+    delete result.error;
+    broadcastState(getExtendedSnapshot());
+    broadcastLog(`재업로드 완료: segment ${segmentIndex}`, 'success');
+    return { success: true };
+  } catch (err) {
+    broadcastLog(`재업로드 실패: ${err.message}`, 'error');
+    return { error: err.message };
   }
 }
 
