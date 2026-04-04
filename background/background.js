@@ -1132,6 +1132,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
   // ui-download 마커 처리: chrome.downloads에서 실제 URL 찾기
   let _uiDownloadId = null; // UI 다운로드 ID (나중에 삭제용)
   if (mediaUrl === 'ui-download') {
+    if (mediaDataUrl) {
+      // dataUrl이 이미 있음 (inject.js blob 캡처) → URL 검색 불필요, downloadId만 찾아서 정리용으로 저장
+      broadcastLog('ui-download + dataUrl 있음 → downloadId 검색 (정리용)...', 'info');
+      const dlInfo = await findRecentDownloadUrl(30000, sm.mediaType, 0);
+      _uiDownloadId = dlInfo?.downloadId || null;
+      mediaUrl = null; // dataUrl 사용하므로 mediaUrl 불필요
+      broadcastLog(`Flow UI 다운로드 정리 예약: id=${_uiDownloadId}`, 'info');
+    } else {
     // 비디오 1080p 업스케일은 서버 처리 시간이 길므로 폴링 대기 (최대 5분)
     const pollTimeout = sm.mediaType === 'video' ? 300000 : 0;
     broadcastLog(`ui-download 감지 (${sm.mediaType}) — chrome.downloads에서 실제 URL 검색${pollTimeout ? ` (업스케일 대기 최대 ${pollTimeout/1000}초)` : ''}...`, 'info');
@@ -1177,6 +1185,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음 — 업로드 스킵', 'warn');
       mediaUrl = null;
     }
+    } // end else (mediaDataUrl 없는 경우)
   }
 
   // Flow 비디오 품질 업스케일 적용 (UI가 이미 최적 품질로 다운로드한 경우 스킵)
@@ -1422,6 +1431,13 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   // ui-download 마커 처리 (concurrent)
   let _uiDownloadId = null;
   if (mediaUrl === 'ui-download') {
+    if (mediaDataUrl) {
+      // dataUrl 이미 있음 → downloadId만 찾아서 정리용으로 저장
+      broadcastLog('ui-download + dataUrl 있음 (concurrent) → downloadId 검색...', 'info');
+      const dlInfo = await findRecentDownloadUrl(30000, sm.mediaType, 0);
+      _uiDownloadId = dlInfo?.downloadId || null;
+      mediaUrl = null;
+    } else {
     const pollTimeout = sm.mediaType === 'video' ? 300000 : 0;
     broadcastLog(`ui-download 감지 (concurrent, ${sm.mediaType}) — chrome.downloads에서 실제 URL 검색${pollTimeout ? ` (업스케일 대기 최대 ${pollTimeout/1000}초)` : ''}...`, 'info');
     const dlInfo = await findRecentDownloadUrl(120000, sm.mediaType, pollTimeout);
@@ -1465,6 +1481,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
       broadcastLog('ui-download: 최근 다운로드를 찾을 수 없음', 'warn');
       mediaUrl = null;
     }
+    } // end else (mediaDataUrl 없는 경우, concurrent)
   }
 
   // Flow 비디오 품질 업스케일 적용 (concurrent) — UI 다운로드 시 스킵

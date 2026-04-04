@@ -344,15 +344,14 @@
             console.log(LOG_PREFIX, '[1080p] URL 캡처 실패 → ui-download 폴백');
           }
         } else if (downloaded) {
-          // 720p/원본: inject.js가 createObjectURL 시점에 캡처한 dataUrl 우선 사용
-          // (blob URL은 revokeObjectURL 후 즉시 만료되므로 dataUrl로 직접 받아야 함)
+          // 720p/원본: 항상 'ui-download' 마커 사용 (background.js가 Flow UI 다운로드 파일 정리)
+          // dataUrl이 캡처됐으면 함께 전달 → background.js가 URL fetch 없이 바로 업로드
+          finalMediaUrl = 'ui-download';
           if (capturedVideoDataUrl) {
             finalMediaDataUrl = capturedVideoDataUrl;
-            console.log(LOG_PREFIX, `✓ [720p] inject.js blob 캡처 dataUrl 사용`);
+            console.log(LOG_PREFIX, `✓ [720p] blob dataUrl 캡처 성공 → dataUrl+ui-download 전달`);
           } else {
-            // 캡처 실패 (blob 타입이 video/*가 아닌 경우 등) → ui-download 마커로 폴백
-            finalMediaUrl = 'ui-download';
-            console.log(LOG_PREFIX, '[720p] blob dataUrl 캡처 없음 → ui-download 폴백');
+            console.log(LOG_PREFIX, '[720p] blob dataUrl 캡처 없음 → ui-download만 전달 (chrome.downloads 검색)');
           }
         } else {
           // 다운로드 실패 → 원본 videoUrl 사용 (fallback)
