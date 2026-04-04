@@ -19,6 +19,7 @@
   let isProcessing = false;
   let shouldStop = false;
   let capturedVideoDownloadUrl = null; // inject.js에서 캡처된 비디오 HTTP URL
+  let capturedVideoDataUrl = null;     // inject.js가 createObjectURL 시점에 캡처한 비디오 dataUrl
 
   // ─── XPath Selectors (verified) ───
   const SELECTORS = {
@@ -187,6 +188,10 @@
       capturedVideoDownloadUrl = event.data.url;
       console.log(LOG_PREFIX, `비디오 다운로드 URL 캡처됨: ${event.data.url?.substring(0, 100)}`);
     }
+    if (event.data?.type === 'VIDEO_BLOB_CAPTURED') {
+      capturedVideoDataUrl = event.data.dataUrl;
+      console.log(LOG_PREFIX, `비디오 blob dataUrl 캡처됨: ${Math.round(event.data.size / 1024)}KB`);
+    }
     if (event.data?.type === 'UPSCALED_IMAGE_BLOB') {
       // 여러 blob이 감지될 수 있으므로 가장 큰 것만 유지 (= 업스케일 이미지)
       const newSize = event.data.size || 0;
@@ -311,6 +316,7 @@
         // 1080p 업스케일용: 다운로드 메뉴 클릭 전에 캡처 URL 초기화
         // (클릭 후 바로 fetch 시작되므로 클릭 전에 초기화해야 함)
         capturedVideoDownloadUrl = null;
+        capturedVideoDataUrl = null;
         console.log(LOG_PREFIX, `${videoQuality} UI 다운로드 시도...`);
         const dlResult = await downloadVideoViaMenu(videoQuality);
         const downloaded = !!dlResult;
@@ -338,39 +344,15 @@
             console.log(LOG_PREFIX, '[1080p] URL 캡처 실패 → ui-download 폴백');
           }
         } else if (downloaded) {
-          // 720p/원본: 다운로드 직후 blob URL로 즉시 fetch (만료 전)
-          // capturedVideoDownloadUrl = inject.js가 intercept한 blob URL
-          const blobUrl = capturedVideoDownloadUrl;
-          if (blobUrl?.startsWith('blob:')) {
-            try {
-              console.log(LOG_PREFIX, `[720p] blob URL 즉시 fetch 시도: ${blobUrl.substring(0, 60)}`);
-              const resp = await fetch(blobUrl);
-              if (resp.ok) {
-                const blob = await resp.blob();
-                if (blob.size > 0 && blob.size < 60 * 1024 * 1024) {
-                  finalMediaDataUrl = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(blob);
-                  });
-                  console.log(LOG_PREFIX, `✓ [720p] blob fetch 성공 (${Math.round(blob.size / 1024)}KB) — dataUrl로 전달`);
-                } else {
-                  console.warn(LOG_PREFIX, `[720p] blob 크기 문제 (${blob.size}bytes) → ui-download 폴백`);
-                  finalMediaUrl = 'ui-download';
-                }
-              } else {
-                console.warn(LOG_PREFIX, `[720p] blob fetch HTTP ${resp.status} → ui-download 폴백`);
-                finalMediaUrl = 'ui-download';
-              }
-            } catch (e) {
-              console.warn(LOG_PREFIX, `[720p] blob fetch 실패: ${e.message} → ui-download 폴백`);
-              finalMediaUrl = 'ui-download';
-            }
+          // 720p/원본: inject.js가 createObjectURL 시점에 캡처한 dataUrl 우선 사용
+          // (blob URL은 revokeObjectURL 후 즉시 만료되므로 dataUrl로 직접 받아야 함)
+          if (capturedVideoDataUrl) {
+            finalMediaDataUrl = capturedVideoDataUrl;
+            console.log(LOG_PREFIX, `✓ [720p] inject.js blob 캡처 dataUrl 사용`);
           } else {
-            // blob URL 없음 (inject.js 캡처 실패 등) → ui-download 마커
+            // 캡처 실패 (blob 타입이 video/*가 아닌 경우 등) → ui-download 마커로 폴백
             finalMediaUrl = 'ui-download';
-            console.log(LOG_PREFIX, '[720p] blob URL 없음 → ui-download 폴백');
+            console.log(LOG_PREFIX, '[720p] blob dataUrl 캡처 없음 → ui-download 폴백');
           }
         } else {
           // 다운로드 실패 → 원본 videoUrl 사용 (fallback)

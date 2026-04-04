@@ -593,7 +593,7 @@
     const origCreateObjectURL = URL.createObjectURL.bind(URL);
     URL.createObjectURL = function(obj) {
       const blobUrl = origCreateObjectURL(obj);
-      // 활성화 상태에서만 이미지 blob 캡처 (500KB 이상)
+      // 이미지 blob 캡처 (활성화 상태, 500KB 이상)
       if (window.__mangoBlobCapture && obj instanceof Blob && obj.type?.startsWith('image/') && obj.size > 500000) {
         console.log(LOG_PREFIX, `🖼️ 이미지 blob 감지: ${obj.type}, ${Math.round(obj.size / 1024)}KB`);
         const reader = new FileReader();
@@ -605,6 +605,22 @@
             mimeType: obj.type
           }, '*');
           console.log(LOG_PREFIX, `🖼️ 업스케일 이미지 dataUrl 전달 (${Math.round(obj.size / 1024)}KB)`);
+        };
+        reader.readAsDataURL(obj);
+      }
+      // 비디오 blob 캡처 (항상 활성화, 1MB 이상 — 720p/원본 다운로드 시 blob 즉시 읽기)
+      // Flow는 createObjectURL 후 바로 revokeObjectURL하므로 여기서 즉시 읽어야 함
+      if (obj instanceof Blob && (obj.type?.startsWith('video/') || obj.type === 'application/octet-stream') && obj.size > 1024 * 1024) {
+        console.log(LOG_PREFIX, `🎬 비디오 blob 감지: ${obj.type}, ${Math.round(obj.size / 1024)}KB — 즉시 캡처`);
+        const reader = new FileReader();
+        reader.onload = () => {
+          window.postMessage({
+            type: 'VIDEO_BLOB_CAPTURED',
+            dataUrl: reader.result,
+            size: obj.size,
+            mimeType: obj.type
+          }, '*');
+          console.log(LOG_PREFIX, `🎬 비디오 dataUrl 전달 완료 (${Math.round(obj.size / 1024)}KB)`);
         };
         reader.readAsDataURL(obj);
       }
