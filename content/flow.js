@@ -323,8 +323,10 @@
         }
 
         // 1080p: inject.js가 캡처한 HTTP URL 대기 → 직접 전달
-        // 720p: videoUrl을 직접 전달
-        let finalMediaUrl;
+        // 720p: 다운로드 직후 blob URL이 살아있을 때 바로 fetch → mediaDataUrl로 전달
+        let finalMediaUrl = null;
+        let finalMediaDataUrl = null;
+
         if (actualQuality === '1080p') {
           console.log(LOG_PREFIX, '[1080p] 업스케일 비디오 URL 대기 (inject.js 캡처, 최대 5분)...');
           const capturedUrl = await waitForCapturedVideoUrl(300000);
@@ -332,19 +334,54 @@
             finalMediaUrl = capturedUrl;
             console.log(LOG_PREFIX, `[1080p] 캡처된 HTTP URL 사용: ${capturedUrl.substring(0, 100)}`);
           } else {
-            // 캡처 실패 → ui-download 마커 폴백
             finalMediaUrl = 'ui-download';
             console.log(LOG_PREFIX, '[1080p] URL 캡처 실패 → ui-download 폴백');
           }
+        } else if (downloaded) {
+          // 720p/원본: 다운로드 직후 blob URL로 즉시 fetch (만료 전)
+          // capturedVideoDownloadUrl = inject.js가 intercept한 blob URL
+          const blobUrl = capturedVideoDownloadUrl;
+          if (blobUrl?.startsWith('blob:')) {
+            try {
+              console.log(LOG_PREFIX, `[720p] blob URL 즉시 fetch 시도: ${blobUrl.substring(0, 60)}`);
+              const resp = await fetch(blobUrl);
+              if (resp.ok) {
+                const blob = await resp.blob();
+                if (blob.size > 0 && blob.size < 60 * 1024 * 1024) {
+                  finalMediaDataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                  });
+                  console.log(LOG_PREFIX, `✓ [720p] blob fetch 성공 (${Math.round(blob.size / 1024)}KB) — dataUrl로 전달`);
+                } else {
+                  console.warn(LOG_PREFIX, `[720p] blob 크기 문제 (${blob.size}bytes) → ui-download 폴백`);
+                  finalMediaUrl = 'ui-download';
+                }
+              } else {
+                console.warn(LOG_PREFIX, `[720p] blob fetch HTTP ${resp.status} → ui-download 폴백`);
+                finalMediaUrl = 'ui-download';
+              }
+            } catch (e) {
+              console.warn(LOG_PREFIX, `[720p] blob fetch 실패: ${e.message} → ui-download 폴백`);
+              finalMediaUrl = 'ui-download';
+            }
+          } else {
+            // blob URL 없음 (inject.js 캡처 실패 등) → ui-download 마커
+            finalMediaUrl = 'ui-download';
+            console.log(LOG_PREFIX, '[720p] blob URL 없음 → ui-download 폴백');
+          }
         } else {
-          // UI가 이미 다운로드했으면 'ui-download' 마커 우선 사용
-          // (videoUrl은 Google 인증 필요 → Service Worker에서 fetch hang)
-          finalMediaUrl = downloaded ? 'ui-download' : (videoUrl || null);
+          // 다운로드 실패 → 원본 videoUrl 사용 (fallback)
+          finalMediaUrl = videoUrl || null;
         }
-        console.log(LOG_PREFIX, `GENERATION_COMPLETE: mediaUrl=${(finalMediaUrl || '').substring(0, 60)}, quality=${actualQuality}, uiDownloaded=${downloaded}`);
+
+        console.log(LOG_PREFIX, `GENERATION_COMPLETE: mediaUrl=${(finalMediaUrl || '').substring(0, 60)}, hasDataUrl=${!!finalMediaDataUrl}, quality=${actualQuality}, uiDownloaded=${downloaded}`);
         chrome.runtime.sendMessage({
           type: 'GENERATION_COMPLETE',
           mediaUrl: finalMediaUrl,
+          mediaDataUrl: finalMediaDataUrl || undefined,
           fallbackUrl: videoUrl || null,
           mediaType: 'video',
           uiDownloaded: downloaded
