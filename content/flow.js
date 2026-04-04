@@ -315,7 +315,9 @@
             console.log(LOG_PREFIX, '[1080p] URL 캡처 실패 → ui-download 폴백');
           }
         } else {
-          finalMediaUrl = videoUrl || (downloaded ? 'ui-download' : null);
+          // UI가 이미 다운로드했으면 'ui-download' 마커 우선 사용
+          // (videoUrl은 Google 인증 필요 → Service Worker에서 fetch hang)
+          finalMediaUrl = downloaded ? 'ui-download' : (videoUrl || null);
         }
         console.log(LOG_PREFIX, `GENERATION_COMPLETE: mediaUrl=${(finalMediaUrl || '').substring(0, 60)}, quality=${actualQuality}, uiDownloaded=${downloaded}`);
         chrome.runtime.sendMessage({
