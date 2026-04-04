@@ -1199,6 +1199,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
   }
 
   let _uploadBlob = null; // 업로드용 blob (프로젝트 폴더 저장 + 중복 다운로드 방지)
+  broadcastLog(`[upload-check] mode=${sm.mode}, projectId=${sm.projectId}, mediaUrl=${!!mediaUrl}, mediaDataUrl=${!!mediaDataUrl}, reviewMode=${reviewModeEnabled}`, 'info');
   if (sm.mode === 'mangohub' && sm.projectId) {
     if (reviewModeEnabled) {
       // 검토 모드: 즉시 업로드하지 않고 검토 큐에 추가
@@ -1229,11 +1230,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     } else {
       // 기존 동작: 즉시 업로드
       sm.markUploading();
+      broadcastLog(`업로드 시작: segment=${item.segmentIndex}, mediaDataUrl=${!!mediaDataUrl}, mediaUrl=${!!mediaUrl}`, 'info');
       try {
         let blob;
         if (mediaDataUrl) {
           // dataUrl 있으면 우선 사용 (2K/4K fife URL에서 변환된 경우 포함)
+          broadcastLog(`dataUrl → blob 변환 중...`, 'info');
           blob = await fetch(mediaDataUrl).then(r => r.blob());
+          broadcastLog(`blob 변환 완료: ${Math.round(blob.size/1024)}KB`, 'info');
         } else if (mediaUrl) {
           blob = await fetchMediaWithCookies(mediaUrl);
         } else {
