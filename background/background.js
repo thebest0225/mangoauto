@@ -1257,6 +1257,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         sm.markSuccess({ segmentIndex: item.segmentIndex });
         broadcastState(getExtendedSnapshot());
         broadcastLog(`업로드 완료: ${filename}`, 'success');
+        // 업로드 성공 후 Flow UI 다운로드 원본 파일 정리
+        if (_uiDownloadId) {
+          try {
+            await chrome.downloads.removeFile(_uiDownloadId);
+            chrome.downloads.erase({ id: _uiDownloadId });
+            broadcastLog('UI 다운로드 원본 파일 삭제', 'info');
+          } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
+        }
       } catch (err) {
         if (err.message === 'AUTH_EXPIRED') {
           sm.pause();
@@ -1268,6 +1276,14 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         // mediaUrl/mediaDataUrl 보관 — 재업로드용
         broadcastLog(`업로드 실패: ${err.message} (다음 항목 진행)`, 'error');
         sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message, uploadFailed: true, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
+        // 업로드 실패해도 Flow UI 다운로드 원본 파일 정리 (로컬 저장 후 원본 삭제)
+        if (_uiDownloadId) {
+          try {
+            await chrome.downloads.removeFile(_uiDownloadId);
+            chrome.downloads.erase({ id: _uiDownloadId });
+            broadcastLog('UI 다운로드 원본 파일 삭제 (업로드 실패 후 정리)', 'info');
+          } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
+        }
         sm.transition(AutoState.COOLDOWN);
       }
 
