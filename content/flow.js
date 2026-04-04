@@ -345,8 +345,15 @@
           }
         } else if (downloaded) {
           // 720p/원본: 항상 'ui-download' 마커 사용 (background.js가 Flow UI 다운로드 파일 정리)
-          // dataUrl이 캡처됐으면 함께 전달 → background.js가 URL fetch 없이 바로 업로드
+          // blob 캡처는 downloadVideoViaMenu 반환 직후 비동기로 도착할 수 있으므로 최대 3초 대기
           finalMediaUrl = 'ui-download';
+          if (!capturedVideoDataUrl) {
+            console.log(LOG_PREFIX, '[720p] blob dataUrl 대기 중 (최대 3초)...');
+            const waitStart = Date.now();
+            while (!capturedVideoDataUrl && Date.now() - waitStart < 3000) {
+              await delay(200);
+            }
+          }
           if (capturedVideoDataUrl) {
             finalMediaDataUrl = capturedVideoDataUrl;
             console.log(LOG_PREFIX, `✓ [720p] blob dataUrl 캡처 성공 → dataUrl+ui-download 전달`);
