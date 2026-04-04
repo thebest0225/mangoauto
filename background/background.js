@@ -1134,8 +1134,9 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
   if (mediaUrl === 'ui-download') {
     if (mediaDataUrl) {
       // dataUrl이 이미 있음 (inject.js blob 캡처) → URL 검색 불필요, downloadId만 찾아서 정리용으로 저장
+      // idOnly=true: in_progress여도 즉시 반환 (완료 대기 없음)
       broadcastLog('ui-download + dataUrl 있음 → downloadId 검색 (정리용)...', 'info');
-      const dlInfo = await findRecentDownloadUrl(30000, sm.mediaType, 0);
+      const dlInfo = await findRecentDownloadUrl(30000, sm.mediaType, 0, true);
       _uiDownloadId = dlInfo?.downloadId || null;
       mediaUrl = null; // dataUrl 사용하므로 mediaUrl 불필요
       broadcastLog(`Flow UI 다운로드 정리 예약: id=${_uiDownloadId}`, 'info');
@@ -1436,9 +1437,9 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
   let _uiDownloadId = null;
   if (mediaUrl === 'ui-download') {
     if (mediaDataUrl) {
-      // dataUrl 이미 있음 → downloadId만 찾아서 정리용으로 저장
+      // dataUrl 이미 있음 → downloadId만 찾아서 정리용으로 저장 (idOnly=true: 완료 대기 없음)
       broadcastLog('ui-download + dataUrl 있음 (concurrent) → downloadId 검색...', 'info');
-      const dlInfo = await findRecentDownloadUrl(30000, sm.mediaType, 0);
+      const dlInfo = await findRecentDownloadUrl(30000, sm.mediaType, 0, true);
       _uiDownloadId = dlInfo?.downloadId || null;
       mediaUrl = null;
     } else {
@@ -2160,7 +2161,7 @@ async function fetchMediaWithCookies(url) {
 
 // ─── Find recent download URL from chrome.downloads (for ui-download fallback) ───
 // pollTimeoutMs: 다운로드가 아직 시작되지 않았을 때 폴링 대기 (1080p 업스케일 등)
-async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video', pollTimeoutMs = 0) {
+async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video', pollTimeoutMs = 0, idOnly = false) {
   const searchStartTime = Date.now(); // 최초 호출 시점 기준
   const searchOnce = async () => {
     try {
@@ -2200,12 +2201,19 @@ async function findRecentDownloadUrl(maxAgeMs = 120000, targetMediaType = 'video
           broadcastLog(`최근 다운로드 발견 (완료): ${filename.substring(filename.length - 40)}`, 'info');
           return { url, filePath: dl.filename, state: 'complete', downloadId: dl.id };
         }
-        if (dl.state === 'in_progress' && isGoogleDl) {
-          // 진행 중이면 완료 대기 (비디오는 최대 5분, 이미지는 60초)
-          const waitMs = targetMediaType === 'video' ? 300000 : 60000;
-          broadcastLog(`다운로드 진행 중, 완료 대기 (최대 ${waitMs/1000}초): ${dl.id}`, 'info');
-          const completedInfo = await waitForDownloadComplete(dl.id, waitMs);
-          if (completedInfo) return completedInfo;
+        if (dl.state === 'in_progress') {
+          if (idOnly) {
+            // cleanup 목적 → 완료 대기 없이 즉시 id 반환
+            broadcastLog(`다운로드 진행 중 (id만 반환): ${dl.id}`, 'info');
+            return { url, filePath: dl.filename, state: 'in_progress', downloadId: dl.id };
+          }
+          if (isGoogleDl) {
+            // 진행 중이면 완료 대기 (비디오는 최대 5분, 이미지는 60초)
+            const waitMs = targetMediaType === 'video' ? 300000 : 60000;
+            broadcastLog(`다운로드 진행 중, 완료 대기 (최대 ${waitMs/1000}초): ${dl.id}`, 'info');
+            const completedInfo = await waitForDownloadComplete(dl.id, waitMs);
+            if (completedInfo) return completedInfo;
+          }
         }
       }
       return null;
