@@ -164,7 +164,12 @@
             <input type="checkbox" id="queueSelectAll" class="queue-check" checked>
             <span class="label" style="margin:0">대기열</span>
           </div>
-          <span id="queueCount" class="queue-count">0개</span>
+          <div id="queueQuickSelect" style="display:flex;gap:2px;align-items:center;">
+            <button class="qs-pct-btn" data-pct="25">25%</button>
+            <button class="qs-pct-btn" data-pct="50">50%</button>
+            <button class="qs-pct-btn" data-pct="75">75%</button>
+            <span id="queueCount" class="queue-count">0개</span>
+          </div>
         </div>
         <div id="queueList" class="queue-list"></div>
       </div>

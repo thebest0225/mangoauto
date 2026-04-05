@@ -371,13 +371,41 @@ function bindEvents() {
   $('#queueSelectAll').addEventListener('change', (e) => {
     $$('.queue-select').forEach(cb => { cb.checked = e.target.checked; });
     updateQueueSelectedCount();
+    // 전체선택 시 퍼센트 버튼 active 해제
+    $$('.qs-pct-btn').forEach(b => b.classList.toggle('active', e.target.checked ? false : false));
   });
 
   // 대기열 개별 체크 → 전체선택 동기화 (이벤트 위임)
   $('#queueList').addEventListener('change', (e) => {
     if (e.target.classList.contains('queue-select')) {
       updateQueueSelectedCount();
+      // 수동 체크 시 퍼센트 버튼 active 해제
+      $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
     }
+  });
+
+  // 대기열 퀵 선택 (25%, 50%, 75%)
+  $$('.qs-pct-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pct = parseInt(btn.dataset.pct);
+      const allCbs = $$('.queue-select');
+      const total = allCbs.length;
+      if (total === 0) return;
+      const selectCount = Math.max(1, Math.round(total * pct / 100));
+      allCbs.forEach((cb, i) => { cb.checked = i < selectCount; });
+      // active 상태 토글 (같은 버튼 다시 누르면 전체 선택)
+      const wasActive = btn.classList.contains('active');
+      $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
+      if (wasActive) {
+        // 같은 버튼 다시 누르면 전체 선택
+        allCbs.forEach(cb => { cb.checked = true; });
+      } else {
+        btn.classList.add('active');
+      }
+      const selectAll = $('#queueSelectAll');
+      if (selectAll) selectAll.checked = (wasActive || selectCount === total);
+      updateQueueSelectedCount();
+    });
   });
 
   // Save settings

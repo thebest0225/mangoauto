@@ -423,6 +423,20 @@ input[type="checkbox"] {
   font-weight: 600;
 }
 
+.qs-pct-btn {
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 600;
+  background: #2a2a4a;
+  color: #aaa;
+  border: 1px solid #444;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.qs-pct-btn:hover { background: #3a3a5a; color: #fff; }
+.qs-pct-btn.active { background: #ff9f43; color: #000; border-color: #ff9f43; }
+
 .queue-list {
   max-height: 200px;
   overflow-y: auto;
