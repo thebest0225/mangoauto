@@ -57,6 +57,10 @@ let pendingCompletions = 0;
 // Pipeline mode state
 let pipelineNextIdx = 0;
 
+// 재업로드용 blob 캐시 (segmentIndex → Blob)
+// URL 만료 후에도 재업로드 가능하도록 업로드 시점의 blob을 보관
+const _reuploadBlobCache = new Map();
+
 // ─── Side Panel: open on icon click ───
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -378,6 +382,7 @@ async function startAutomation(config) {
 
   automationSettings = settings || {};
   allResults = [];
+  _reuploadBlobCache.clear(); // 새 자동화 시작 시 이전 blob 캐시 정리
   activeTasks.clear();
   pendingCompletions = 0;
   pipelineNextIdx = 0;
@@ -1245,6 +1250,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
           throw new Error('No media data available');
         }
         _uploadBlob = blob; // 프로젝트 폴더 저장용 보관
+        _reuploadBlobCache.set(item.segmentIndex, blob); // 재업로드용 캐시
         if (item._isThumbnail) {
           // 썸네일 이미지 업로드
           await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
@@ -1788,33 +1794,23 @@ async function reuploadItem(segmentIndex) {
   if (!result) return { error: '재업로드 가능한 항목을 찾을 수 없습니다' };
   if (!sm.projectId) return { error: '프로젝트 ID가 없습니다' };
 
-  let mediaUrl = result.mediaUrl;
-  let mediaDataUrl = result.mediaDataUrl;
-
-  // 성공 항목에 URL이 없으면 프로젝트 폴더에 저장된 파일에서 읽기 시도
-  if (!mediaUrl && !mediaDataUrl) {
-    const filename = generateFilename(segmentIndex - 1, sm.platform, sm.mediaType);
-    const dlFilename = getDownloadPath(filename, !!result.isThumbnail);
-    // chrome.downloads에서 해당 파일 검색
-    try {
-      const dls = await chrome.downloads.search({ filenameRegex: filename.replace('.', '\\.'), limit: 5, orderBy: ['-startTime'] });
-      const completed = dls.find(d => d.state === 'complete' && d.exists);
-      if (completed) {
-        // file:// URL로 접근 가능 여부 시도
-        mediaUrl = completed.finalUrl || completed.url;
-        broadcastLog(`재업로드: 다운로드 기록에서 URL 복구 — ${mediaUrl?.substring(0, 60)}`, 'info');
-      }
-    } catch (e) {}
-  }
-  if (!mediaUrl && !mediaDataUrl) return { error: '미디어 URL이 없습니다 — 재생성이 필요합니다' };
-
   broadcastLog(`재업로드 시도: segment ${segmentIndex}`, 'info');
   try {
     let blob;
-    if (mediaDataUrl) {
-      blob = await fetch(mediaDataUrl).then(r => r.blob());
+    // 1순위: 메모리 blob 캐시 (URL 만료와 무관하게 항상 사용 가능)
+    if (_reuploadBlobCache.has(segmentIndex)) {
+      blob = _reuploadBlobCache.get(segmentIndex);
+      broadcastLog(`재업로드: blob 캐시 사용 (${Math.round(blob.size/1024)}KB)`, 'info');
+    } else if (result.mediaDataUrl) {
+      // 2순위: dataUrl (base64)
+      blob = await fetch(result.mediaDataUrl).then(r => r.blob());
+      broadcastLog(`재업로드: dataUrl → blob 변환 (${Math.round(blob.size/1024)}KB)`, 'info');
+    } else if (result.mediaUrl) {
+      // 3순위: URL (만료됐을 수 있음)
+      broadcastLog(`재업로드: URL fetch 시도 (만료됐을 수 있음)...`, 'warn');
+      blob = await fetchMediaWithCookies(result.mediaUrl);
     } else {
-      blob = await fetchMediaWithCookies(mediaUrl);
+      return { error: '미디어 데이터 없음 — blob 캐시도 만료됨 (확장 재시작?)' };
     }
     const filename = generateFilename(segmentIndex - 1, sm.platform, sm.mediaType);
     if (result.isThumbnail) {
