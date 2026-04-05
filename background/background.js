@@ -12,6 +12,7 @@ let allResults = [];        // { index, success, dataUrl?, filename? }
 let reviewModeEnabled = false;
 let _currentLoopId = 0;     // Loop generation ID (prevents stale loops)
 let _generationId = 0;      // Watchdog generation tracking (increments per item)
+let _uploadsSinceVerify = 0; // 서버 검증 주기 카운터
 
 // 썸네일 문구 → 최종 프롬프트 조합 (노란=큰글씨, 흰=작은글씨, swap=위치만)
 function _buildThumbFinalPrompt(basePrompt, textData) {
@@ -383,6 +384,7 @@ async function startAutomation(config) {
   automationSettings = settings || {};
   allResults = [];
   _reuploadBlobCache.clear(); // 새 자동화 시작 시 이전 blob 캐시 정리
+  _uploadsSinceVerify = 0;    // 서버 검증 카운터 초기화
   activeTasks.clear();
   pendingCompletions = 0;
   pipelineNextIdx = 0;
@@ -908,11 +910,16 @@ async function sendNextPipelineItem() {
 }
 
 // 모든 작업 완료 여부 확인
-function checkPipelineCompletion() {
+async function checkPipelineCompletion() {
   if (activeTasks.size === 0 && pipelineNextIdx >= sm.queue.length) {
     sm.transition(AutoState.COMPLETED);
     broadcastState(getExtendedSnapshot());
     broadcastLog('모든 작업 완료!', 'success');
+    // 파이프라인 완료 시 남은 업로드 최종 검증
+    if (_uploadsSinceVerify > 0) {
+      await verifyAndReuploadMissing();
+      broadcastState(getExtendedSnapshot());
+    }
   }
 }
 
@@ -1263,6 +1270,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         sm.markSuccess({ segmentIndex: item.segmentIndex, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
         broadcastState(getExtendedSnapshot());
         broadcastLog(`업로드 완료: ${filename}`, 'success');
+        await checkVerifyNeeded(); // N개마다 서버 검증
         // 업로드 성공 후 Flow UI 다운로드 원본 파일 정리
         if (_uiDownloadId) {
           try {
@@ -1559,6 +1567,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
             blob = await fetchMediaWithCookies(mediaUrl);
           }
           _uploadBlob = blob;
+          _reuploadBlobCache.set(item.segmentIndex, blob); // 재업로드/검증용 캐시
           if (item._isThumbnail) {
             await MangoHubAPI.uploadThumbnailImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
             broadcastLog(`썸네일 업로드 완료: concept ${item.segmentIndex}`, 'success');
@@ -1568,7 +1577,8 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
             await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
           }
           broadcastLog(`업로드 완료: ${filename}`, 'success');
-          sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex });
+          sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex, isThumbnail: !!item._isThumbnail });
+          await checkVerifyNeeded(); // N개마다 서버 검증
         } catch (err) {
           if (err.message === 'AUTH_EXPIRED') {
             sm.pause();
@@ -1786,7 +1796,108 @@ async function handleCooldownAndNext() {
     broadcastState(getExtendedSnapshot());
     if (sm.state === AutoState.PREPARING) {
       await runLoop();
+    } else if (sm.state === AutoState.COMPLETED && _uploadsSinceVerify > 0) {
+      // 자동화 완료 시 남은 업로드 최종 검증
+      await verifyAndReuploadMissing();
+      broadcastState(getExtendedSnapshot());
     }
+  }
+}
+
+// ─── Batch server verification (N개마다 서버 검증 + 누락분 자동 재업로드) ───
+const VERIFY_INTERVAL = 10; // 업로드 10개마다 서버 검증
+
+async function verifyAndReuploadMissing() {
+  if (sm.mode !== 'mangohub' || !sm.projectId) return;
+
+  broadcastLog(`서버 검증 시작 (${_uploadsSinceVerify}개 업로드 후)...`, 'info');
+  _uploadsSinceVerify = 0;
+
+  try {
+    const project = await MangoHubAPI.getProject(sm.projectId, sm.apiType);
+
+    // 세그먼트 맵 빌드
+    let segments;
+    if (sm.apiType === 'mangomaker') {
+      segments = (project._analysis?.scenes || []).map((asc, i) => {
+        const sc = (project.scenes || [])[i] || {};
+        return {
+          index: i,
+          image_url: (sc.bg?.type === 'image') ? sc.bg.value : '',
+          video_url: (sc.bg?.type === 'video') ? sc.bg.value : '',
+        };
+      });
+    } else {
+      segments = project.segments || [];
+    }
+
+    const segMap = new Map();
+    for (const seg of segments) segMap.set(seg.index, seg);
+
+    // 썸네일 검증용 맵
+    const thumbImages = project.thumbnail_images || {};
+
+    const field = sm.mediaType === 'video' ? 'video_url' : 'image_url';
+    let missingCount = 0;
+    let reuploadedCount = 0;
+
+    for (const result of sm.results) {
+      if (!result.success || result.review) continue;
+      const segIdx = result.segmentIndex;
+      if (segIdx === undefined) continue;
+
+      // 서버에 실제 존재하는지 확인
+      let exists = false;
+      if (result.isThumbnail) {
+        exists = !!thumbImages[String(segIdx)];
+      } else {
+        const seg = segMap.get(segIdx);
+        exists = !!(seg && seg[field]);
+      }
+
+      if (exists) continue;
+
+      // 누락 발견 → 재업로드 시도
+      missingCount++;
+      broadcastLog(`검증: segment ${segIdx} 서버에 누락 — 재업로드 시도`, 'warn');
+
+      if (!_reuploadBlobCache.has(segIdx)) {
+        broadcastLog(`검증: segment ${segIdx} blob 캐시 없음 — 재업로드 불가`, 'error');
+        continue;
+      }
+
+      try {
+        const blob = _reuploadBlobCache.get(segIdx);
+        const fname = `verify_seg${String(segIdx).padStart(3, '0')}.${sm.mediaType === 'video' ? 'mp4' : 'png'}`;
+        if (result.isThumbnail) {
+          await MangoHubAPI.uploadThumbnailImage(sm.projectId, segIdx, blob, fname, sm.apiType);
+        } else if (sm.mediaType === 'video') {
+          await MangoHubAPI.uploadVideo(sm.projectId, segIdx, blob, fname, sm.apiType);
+        } else {
+          await MangoHubAPI.uploadImage(sm.projectId, segIdx, blob, fname, sm.apiType);
+        }
+        reuploadedCount++;
+        broadcastLog(`검증 재업로드 성공: segment ${segIdx}`, 'success');
+      } catch (err) {
+        broadcastLog(`검증 재업로드 실패: segment ${segIdx} — ${err.message}`, 'error');
+      }
+    }
+
+    if (missingCount === 0) {
+      broadcastLog(`서버 검증 완료: 누락 없음`, 'success');
+    } else {
+      broadcastLog(`서버 검증 완료: ${missingCount}개 누락, ${reuploadedCount}개 재업로드`, missingCount > reuploadedCount ? 'warn' : 'success');
+    }
+  } catch (err) {
+    broadcastLog(`서버 검증 실패: ${err.message}`, 'error');
+  }
+}
+
+// 업로드 성공 시 카운터 증가 + 주기 도달 시 검증 실행
+async function checkVerifyNeeded() {
+  _uploadsSinceVerify++;
+  if (_uploadsSinceVerify >= VERIFY_INTERVAL) {
+    await verifyAndReuploadMissing();
   }
 }
 
