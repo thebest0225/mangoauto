@@ -1706,7 +1706,11 @@ function generateFilename(index, platform, mediaType) {
   const item = sm.queue[index];
   let displayIndex;
   if (sm.mode === 'mangohub' && item?.segmentIndex !== undefined) {
-    displayIndex = item.segmentIndex;  // seg.index는 이미 1-based
+    // longform/shortform: seg.index는 서버에서 1-based
+    // mangomaker/thumbnail: 0-based → +1 필요
+    displayIndex = (sm.apiType === 'mangomaker' || item._isThumbnail)
+      ? item.segmentIndex + 1
+      : item.segmentIndex;
   } else if (sm._useOriginalIndex && item?._originalIndex !== undefined) {
     displayIndex = item._originalIndex + 1;
   } else {
