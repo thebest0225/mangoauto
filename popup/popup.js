@@ -1030,13 +1030,14 @@ function updateQueueListFromState(state) {
       const success = result.success;
       statusEl.textContent = success ? '완료' : '실패';
       statusEl.className = `queue-status ${success ? 'qs-done' : 'qs-fail'}`;
-      // 업로드 실패 시 재업로드 버튼 추가
-      if (!success && result.uploadFailed && !item.querySelector('.reupload-btn')) {
+      // 재업로드 버튼: 실패 항목 + 성공 항목 모두 (서버에 실제 안 올라갔을 수 있으므로)
+      if (!item.querySelector('.reupload-btn')) {
         const btn = document.createElement('button');
         btn.className = 'reupload-btn';
         btn.textContent = '재업';
         btn.title = 'MangoHub에 재업로드';
-        btn.style.cssText = 'margin-left:4px;padding:1px 6px;font-size:10px;background:#f59e0b;color:#000;border:none;border-radius:3px;cursor:pointer;font-weight:600;';
+        const btnColor = success ? '#6b7280' : '#f59e0b'; // 성공=회색, 실패=노랑
+        btn.style.cssText = `margin-left:4px;padding:1px 6px;font-size:10px;background:${btnColor};color:#fff;border:none;border-radius:3px;cursor:pointer;font-weight:600;`;
         btn.onclick = async (e) => {
           e.stopPropagation();
           btn.disabled = true; btn.textContent = '...';

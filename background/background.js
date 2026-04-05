@@ -1254,7 +1254,7 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         } else {
           await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
         }
-        sm.markSuccess({ segmentIndex: item.segmentIndex });
+        sm.markSuccess({ segmentIndex: item.segmentIndex, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
         broadcastState(getExtendedSnapshot());
         broadcastLog(`업로드 완료: ${filename}`, 'success');
         // 업로드 성공 후 Flow UI 다운로드 원본 파일 정리
@@ -1780,14 +1780,32 @@ async function handleCooldownAndNext() {
   }
 }
 
-// ─── Re-upload a single item (upload failed but generation succeeded) ───
+// ─── Re-upload a single item (upload failed or success but server didn't receive) ───
 async function reuploadItem(segmentIndex) {
-  const result = sm.results.find(r => r.segmentIndex === segmentIndex && r.uploadFailed);
+  // 실패 항목 우선, 없으면 성공 항목도 검색 (서버에 실제 안 올라갔을 수 있음)
+  let result = sm.results.find(r => r.segmentIndex === segmentIndex && r.uploadFailed);
+  if (!result) result = sm.results.find(r => r.segmentIndex === segmentIndex);
   if (!result) return { error: '재업로드 가능한 항목을 찾을 수 없습니다' };
   if (!sm.projectId) return { error: '프로젝트 ID가 없습니다' };
 
-  const mediaUrl = result.mediaUrl;
-  const mediaDataUrl = result.mediaDataUrl;
+  let mediaUrl = result.mediaUrl;
+  let mediaDataUrl = result.mediaDataUrl;
+
+  // 성공 항목에 URL이 없으면 프로젝트 폴더에 저장된 파일에서 읽기 시도
+  if (!mediaUrl && !mediaDataUrl) {
+    const filename = generateFilename(segmentIndex - 1, sm.platform, sm.mediaType);
+    const dlFilename = getDownloadPath(filename, !!result.isThumbnail);
+    // chrome.downloads에서 해당 파일 검색
+    try {
+      const dls = await chrome.downloads.search({ filenameRegex: filename.replace('.', '\\.'), limit: 5, orderBy: ['-startTime'] });
+      const completed = dls.find(d => d.state === 'complete' && d.exists);
+      if (completed) {
+        // file:// URL로 접근 가능 여부 시도
+        mediaUrl = completed.finalUrl || completed.url;
+        broadcastLog(`재업로드: 다운로드 기록에서 URL 복구 — ${mediaUrl?.substring(0, 60)}`, 'info');
+      }
+    } catch (e) {}
+  }
   if (!mediaUrl && !mediaDataUrl) return { error: '미디어 URL이 없습니다 — 재생성이 필요합니다' };
 
   broadcastLog(`재업로드 시도: segment ${segmentIndex}`, 'info');
