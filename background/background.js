@@ -1577,7 +1577,7 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
             await MangoHubAPI.uploadImage(sm.projectId, item.segmentIndex, blob, filename, sm.apiType);
           }
           broadcastLog(`업로드 완료: ${filename}`, 'success');
-          sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex, isThumbnail: !!item._isThumbnail });
+          sm.results.push({ success: true, index: itemIndex, segmentIndex: item.segmentIndex, isThumbnail: !!item._isThumbnail, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null });
           await checkVerifyNeeded(); // N개마다 서버 검증
         } catch (err) {
           if (err.message === 'AUTH_EXPIRED') {
