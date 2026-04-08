@@ -729,6 +729,18 @@ async function runSequentialLoop(loopId) {
                            isSomethingWrong ? '일시적 오류' : '';
 
       broadcastLog(`생성 에러: ${resp.error}${errTypeLabel ? ` (${errTypeLabel})` : ''}`, 'error');
+
+      // 이미지 업로드 거부 → 재시도 무의미 (같은 이미지로 또 거부됨), 바로 실패 처리 후 다음으로
+      if (isImageRejected) {
+        broadcastLog(`이미지 거부 → 재시도 없이 다음 항목으로 넘어감`, 'warn');
+        sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: resp.error });
+        sm.retryCount = 0;
+        sm.transition(AutoState.COOLDOWN);
+        broadcastState(getExtendedSnapshot());
+        await handleCooldownAndNext();
+        continue;
+      }
+
       sm.markError(resp.error);
       broadcastState(getExtendedSnapshot());
       if (sm.state === AutoState.ERROR) {
