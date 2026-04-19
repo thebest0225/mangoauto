@@ -1011,12 +1011,21 @@ async function ensureContentScript(tabId, platform) {
     return;
   }
 
+  const EXPECTED_VERSION = 'dbg-2026-04-19';
   try {
     // Try pinging the content script first
     broadcastLog(`Content script PING 전송 (tab ${tabId})...`, 'info');
     const resp = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
     if (resp?.ok) {
-      broadcastLog(`Content script 이미 로드됨 (site: ${resp.site})`, 'info');
+      // 버전 체크: 구버전이면 강제 재주입
+      if (resp.version !== EXPECTED_VERSION) {
+        broadcastLog(`Content script 구버전 감지 (v=${resp.version||'old'}) → 강제 재주입`, 'warn');
+        await chrome.scripting.executeScript({ target: { tabId }, files });
+        await MangoUtils.sleep(2000);
+        broadcastLog('강제 재주입 완료', 'info');
+        return;
+      }
+      broadcastLog(`Content script 이미 로드됨 (site: ${resp.site}, v=${resp.version})`, 'info');
       return;
     }
   } catch (e) {
@@ -1729,8 +1738,8 @@ function generateFilename(index, platform, mediaType) {
   let displayIndex;
   if (sm.mode === 'mangohub' && item?.segmentIndex !== undefined) {
     // longform/shortform: seg.index는 서버에서 1-based
-    // mangomaker/thumbnail: 0-based → +1 필요
-    displayIndex = (sm.apiType === 'mangomaker' || item._isThumbnail)
+    // longform-v2/mangomaker/thumbnail: 0-based → +1 필요
+    displayIndex = (sm.apiType === 'mangomaker' || sm.apiType === 'longform-v2' || item._isThumbnail)
       ? item.segmentIndex + 1
       : item.segmentIndex;
   } else if (sm._useOriginalIndex && item?._originalIndex !== undefined) {

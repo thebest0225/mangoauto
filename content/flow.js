@@ -129,7 +129,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-04-19' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -929,11 +929,25 @@
 
   async function setAspectRatioNew(ratio) {
     const map = {
-      '16:9': ['Landscape', '가로'],
-      '9:16': ['Portrait', '세로'],
-      '1:1': ['Square', '정사각형']
+      '16:9': ['Landscape', '가로', '가로 방향', '16:9', 'Wide', 'Horizontal'],
+      '9:16': ['Portrait', '세로', '세로 방향', '9:16', 'Tall', 'Vertical'],
+      '1:1': ['Square', '정사각형', '1:1', '정사각']
     };
-    if (map[ratio]) return await clickSettingsButton(map[ratio], 'Aspect ratio');
+    if (map[ratio]) {
+      const ok = await clickSettingsButton(map[ratio], 'Aspect ratio');
+      if (!ok) {
+        // 실패 시 패널의 모든 버튼 텍스트 덤프 (새 UI 파악용)
+        console.warn(LOG_PREFIX, `[ratio-debug] 패널 내 모든 클릭가능 텍스트:`);
+        const els = document.querySelectorAll(PANEL_CLICKABLE_SEL);
+        for (const el of els) {
+          const t = el.textContent?.trim() || '';
+          if (t.length > 0 && t.length < 40) {
+            console.log(LOG_PREFIX, `  - tag=${el.tagName} text="${t}"`);
+          }
+        }
+      }
+      return ok;
+    }
     return false;
   }
 

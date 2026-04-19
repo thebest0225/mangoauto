@@ -684,9 +684,9 @@ function updateQueuePreview() {
     if (item.imageUrl) {
       thumbHtml = `<img class="queue-thumb" src="${escapeHtml(item.imageUrl)}" title="${escapeHtml(item.imageName || '')}">`;
     }
-    // longform/shortform은 seg.index가 1-based, mangomaker/standalone은 0-based → +1
+    // longform/shortform은 seg.index가 1-based, longform-v2/mangomaker/standalone은 0-based → +1
     const displayIdx = item._isThumbnail ? item.idx + 1
-      : (item._isMangoHub && currentApiType !== 'mangomaker') ? item.idx
+      : (item._isMangoHub && currentApiType !== 'mangomaker' && currentApiType !== 'longform-v2') ? item.idx
       : item.idx + 1;
     div.innerHTML = `
       <input type="checkbox" class="queue-check queue-select" data-idx="${item.idx}" checked>
