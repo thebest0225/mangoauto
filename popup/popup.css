@@ -129,7 +129,7 @@ body::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
   margin-top: 1px;
 }
 
-/* Badge */
+/* Badge (button 으로도 사용 가능 — 클릭 시 로그인) */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -141,7 +141,16 @@ body::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
   border: 1px solid transparent;
   white-space: nowrap;
   transition: all var(--t-fast) var(--ease-out);
+  font-family: inherit;
+  cursor: pointer;
 }
+button.badge { background: inherit; }
+button.badge.badge-off:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(255, 138, 30, 0.35);
+}
+button.badge.badge-on { cursor: default; }
 .badge .dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: currentColor;
@@ -834,31 +843,96 @@ body::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 .log-container .log-warn { color: var(--warn); }
 .log-container .log-error { color: var(--danger); }
 
-/* ═══ Review ═══ */
-.review-controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
+/* ═══ Auth login card ═══ */
+.auth-card {
+  background: linear-gradient(180deg, rgba(255, 138, 30, 0.08), rgba(255, 138, 30, 0.02));
+  border-color: rgba(255, 138, 30, 0.28);
 }
-.review-summary .card-inner {
-  font-size: 11px;
-  color: var(--text-mute);
+.auth-card .card-inner {
+  padding: 14px;
   text-align: center;
-  padding: 7px 10px;
+  gap: 8px;
 }
-.review-list {
+.auth-icon {
+  width: 40px; height: 40px;
+  margin: 0 auto;
+  display: grid; place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(255, 138, 30, 0.35);
+  border-radius: 10px;
+  box-shadow: var(--highlight-strong);
+}
+.auth-icon svg { width: 22px; height: 22px; }
+.auth-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.auth-desc {
+  font-size: 11.5px;
+  color: var(--text-mute);
+  line-height: 1.5;
+}
+.auth-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* ═══ Toast ═══ */
+.toast-container {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
+  z-index: 9999;
+  pointer-events: none;
+  width: calc(100% - 24px);
+  max-width: 340px;
 }
-.review-list .review-item {
-  padding: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
+.toast {
+  pointer-events: auto;
+  padding: 9px 14px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
   border-radius: var(--r);
-  transition: border-color var(--t-fast) var(--ease-out);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: var(--highlight-strong), 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: toastIn var(--t-med) var(--ease-out);
 }
-.review-list .review-item:hover { border-color: var(--border); }
+.toast.toast-success {
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.15), var(--surface-3));
+  border-color: rgba(34, 197, 94, 0.45);
+  color: var(--success);
+}
+.toast.toast-error {
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.15), var(--surface-3));
+  border-color: rgba(239, 68, 68, 0.45);
+  color: var(--danger);
+}
+.toast.toast-info {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.15), var(--surface-3));
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.toast.fading { animation: toastOut 260ms var(--ease-in-out) forwards; }
+.toast svg { width: 15px; height: 15px; flex-shrink: 0; }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastOut {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(8px); }
+}
 
 /* ═══ Settings ═══ */
 .settings-title {

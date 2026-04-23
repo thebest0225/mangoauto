@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   await checkAuth();
   await refreshState();
-  await loadReviewMode();
+  // loadReviewMode() 제거 — 검토 탭 삭제됨
   bindEvents();
 });
 
@@ -83,21 +83,71 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
 // ─── Auth Check ───
 async function checkAuth() {
+  const badge = $('#authBadge');
+  const badgeText = $('#authBadgeText');
+  const loginCard = $('#authLoginCard');
   try {
     const resp = await sendBg({ type: 'API_CHECK_AUTH' });
-    const badge = $('#authBadge');
     if (resp.loggedIn) {
-      badge.textContent = 'Connected';
       badge.className = 'badge badge-on';
+      badgeText.textContent = 'Connected';
+      badge.title = 'MangoHub 에 연결됨';
+      if (loginCard) loginCard.classList.add('hidden');
       loadProjects();
     } else {
-      badge.textContent = 'Not Connected';
       badge.className = 'badge badge-off';
+      badgeText.textContent = 'Not Connected';
+      badge.title = '클릭해서 MangoHub 로그인';
+      if (loginCard) loginCard.classList.remove('hidden');
     }
   } catch {
-    $('#authBadge').textContent = 'Error';
-    $('#authBadge').className = 'badge badge-off';
+    badge.className = 'badge badge-off';
+    badgeText.textContent = 'Error';
+    if (loginCard) loginCard.classList.remove('hidden');
   }
+}
+
+// MangoHub 로그인 페이지를 새 탭으로 열고, 그 탭 URL 이 / 또는 /pages/my.html 등 로그인 후 페이지로
+// 바뀌면 자동으로 checkAuth() 재실행.
+function openMangoHubLogin() {
+  const loginUrl = 'https://mangois.love/login';
+  chrome.tabs.create({ url: loginUrl, active: true }, (tab) => {
+    if (!tab || !tab.id) return;
+    showToast('MangoHub 로그인 창이 열렸습니다. 로그인 후 자동 감지됩니다.', 'info');
+    const listener = (tabId, changeInfo) => {
+      if (tabId !== tab.id) return;
+      // /login 이 아닌 페이지로 이동 = 로그인 성공 가능성 높음
+      if (changeInfo.url && !changeInfo.url.includes('/login')) {
+        chrome.tabs.onUpdated.removeListener(listener);
+        // 쿠키 반영까지 약간 대기
+        setTimeout(() => { checkAuth(); }, 800);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    // 30초 후 리스너 제거 (메모리 누수 방지)
+    setTimeout(() => {
+      try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
+    }, 30000);
+  });
+}
+
+// ─── Toast ───
+function showToast(message, type = 'info', duration = 2400) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  const icon = {
+    success: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    error: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v5M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  }[type] || '';
+  toast.innerHTML = `${icon}<span>${message}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('fading');
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
 }
 
 // ─── Load Projects ───
@@ -177,6 +227,26 @@ function getProjectStatus(project) {
 
 // ─── Bind All Events ───
 function bindEvents() {
+  // Auth badge (Not Connected 상태 클릭 시 로그인 페이지 열기)
+  const badgeEl = $('#authBadge');
+  if (badgeEl) badgeEl.addEventListener('click', () => {
+    if (badgeEl.classList.contains('badge-off')) openMangoHubLogin();
+  });
+  const authLoginBtn = $('#authLoginBtn');
+  if (authLoginBtn) authLoginBtn.addEventListener('click', openMangoHubLogin);
+  const authRecheckBtn = $('#authRecheckBtn');
+  if (authRecheckBtn) authRecheckBtn.addEventListener('click', async () => {
+    authRecheckBtn.disabled = true;
+    await checkAuth();
+    authRecheckBtn.disabled = false;
+    const badge = $('#authBadge');
+    if (badge && badge.classList.contains('badge-on')) {
+      showToast('MangoHub 연결 확인 성공', 'success');
+    } else {
+      showToast('아직 로그인 확인 안 됨. 다시 시도해주세요.', 'error');
+    }
+  });
+
   // Unsupported page links - navigate current tab
   $$('.unsupported-link').forEach(link => {
     link.addEventListener('click', async (e) => {
@@ -199,16 +269,14 @@ function bindEvents() {
     });
   });
 
-  // Main tabs (workspace / review / settings)
+  // Main tabs (workspace / settings) — 검토 탭 제거됨
   $$('.mtab').forEach(tab => {
     tab.addEventListener('click', () => {
       $$('.mtab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       const target = tab.dataset.tab;
       $('#workspacePanel').classList.toggle('hidden', target !== 'workspace');
-      $('#reviewPanel').classList.toggle('hidden', target !== 'review');
       $('#settingsPanel').classList.toggle('hidden', target !== 'settings');
-      if (target === 'review') loadReviewQueue();
     });
   });
 
@@ -434,8 +502,8 @@ function bindEvents() {
       if (key && key.length > 5) {
         $('#kieApiKey').value = key;
         addLog('API 키 가져오기 완료', 'success');
-        // 자동 저장
-        await saveSettings();
+        // 자동 저장 (silent — toast 는 API 키 가져오기 토스트가 있으면 중복)
+        await saveSettings({ silent: true });
       } else {
         addLog('유효하지 않은 키 파일입니다', 'error');
       }
@@ -445,37 +513,7 @@ function bindEvents() {
     e.target.value = '';
   });
 
-  // ── Review tab events ──
-  $('#reviewModeToggle').addEventListener('change', async (e) => {
-    await sendBg({ type: 'SET_REVIEW_MODE', enabled: e.target.checked });
-    addLog(e.target.checked ? '검토 모드 활성화' : '검토 모드 비활성화', 'info');
-  });
-
-  $('#approveAllBtn').addEventListener('click', async () => {
-    const result = await sendBg({ type: 'REVIEW_APPROVE_ALL' });
-    if (result?.count > 0) addLog(`${result.count}개 전체 승인`, 'success');
-    await loadReviewQueue();
-  });
-
-  $('#rejectAllBtn').addEventListener('click', async () => {
-    if (!confirm('모든 대기 항목을 거부하시겠습니까?')) return;
-    const result = await sendBg({ type: 'REVIEW_REJECT_ALL' });
-    if (result?.count > 0) addLog(`${result.count}개 전체 거부`, 'info');
-    await loadReviewQueue();
-  });
-
-  $('#uploadApprovedBtn').addEventListener('click', async () => {
-    const result = await sendBg({ type: 'REVIEW_UPLOAD_APPROVED' });
-    addLog(`승인 항목 업로드 시작 (${result?.count || 0}개)`, 'info');
-    // Reload after a short delay to show uploading status
-    setTimeout(() => loadReviewQueue(), 1000);
-  });
-
-  $('#clearCompletedBtn').addEventListener('click', async () => {
-    await sendBg({ type: 'REVIEW_CLEAR_COMPLETED' });
-    await loadReviewQueue();
-    addLog('완료 항목 정리됨', 'info');
-  });
+  // ── Review tab events 제거됨 (검토 탭 삭제) ──
 }
 
 // ─── Mode UI Update ───
@@ -879,7 +917,8 @@ async function startAutomation() {
     addLog('시작 실패: ' + err.message, 'error');
   }
 
-  saveSettings();
+  // 자동 상태 저장 (UI 상태 — 토스트는 설정 화면에서만 띄움)
+  saveSettings({ silent: true });
 }
 
 // ─── Gather Settings ───
@@ -1159,7 +1198,8 @@ function addLog(text, type = 'info') {
 }
 
 // ─── Settings Persistence ───
-async function saveSettings() {
+async function saveSettings(opts) {
+  const silent = !!(opts && opts.silent);
   const settings = gatherSettings();
   await chrome.storage.local.set({
     'mangoauto_settings': {
@@ -1175,6 +1215,9 @@ async function saveSettings() {
   });
 
   addLog('설정 저장됨', 'info');
+  if (!silent && typeof showToast === 'function') {
+    showToast('설정이 저장되었습니다', 'success');
+  }
 }
 
 async function loadSettings() {
@@ -1324,11 +1367,12 @@ $('#skipCompleted')?.addEventListener('change', updateQueuePreview);
 
 // ─── Review Functions ───
 async function loadReviewMode() {
+  // 검토 탭 제거됨 — DOM 엘리먼트 없으면 no-op
+  const toggle = $('#reviewModeToggle');
+  if (!toggle) return;
   try {
     const result = await sendBg({ type: 'GET_REVIEW_MODE' });
-    if (result?.enabled) {
-      $('#reviewModeToggle').checked = true;
-    }
+    if (result?.enabled) toggle.checked = true;
   } catch {}
 }
 
@@ -1343,6 +1387,7 @@ async function loadReviewQueue() {
 
 function renderReviewList() {
   const list = $('#reviewList');
+  if (!list) return;  // 검토 탭 제거됨 — DOM 없으면 skip
   list.innerHTML = '';
 
   // Update badge
