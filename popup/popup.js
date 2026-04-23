@@ -11,7 +11,7 @@ let currentPlatform = 'grok';
 let currentMode = 'text-image';  // text-image | text-video | image-video | image-image
 let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
-let currentApiType = 'longform';  // 'longform' | 'shortform' | 'mangomaker'
+let currentApiType = 'longform-v2';  // 'longform-v2' (기본: 롱폼 = V2) | 'shortform' | 'mangomaker'
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
 let reviewItems = [];
