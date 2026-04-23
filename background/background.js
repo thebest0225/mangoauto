@@ -731,10 +731,21 @@ async function runSequentialLoop(loopId) {
       broadcastLog(`생성 에러: ${resp.error}${errTypeLabel ? ` (${errTypeLabel})` : ''}`, 'error');
 
       // 이미지 업로드 거부 → 재시도 무의미 (같은 이미지로 또 거부됨), 바로 실패 처리 후 다음으로
+      // 🔑 에러 직후 DOM/전역 상태가 오염되어 다음 세그먼트에 이전 이미지/영상이 덮어쓰이는 현상 있어서
+      //    탭을 무조건 새로고침해서 깨끗한 상태로 재시작.
       if (isImageRejected) {
-        broadcastLog(`이미지 거부 → 재시도 없이 다음 항목으로 넘어감`, 'warn');
+        broadcastLog(`이미지 거부 → 탭 새로고침 후 다음 항목으로 (DOM 오염 방지)`, 'warn');
         sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: resp.error });
         sm.retryCount = 0;
+        if (activeTabIds[0]) {
+          try {
+            await chrome.tabs.reload(activeTabIds[0]);
+            await MangoUtils.sleep(5000);  // 페이지 로드 대기
+            broadcastLog('탭 새로고침 완료', 'info');
+          } catch (e) {
+            broadcastLog(`탭 새로고침 실패 (무시하고 계속): ${e.message}`, 'warn');
+          }
+        }
         sm.transition(AutoState.COOLDOWN);
         broadcastState(getExtendedSnapshot());
         await handleCooldownAndNext();
@@ -1307,9 +1318,9 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
           return;
         }
         // 업로드 실패: 생성은 성공했으므로 실패 기록 후 다음으로 진행
-        // markError 대신 직접 결과에 실패 기록 + COOLDOWN으로 전환
-        // mediaUrl/mediaDataUrl 보관 — 재업로드용
-        broadcastLog(`업로드 실패: ${err.message} (다음 항목 진행)`, 'error');
+        // 🔑 업로드 실패 후 다음 세그먼트에 이전 이미지/영상이 덮어쓰이는 현상 방지 위해
+        //    탭을 새로고침해서 깨끗한 DOM/전역 상태로 다음 항목 진행.
+        broadcastLog(`업로드 실패: ${err.message} → 탭 새로고침 후 다음 항목`, 'error');
         sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message, uploadFailed: true, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
         // 업로드 실패해도 Flow UI 다운로드 원본 파일 정리 (로컬 저장 후 원본 삭제)
         if (_uiDownloadId) {
@@ -1318,6 +1329,16 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
             chrome.downloads.erase({ id: _uiDownloadId });
             broadcastLog('UI 다운로드 원본 파일 삭제 (업로드 실패 후 정리)', 'info');
           } catch (e) { /* 이미 삭제됐거나 접근 불가 */ }
+        }
+        // 탭 새로고침 (DOM/전역 상태 오염 방지)
+        if (activeTabIds[0]) {
+          try {
+            await chrome.tabs.reload(activeTabIds[0]);
+            await MangoUtils.sleep(5000);
+            broadcastLog('탭 새로고침 완료', 'info');
+          } catch (e) {
+            broadcastLog(`탭 새로고침 실패 (무시하고 계속): ${e.message}`, 'warn');
+          }
         }
         sm.transition(AutoState.COOLDOWN);
       }
@@ -1606,8 +1627,18 @@ async function handleConcurrentComplete(tabId, mediaDataUrl, success, errorMsg, 
             broadcastState({ ...getExtendedSnapshot(), authExpired: true });
             return;
           }
-          broadcastLog(`업로드 실패: ${err.message}`, 'error');
+          // 🔑 업로드 실패 후 다음 세그먼트 오염 방지 위해 탭 새로고침.
+          broadcastLog(`업로드 실패: ${err.message} → 탭 새로고침`, 'error');
           sm.results.push({ success: false, index: itemIndex, error: err.message });
+          if (activeTabIds[0]) {
+            try {
+              await chrome.tabs.reload(activeTabIds[0]);
+              await MangoUtils.sleep(5000);
+              broadcastLog('탭 새로고침 완료', 'info');
+            } catch (e) {
+              broadcastLog(`탭 새로고침 실패 (무시하고 계속): ${e.message}`, 'warn');
+            }
+          }
         }
       }
 
