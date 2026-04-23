@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "1.3.1",
-  "description": "Automate image/video generation on Grok, Flow, Whisk with MangoHub integration",
+  "version": "1.4.0",
+  "description": "Automate image/video generation on Grok and Flow with MangoHub integration",
   "permissions": [
     "cookies",
     "downloads",
@@ -42,14 +42,6 @@
     {
       "matches": ["https://grok.com/*"],
       "js": ["lib/utils.js", "content/shared-dom.js", "content/grok.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://labs.google/fx/tools/image-fx*",
-        "https://labs.google/fx/*/tools/image-fx*"
-      ],
-      "js": ["lib/utils.js", "content/shared-dom.js", "content/whisk.js"],
       "run_at": "document_idle"
     },
     {

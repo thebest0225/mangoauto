@@ -8,7 +8,7 @@ const MANGOHUB_BASE = 'https://mangois.love';
 
 let currentSource = 'mangohub';
 let currentPlatform = 'grok';
-let currentMode = 'text-image';  // text-image | text-video | image-video | image-image
+let currentMode = 'text-image';  // text-image | image-video (프레임→영상). text-video / image-image / Whisk 제거됨.
 let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
 let currentApiType = 'longform-v2';  // 'longform-v2' (기본: 롱폼 = V2) | 'shortform' | 'mangomaker'
@@ -16,12 +16,11 @@ let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
 let reviewItems = [];
 
-// ─── Supported URL patterns ───
+// ─── Supported URL patterns (Whisk 제거됨) ───
 const SUPPORTED_PATTERNS = [
   { pattern: /^https:\/\/grok\.com/,                   platform: 'grok' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/video-fx/, platform: 'flow' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/flow/,     platform: 'flow' },
-  { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/image-fx/, platform: 'whisk' }
 ];
 
 function detectPlatform(url) {
@@ -481,7 +480,7 @@ function bindEvents() {
 
 // ─── Mode UI Update ───
 function updateModeUI() {
-  const needsImageUpload = currentMode === 'image-video' || currentMode === 'image-image';
+  const needsImageUpload = currentMode === 'image-video';  // 프레임→영상만 이미지 업로드 필요
   const imageSection = $('#imageUploadSection');
   if (currentSource === 'standalone') {
     imageSection.classList.toggle('hidden', !needsImageUpload);
@@ -491,33 +490,12 @@ function updateModeUI() {
 }
 
 function updateModeAvailability() {
-  const videoOnly = false; // Flow는 모든 모드 지원
-  const imageOnly = currentPlatform === 'whisk';
-  const videoModes = ['text-video', 'image-video'];
-  const imageModes = ['text-image', 'image-image'];
-
+  // Whisk/text-video/image-image 제거로 플랫폼별 모드 제한 불필요. 모든 모드 항상 활성.
   $$('.mode-btn').forEach(btn => {
-    const mode = btn.dataset.mode;
-    const isVideo = videoModes.includes(mode);
-    const isImage = imageModes.includes(mode);
-    if (videoOnly && isImage) {
-      btn.style.opacity = '0.3';
-      btn.style.pointerEvents = 'none';
-    } else if (imageOnly && isVideo) {
-      btn.style.opacity = '0.3';
-      btn.style.pointerEvents = 'none';
-    } else {
-      btn.style.opacity = '1';
-      btn.style.pointerEvents = 'auto';
-    }
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
   });
-
-  // Auto-select appropriate mode
-  if (videoOnly && imageModes.includes(currentMode)) {
-    setMode('text-video');
-  } else if (imageOnly && videoModes.includes(currentMode)) {
-    setMode('text-image');
-  }
+  // (이전에 있던 자동 setMode 스위칭 — 사용하는 모드 2개뿐이라 불필요)
 }
 
 function setMode(mode) {
@@ -944,7 +922,7 @@ function gatherSettings() {
       retryOnFailure: $('#retryOnFailure').checked,
       maxRetries: parseInt($('#maxRetries').value) || 3,
       defaultMode: $('#defaultMode').value,
-      concurrentCount: parseInt($('#concurrentCount').value) || 1,
+      concurrentCount: 1,  // 항상 1 (순차 처리). UI 에서 제거됨.
       promptDelay: parseInt($('#promptDelay').value) || 40
     },
     llm: {
@@ -1252,8 +1230,13 @@ async function loadSettings() {
     if (s.general.cooldownMax) $('#cooldownMax').value = s.general.cooldownMax;
     if (s.general.retryOnFailure !== undefined) $('#retryOnFailure').checked = s.general.retryOnFailure;
     if (s.general.maxRetries) $('#maxRetries').value = s.general.maxRetries;
-    if (s.general.defaultMode) $('#defaultMode').value = s.general.defaultMode;
-    if (s.general.concurrentCount) $('#concurrentCount').value = s.general.concurrentCount;
+    if (s.general.defaultMode) {
+      // 제거된 모드(text-video / image-image)가 저장돼 있으면 text-image 로 fallback
+      const validModes = ['text-image', 'image-video'];
+      const saved = s.general.defaultMode;
+      $('#defaultMode').value = validModes.includes(saved) ? saved : 'text-image';
+    }
+    // concurrentCount UI 제거됨 — 항상 1
     if (s.general.promptDelay) $('#promptDelay').value = s.general.promptDelay;
   }
 

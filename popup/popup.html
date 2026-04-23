@@ -8,20 +8,39 @@
 <body>
   <div class="container">
     <!-- Header -->
-    <div class="header">
-      <h1>MangoAuto</h1>
-      <span id="authBadge" class="badge badge-off">Not Connected</span>
-    </div>
+    <header class="header">
+      <div class="header-brand">
+        <div class="brand-mark">
+          <!-- Mango leaf-ish glyph in SVG -->
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L4 7v6c0 5 3.5 9 8 9s8-4 8-9V7l-8-5z" fill="currentColor" opacity=".15"/>
+            <path d="M12 2L4 7v6c0 5 3.5 9 8 9s8-4 8-9V7l-8-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M9 11c.6 1.2 1.5 2 3 2s2.4-.8 3-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-name">MangoAuto</div>
+          <div class="brand-sub">생성 자동화</div>
+        </div>
+      </div>
+      <span id="authBadge" class="badge badge-off">
+        <span class="dot"></span>Not Connected
+      </span>
+    </header>
 
     <!-- Unsupported Page Notice -->
     <div id="unsupportedNotice" class="unsupported-notice hidden">
-      <div class="unsupported-icon">&#9888;</div>
+      <div class="unsupported-icon">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+      </div>
       <div class="unsupported-title">지원하는 페이지가 아닙니다</div>
-      <div class="unsupported-desc">아래 페이지 중 하나로 이동하세요:</div>
+      <div class="unsupported-desc">아래 중 하나로 이동하세요</div>
       <div class="unsupported-links">
         <a href="#" class="unsupported-link" data-url="https://grok.com/">Grok Imagine</a>
         <a href="#" class="unsupported-link" data-url="https://labs.google/fx/tools/flow">Google Flow</a>
-        <a href="#" class="unsupported-link" data-url="https://labs.google/fx/tools/image-fx">Google Whisk</a>
       </div>
     </div>
 
@@ -29,209 +48,242 @@
     <div id="mainContent">
 
     <!-- Platform Tabs -->
-    <div class="platform-tabs">
-      <button class="ptab active" data-platform="grok">Grok</button>
-      <button class="ptab" data-platform="flow">Flow</button>
-      <button class="ptab" data-platform="whisk">Whisk</button>
+    <div class="platform-tabs segmented">
+      <button class="ptab active" data-platform="grok">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M8 12l2.5 2.5L16 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Grok</span>
+      </button>
+      <button class="ptab" data-platform="flow">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
+        <span>Flow</span>
+      </button>
     </div>
 
     <!-- Main Tabs -->
-    <div class="main-tabs">
-      <button class="mtab active" data-tab="workspace">작업공간</button>
-      <button class="mtab" data-tab="review">검토 <span id="reviewBadge" class="review-badge hidden">0</span></button>
-      <button class="mtab" data-tab="settings">설정</button>
-    </div>
+    <nav class="main-tabs">
+      <button class="mtab active" data-tab="workspace">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.5"/></svg>
+        <span>작업공간</span>
+      </button>
+      <button class="mtab" data-tab="review">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 11l3 3L22 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>검토</span>
+        <span id="reviewBadge" class="review-badge hidden">0</span>
+      </button>
+      <button class="mtab" data-tab="settings">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 01-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h.1a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h.1a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v.1a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        <span>설정</span>
+      </button>
+    </nav>
 
     <!-- ═══════ WORKSPACE TAB ═══════ -->
     <div id="workspacePanel" class="tab-panel">
 
       <!-- Source Toggle -->
-      <div class="source-tabs">
+      <div class="source-tabs segmented segmented-sm">
         <button class="stab active" data-source="mangohub">MangoHub</button>
-        <button class="stab" data-source="standalone">Standalone</button>
+        <button class="stab" data-source="standalone">독립 실행</button>
       </div>
 
-      <!-- Mode Buttons -->
+      <!-- Mode Buttons (2 modes only) -->
       <div class="mode-grid">
         <button class="mode-btn active" data-mode="text-image">
-          <span class="mode-icon">T→🖼</span>
-          <span>텍스트→이미지</span>
-        </button>
-        <button class="mode-btn" data-mode="text-video">
-          <span class="mode-icon">T→🎬</span>
-          <span>텍스트→영상</span>
+          <svg class="mode-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 6h8M4 10h6M4 14h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="14" y="4" width="7" height="16" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="17.5" cy="9" r="1.3" fill="currentColor"/>
+            <path d="M14 16l2-2 2 2 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="mode-label">텍스트→이미지</span>
         </button>
         <button class="mode-btn" data-mode="image-video">
-          <span class="mode-icon">🖼→🎬</span>
-          <span>프레임→영상</span>
-        </button>
-        <button class="mode-btn" data-mode="image-image">
-          <span class="mode-icon">🖼→🖼</span>
-          <span>이미지→이미지</span>
+          <svg class="mode-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="5" width="9" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M3 15l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="7" cy="10" r="1.2" fill="currentColor"/>
+            <path d="M13 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M17 10l3 2-3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="mode-label">프레임→영상</span>
         </button>
       </div>
 
       <!-- MangoHub Section -->
-      <div id="mangohubSection" class="section">
-        <div class="row gap-4" style="margin-bottom:4px;">
-          <button class="api-type-tab active" data-api="longform-v2" style="flex:1;padding:3px 0;font-size:11px;border:1px solid #555;border-radius:4px;cursor:pointer;background:#4f46e5;color:#fff;">롱폼</button>
-          <button class="api-type-tab" data-api="shortform" style="flex:1;padding:3px 0;font-size:11px;border:1px solid #555;border-radius:4px;cursor:pointer;background:transparent;color:#aaa;">숏폼</button>
-          <button class="api-type-tab" data-api="mangomaker" style="flex:1;padding:3px 0;font-size:11px;border:1px solid #555;border-radius:4px;cursor:pointer;background:transparent;color:#aaa;">메이커</button>
-        </div>
-        <div class="row gap-4">
-          <select id="projectSelect" class="select flex-1">
-            <option value="">프로젝트 선택...</option>
-          </select>
-          <button id="refreshProjectsBtn" class="btn btn-sm" title="프로젝트 목록 새로고침">&#x21bb;</button>
-          <button id="loadProjectBtn" class="btn btn-sm">불러오기</button>
-        </div>
-        <div id="projectInfo" class="project-info hidden">
-          <div class="info-row">
-            <span id="projectName" class="info-label"></span>
-            <span id="segmentCount" class="info-value"></span>
+      <section id="mangohubSection" class="card">
+        <div class="card-inner">
+          <div class="api-type-tabs segmented segmented-xs">
+            <button class="api-type-tab active" data-api="longform-v2">롱폼</button>
+            <button class="api-type-tab" data-api="shortform">숏폼</button>
+            <button class="api-type-tab" data-api="mangomaker">메이커</button>
           </div>
-          <!-- 콘텐츠 유형 선택 -->
-          <div class="info-row" style="margin-top:4px;">
-            <div class="content-type-tabs" style="display:flex;gap:4px;width:100%;">
-              <button class="ctab active" data-ctype="segments" style="flex:1;padding:5px 0;font-size:11px;border:1px solid #e5e7eb;border-radius:6px;background:#4f46e5;color:#fff;cursor:pointer;font-weight:600;">세그먼트</button>
-              <button class="ctab" data-ctype="thumbnail" style="flex:1;padding:5px 0;font-size:11px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;color:#666;cursor:pointer;font-weight:600;">썸네일</button>
+          <div class="row gap-4">
+            <select id="projectSelect" class="select flex-1">
+              <option value="">프로젝트 선택...</option>
+            </select>
+            <button id="refreshProjectsBtn" class="btn btn-icon" title="프로젝트 목록 새로고침" aria-label="새로고침">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12a9 9 0 01-15 6.7L3 16M3 12a9 9 0 0115-6.7L21 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 3v5h-5M3 21v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="loadProjectBtn" class="btn btn-sm btn-primary">불러오기</button>
+          </div>
+          <div id="projectInfo" class="project-info hidden">
+            <div class="info-row project-meta">
+              <span id="projectName" class="info-label"></span>
+              <span id="segmentCount" class="info-value"></span>
             </div>
-          </div>
-          <div id="thumbnailInfo" class="info-row hidden" style="font-size:10px;color:#888;padding:2px 4px;background:#fef3c7;border-radius:4px;">
-            <span id="thumbnailCount"></span>
-          </div>
-          <div class="info-row">
+            <div class="content-type-tabs segmented segmented-xs" style="margin-top:6px;">
+              <button class="ctab active" data-ctype="segments">세그먼트</button>
+              <button class="ctab" data-ctype="thumbnail">썸네일</button>
+            </div>
+            <div id="thumbnailInfo" class="info-row thumb-info hidden">
+              <span id="thumbnailCount"></span>
+            </div>
             <label class="check-label">
               <input type="checkbox" id="useExistingImages" checked>
-              기존 이미지 활용 (영상 변환 시)
+              <span>기존 이미지 활용 (영상 변환 시)</span>
             </label>
-          </div>
-          <div class="info-row">
             <label class="check-label">
               <input type="checkbox" id="skipCompleted" checked>
-              이미 생성된 항목 건너뛰기
+              <span>이미 생성된 항목 건너뛰기</span>
             </label>
           </div>
         </div>
-      </div>
+      </section>
 
       <!-- Standalone Section -->
-      <div id="standaloneSection" class="section hidden">
-        <!-- Image upload (image-to-video, image-to-image) -->
-        <div id="imageUploadSection" class="hidden">
-          <label class="label">이미지 첨부 (여러장 선택 가능)</label>
-          <div class="upload-area" id="uploadArea">
-            <input type="file" id="imagesInput" multiple accept="image/*" class="file-input">
-            <div class="upload-placeholder">
-              <span>클릭하여 이미지 선택 또는 드래그&드롭</span>
+      <section id="standaloneSection" class="card hidden">
+        <div class="card-inner">
+          <div id="imageUploadSection" class="hidden">
+            <label class="label">이미지 첨부 <span class="hint-inline">(여러장 선택 가능)</span></label>
+            <div class="upload-area" id="uploadArea">
+              <input type="file" id="imagesInput" multiple accept="image/*" class="file-input">
+              <div class="upload-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>클릭하여 이미지 선택 또는 드래그&드롭</span>
+              </div>
+            </div>
+            <div id="imagePreviewList" class="image-preview-list"></div>
+          </div>
+
+          <div class="row between" style="margin-bottom:4px;">
+            <label class="label" style="margin:0;">프롬프트 <span class="hint-inline">(빈 줄로 구분)</span></label>
+            <div class="row gap-2">
+              <button id="resetBtn" class="btn btn-icon btn-sm" title="초기화">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6M5 6l1 14a2 2 0 002 2h8a2 2 0 002-2l1-14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <label class="btn btn-icon btn-sm import-btn" title="TXT 파일 가져오기">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M14 2v6h6" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+                <input type="file" id="promptFileInput" accept=".txt,.csv" style="display:none">
+              </label>
             </div>
           </div>
-          <div id="imagePreviewList" class="image-preview-list"></div>
+          <textarea id="promptsInput" class="textarea" rows="5" placeholder="프롬프트를 입력하세요...&#10;&#10;첫 번째 긴 프롬프트.&#10;여러 줄에 걸쳐 작성 가능합니다.&#10;&#10;두 번째 프롬프트는 빈 줄 뒤에 시작됩니다."></textarea>
         </div>
+      </section>
 
-        <div class="row gap-4" style="margin-bottom:3px">
-          <label class="label" style="margin:0;flex:1">프롬프트 입력 (빈줄로 구분)</label>
-          <button id="resetBtn" class="btn btn-sm" title="프롬프트 및 이미지 초기화">리셋</button>
-          <label class="btn btn-sm import-btn" title="TXT 파일에서 가져오기">
-            가져오기
-            <input type="file" id="promptFileInput" accept=".txt,.csv" style="display:none">
-          </label>
+      <!-- Processing Settings (concurrent 제거, 전송 간격만) -->
+      <section class="card">
+        <div class="card-inner">
+          <div class="setting-row">
+            <label>전송 간격 (초)</label>
+            <input type="number" id="promptDelay" class="input-sm" value="10" min="3" max="120">
+          </div>
+          <div class="setting-hint">순차 전송 시 각 프롬프트 간 대기 시간</div>
         </div>
-        <textarea id="promptsInput" class="textarea" rows="5" placeholder="프롬프트를 입력하세요...&#10;&#10;예시:&#10;첫 번째 긴 프롬프트.&#10;여러 줄에 걸쳐 작성 가능합니다.&#10;&#10;두 번째 프롬프트는 빈 줄 뒤에 시작됩니다.&#10;&#10;세 번째 프롬프트."></textarea>
-      </div>
-
-      <!-- Processing Settings -->
-      <div class="section">
-        <div class="setting-row" style="margin-bottom:4px;">
-          <label>동시 처리 수</label>
-          <select id="concurrentCount" class="select-sm">
-            <option value="1" selected>1개 (순차)</option>
-            <option value="2">2개</option>
-            <option value="3">3개</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>전송 간격 (초)</label>
-          <input type="number" id="promptDelay" class="input-sm" value="10" min="3" max="120">
-        </div>
-        <div class="setting-hint">동시 2개 이상: 각 탭에 전송 간격을 두고 프롬프트 전달</div>
-      </div>
+      </section>
 
       <!-- Queue List -->
-      <div id="queueSection" class="section">
-        <div class="queue-header">
-          <div style="display:flex;align-items:center;gap:4px">
-            <input type="checkbox" id="queueSelectAll" class="queue-check" checked>
-            <span class="label" style="margin:0">대기열</span>
+      <section id="queueSection" class="card">
+        <div class="card-inner">
+          <div class="queue-header">
+            <label class="check-label row-item">
+              <input type="checkbox" id="queueSelectAll" checked>
+              <span class="label" style="margin:0">대기열</span>
+            </label>
+            <div id="queueQuickSelect" class="qs-row">
+              <button class="qs-pct-btn" data-pct="25">25%</button>
+              <button class="qs-pct-btn" data-pct="50">50%</button>
+              <button class="qs-pct-btn" data-pct="75">75%</button>
+              <span id="queueCount" class="queue-count">0개</span>
+            </div>
           </div>
-          <div id="queueQuickSelect" style="display:flex;gap:2px;align-items:center;">
-            <button class="qs-pct-btn" data-pct="25">25%</button>
-            <button class="qs-pct-btn" data-pct="50">50%</button>
-            <button class="qs-pct-btn" data-pct="75">75%</button>
-            <span id="queueCount" class="queue-count">0개</span>
-          </div>
+          <div id="queueList" class="queue-list"></div>
         </div>
-        <div id="queueList" class="queue-list"></div>
-      </div>
+      </section>
 
       <!-- Progress -->
-      <div id="progressSection" class="section hidden">
-        <div class="progress-header">
-          <span id="progressLabel">0 / 0</span>
-          <span id="progressPercent">0%</span>
+      <section id="progressSection" class="card hidden">
+        <div class="card-inner">
+          <div class="progress-header">
+            <span id="progressLabel">0 / 0</span>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div id="currentStatus" class="current-status"></div>
         </div>
-        <div class="progress-bar">
-          <div id="progressFill" class="progress-fill"></div>
-        </div>
-        <div id="currentStatus" class="current-status"></div>
-      </div>
+      </section>
 
       <!-- Controls -->
       <div class="controls">
-        <button id="startBtn" class="btn btn-primary flex-1">시작</button>
-        <button id="pauseBtn" class="btn btn-warn flex-1 hidden">일시정지</button>
-        <button id="resumeBtn" class="btn btn-primary flex-1 hidden">재개</button>
-        <button id="stopBtn" class="btn btn-danger hidden">중지</button>
+        <button id="startBtn" class="btn btn-primary flex-1">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
+          <span>시작</span>
+        </button>
+        <button id="pauseBtn" class="btn btn-warn flex-1 hidden">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
+          <span>일시정지</span>
+        </button>
+        <button id="resumeBtn" class="btn btn-primary flex-1 hidden">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5v14l11-7L8 5z" fill="currentColor"/></svg>
+          <span>재개</span>
+        </button>
+        <button id="stopBtn" class="btn btn-danger hidden">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/></svg>
+          <span>중지</span>
+        </button>
         <button id="retryFailedBtn" class="btn btn-warn hidden">실패만 재시도</button>
         <button id="retrySelectedBtn" class="btn btn-warn hidden">선택 재생성</button>
-        <button id="downloadAllBtn" class="btn btn-accent hidden">전체 다운로드</button>
+        <button id="downloadAllBtn" class="btn btn-accent hidden">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>전체 다운로드</span>
+        </button>
       </div>
 
       <!-- Log -->
-      <div id="logSection" class="section hidden">
-        <div class="label">로그</div>
-        <div id="logContainer" class="log-container"></div>
-      </div>
+      <section id="logSection" class="card hidden">
+        <div class="card-inner">
+          <div class="label">로그</div>
+          <div id="logContainer" class="log-container"></div>
+        </div>
+      </section>
     </div>
 
     <!-- ═══════ REVIEW TAB ═══════ -->
     <div id="reviewPanel" class="tab-panel hidden">
-
-      <!-- Review Mode Toggle -->
-      <div class="section">
-        <div class="setting-row">
+      <section class="card">
+        <div class="card-inner">
           <label class="check-label">
             <input type="checkbox" id="reviewModeToggle">
-            검토 모드 (업로드 전 검토)
+            <span>검토 모드 (업로드 전 검토)</span>
           </label>
+          <div class="setting-hint">활성화하면 생성된 미디어를 즉시 업로드하지 않고 검토 후 승인합니다</div>
         </div>
-        <div class="setting-hint">활성화하면 생성된 미디어를 즉시 업로드하지 않고 검토 후 승인합니다</div>
-      </div>
+      </section>
 
-      <!-- Batch Controls -->
-      <div class="review-controls section">
+      <div class="review-controls">
         <button id="approveAllBtn" class="btn btn-sm btn-primary">전체 승인</button>
         <button id="rejectAllBtn" class="btn btn-sm btn-danger">전체 거부</button>
         <button id="uploadApprovedBtn" class="btn btn-sm btn-accent">승인 항목 업로드</button>
-        <button id="clearCompletedBtn" class="btn btn-sm">완료 항목 정리</button>
+        <button id="clearCompletedBtn" class="btn btn-sm">완료 정리</button>
       </div>
 
-      <!-- Review Summary -->
-      <div class="review-summary section">
-        <span id="reviewSummary">대기 0 | 승인 0 | 거부 0 | 업로드 0</span>
-      </div>
+      <section class="card review-summary">
+        <div class="card-inner">
+          <span id="reviewSummary">대기 0 | 승인 0 | 거부 0 | 업로드 0</span>
+        </div>
+      </section>
 
-      <!-- Review Items List -->
       <div id="reviewList" class="review-list"></div>
     </div>
 
@@ -239,247 +291,252 @@
     <div id="settingsPanel" class="tab-panel hidden">
 
       <!-- Grok Settings -->
-      <div class="settings-group">
-        <h3 class="settings-title">Grok 설정</h3>
-        <div class="setting-row">
-          <label>비디오 재생시간</label>
-          <select id="grokVideoDuration" class="select-sm">
-            <option value="5">5초</option>
-            <option value="10" selected>10초</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>비디오 해상도</label>
-          <select id="grokVideoResolution" class="select-sm">
-            <option value="480p" selected>480p (업스케일 추천)</option>
-            <option value="720p">720p</option>
-            <option value="1080p">1080p</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>종횡비</label>
-          <select id="grokAspectRatio" class="select-sm">
-            <option value="16:9" selected>가로 (16:9)</option>
-            <option value="9:16">세로 (9:16)</option>
-            <option value="1:1">정사각 (1:1)</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>생성 대기 타임아웃 (분)</label>
-          <input type="number" id="grokTimeout" class="input-sm" value="5" min="1" max="30">
-        </div>
-        <div class="setting-row">
+      <section class="card">
+        <div class="card-inner">
+          <h3 class="settings-title"><span class="st-dot st-grok"></span>Grok 설정</h3>
+          <div class="setting-row">
+            <label>비디오 재생시간</label>
+            <select id="grokVideoDuration" class="select-sm">
+              <option value="5">5초</option>
+              <option value="10" selected>10초</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>비디오 해상도</label>
+            <select id="grokVideoResolution" class="select-sm">
+              <option value="480p" selected>480p (업스케일 추천)</option>
+              <option value="720p">720p</option>
+              <option value="1080p">1080p</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>종횡비</label>
+            <select id="grokAspectRatio" class="select-sm">
+              <option value="16:9" selected>가로 (16:9)</option>
+              <option value="9:16">세로 (9:16)</option>
+              <option value="1:1">정사각 (1:1)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>생성 대기 타임아웃 (분)</label>
+            <input type="number" id="grokTimeout" class="input-sm" value="5" min="1" max="30">
+          </div>
           <label class="check-label">
             <input type="checkbox" id="grokAutoUpscale" checked>
-            480p 자동 업스케일 (720p 한도 초과 시)
+            <span>480p 자동 업스케일 (720p 한도 초과 시)</span>
           </label>
+          <div class="setting-hint">720p 한도 초과로 480p 생성 시 자동으로 업스케일 후 다운로드</div>
         </div>
-        <div class="setting-hint">720p 한도 초과로 480p 생성 시 자동으로 업스케일 후 다운로드</div>
-      </div>
+      </section>
 
-      <!-- Flow 설정 -->
-      <div class="settings-group">
-        <h3 class="settings-title flow-title">Flow 설정</h3>
-        <h4 style="margin:6px 0 4px;font-size:11px;color:#aaa;">비디오</h4>
-        <div class="setting-row">
-          <label>비디오 모델</label>
-          <select id="flowVideoModel" class="select-sm">
-            <option value="veo-3">Veo 3</option>
-            <option value="veo-3.1-fast" selected>Veo 3.1 - Fast</option>
-            <option value="veo-3.1-quality">Veo 3.1 - Quality</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>비디오 화면비</label>
-          <select id="flowVideoAspectRatio" class="select-sm">
-            <option value="16:9" selected>가로 (16:9)</option>
-            <option value="9:16">세로 (9:16)</option>
-            <option value="1:1">정사각 (1:1)</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>기본 비디오 프레임</label>
-          <select id="flowVideoFrameDuration" class="select-sm">
-            <option value="8" selected>8초</option>
-            <option value="connect">연결</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>비디오 출력 개수</label>
-          <select id="flowVideoOutputCount" class="select-sm">
-            <option value="1" selected>1개</option>
-            <option value="2">2개</option>
-            <option value="4">4개</option>
-          </select>
-        </div>
-        <h4 style="margin:8px 0 4px;font-size:11px;color:#aaa;">이미지</h4>
-        <div class="setting-row">
-          <label>이미지 모델</label>
-          <select id="flowImageModel" class="select-sm">
-            <option value="nano-banana-pro">Nano Banana Pro</option>
-            <option value="nano-banana-2" selected>Nano Banana 2</option>
-            <option value="nano-banana">Nano Banana</option>
-            <option value="imagen4">Imagen 4</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>이미지 화면비</label>
-          <select id="flowImageAspectRatio" class="select-sm">
-            <option value="16:9" selected>가로 (16:9)</option>
-            <option value="9:16">세로 (9:16)</option>
-            <option value="1:1">정사각 (1:1)</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>이미지 출력 개수</label>
-          <select id="flowImageOutputCount" class="select-sm">
-            <option value="1" selected>1장</option>
-            <option value="2">2장</option>
-            <option value="3">3장</option>
-            <option value="4">4장</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>생성 대기 타임아웃 (분)</label>
-          <input type="number" id="flowTimeout" class="input-sm" value="3" min="1" max="30">
-        </div>
-      </div>
-
-      <!-- Grok/Whisk 이미지 설정 -->
-      <div class="settings-group">
-        <h3 class="settings-title img-title">Grok / Whisk 이미지 설정</h3>
-        <div class="setting-row">
-          <label>이미지 모델</label>
-          <select id="imageModel" class="select-sm">
-            <option value="aurora" selected>Aurora (Grok)</option>
-            <option value="grok-2">Grok 2</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>이미지 화면비</label>
-          <select id="imageAspectRatio" class="select-sm">
-            <option value="16:9" selected>가로 (16:9)</option>
-            <option value="9:16">세로 (9:16)</option>
-            <option value="1:1">정사각 (1:1)</option>
-            <option value="4:3">가로 (4:3)</option>
-            <option value="3:4">세로 (3:4)</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>프롬프트당 출력 개수</label>
-          <select id="imageOutputCount" class="select-sm">
-            <option value="1" selected>1장</option>
-            <option value="2">2장</option>
-            <option value="4">4장</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Download Settings -->
-      <div class="settings-group">
-        <h3 class="settings-title dl-title">다운로드 설정</h3>
-        <div class="setting-row">
-          <label>비디오 다운로드 품질</label>
-          <select id="downloadVideoQuality" class="select-sm">
-            <option value="720p">720p (원본)</option>
-            <option value="1080p" selected>1080p (업스케일)</option>
-          </select>
-        </div>
-        <div class="setting-hint">Flow 비디오: 1080p 선택 시 다운로드 전 업스케일 적용</div>
-        <div class="setting-row">
-          <label>이미지 다운로드 품질</label>
-          <select id="downloadImageQuality" class="select-sm">
-            <option value="1k">1k</option>
-            <option value="2k" selected>2k</option>
-            <option value="4k">4k</option>
-          </select>
-        </div>
-        <div class="setting-hint">Flow 이미지: 2K/4K 선택 시 호버 메뉴를 통해 업스케일 다운로드</div>
-        <div class="setting-row">
-          <label>파일명 패턴</label>
-          <select id="downloadNaming" class="select-sm">
-            <option value="idx_model_date" selected>001_모델_날짜</option>
-            <option value="idx_date_model">001_날짜_모델</option>
-            <option value="idx_prompt_date">001_프롬프트_날짜</option>
-          </select>
-        </div>
-        <div class="setting-row">
-          <label>다운로드 간격 (초)</label>
-          <input type="number" id="downloadDelay" class="input-sm" value="30" min="1" max="600">
-        </div>
-        <div class="setting-hint">생성 완료 후 다운로드 사이 대기 시간 (순번 보장, 권장 30~300초)</div>
-        <div class="setting-row">
-          <label class="check-label">
-            <input type="checkbox" id="downloadPerProject" checked>
-            프로젝트별 폴더에 저장
-          </label>
-        </div>
-      </div>
-
-      <!-- General Settings -->
-      <div class="settings-group">
-        <h3 class="settings-title gen-title">일반 설정</h3>
-        <div class="setting-row">
-          <label>작업 간 대기 (초)</label>
-          <div class="range-inputs">
-            <input type="number" id="cooldownMin" class="input-sm" value="10" min="1" max="300">
-            <span>~</span>
-            <input type="number" id="cooldownMax" class="input-sm" value="15" min="1" max="300">
+      <!-- Flow Settings -->
+      <section class="card">
+        <div class="card-inner">
+          <h3 class="settings-title"><span class="st-dot st-flow"></span>Flow 설정</h3>
+          <h4 class="settings-sub">비디오</h4>
+          <div class="setting-row">
+            <label>비디오 모델</label>
+            <select id="flowVideoModel" class="select-sm">
+              <option value="veo-3">Veo 3</option>
+              <option value="veo-3.1-fast" selected>Veo 3.1 - Fast</option>
+              <option value="veo-3.1-quality">Veo 3.1 - Quality</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>비디오 화면비</label>
+            <select id="flowVideoAspectRatio" class="select-sm">
+              <option value="16:9" selected>가로 (16:9)</option>
+              <option value="9:16">세로 (9:16)</option>
+              <option value="1:1">정사각 (1:1)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>기본 비디오 프레임</label>
+            <select id="flowVideoFrameDuration" class="select-sm">
+              <option value="8" selected>8초</option>
+              <option value="connect">연결</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>비디오 출력 개수</label>
+            <select id="flowVideoOutputCount" class="select-sm">
+              <option value="1" selected>1개</option>
+              <option value="2">2개</option>
+              <option value="4">4개</option>
+            </select>
+          </div>
+          <h4 class="settings-sub">이미지</h4>
+          <div class="setting-row">
+            <label>이미지 모델</label>
+            <select id="flowImageModel" class="select-sm">
+              <option value="nano-banana-pro">Nano Banana Pro</option>
+              <option value="nano-banana-2" selected>Nano Banana 2</option>
+              <option value="nano-banana">Nano Banana</option>
+              <option value="imagen4">Imagen 4</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>이미지 화면비</label>
+            <select id="flowImageAspectRatio" class="select-sm">
+              <option value="16:9" selected>가로 (16:9)</option>
+              <option value="9:16">세로 (9:16)</option>
+              <option value="1:1">정사각 (1:1)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>이미지 출력 개수</label>
+            <select id="flowImageOutputCount" class="select-sm">
+              <option value="1" selected>1장</option>
+              <option value="2">2장</option>
+              <option value="3">3장</option>
+              <option value="4">4장</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>생성 대기 타임아웃 (분)</label>
+            <input type="number" id="flowTimeout" class="input-sm" value="3" min="1" max="30">
           </div>
         </div>
-        <div class="setting-hint">완료 후 다음 작업 시작까지 랜덤 대기</div>
-        <div class="setting-row">
+      </section>
+
+      <!-- Grok Image Settings (Whisk 제거됨) -->
+      <section class="card">
+        <div class="card-inner">
+          <h3 class="settings-title"><span class="st-dot st-img"></span>Grok 이미지 설정</h3>
+          <div class="setting-row">
+            <label>이미지 모델</label>
+            <select id="imageModel" class="select-sm">
+              <option value="aurora" selected>Aurora (Grok)</option>
+              <option value="grok-2">Grok 2</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>이미지 화면비</label>
+            <select id="imageAspectRatio" class="select-sm">
+              <option value="16:9" selected>가로 (16:9)</option>
+              <option value="9:16">세로 (9:16)</option>
+              <option value="1:1">정사각 (1:1)</option>
+              <option value="4:3">가로 (4:3)</option>
+              <option value="3:4">세로 (3:4)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>프롬프트당 출력</label>
+            <select id="imageOutputCount" class="select-sm">
+              <option value="1" selected>1장</option>
+              <option value="2">2장</option>
+              <option value="4">4장</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Download Settings -->
+      <section class="card">
+        <div class="card-inner">
+          <h3 class="settings-title"><span class="st-dot st-dl"></span>다운로드 설정</h3>
+          <div class="setting-row">
+            <label>비디오 품질</label>
+            <select id="downloadVideoQuality" class="select-sm">
+              <option value="720p">720p (원본)</option>
+              <option value="1080p" selected>1080p (업스케일)</option>
+            </select>
+          </div>
+          <div class="setting-hint">Flow 비디오: 1080p 선택 시 다운로드 전 업스케일 적용</div>
+          <div class="setting-row">
+            <label>이미지 품질</label>
+            <select id="downloadImageQuality" class="select-sm">
+              <option value="1k">1k</option>
+              <option value="2k" selected>2k</option>
+              <option value="4k">4k</option>
+            </select>
+          </div>
+          <div class="setting-hint">Flow 이미지: 2K/4K 선택 시 호버 메뉴로 업스케일 다운로드</div>
+          <div class="setting-row">
+            <label>파일명 패턴</label>
+            <select id="downloadNaming" class="select-sm">
+              <option value="idx_model_date" selected>001_모델_날짜</option>
+              <option value="idx_date_model">001_날짜_모델</option>
+              <option value="idx_prompt_date">001_프롬프트_날짜</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>다운로드 간격 (초)</label>
+            <input type="number" id="downloadDelay" class="input-sm" value="30" min="1" max="600">
+          </div>
+          <div class="setting-hint">생성 완료 후 다운로드 사이 대기 시간 (순번 보장, 권장 30~300초)</div>
+          <label class="check-label">
+            <input type="checkbox" id="downloadPerProject" checked>
+            <span>프로젝트별 폴더에 저장</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- General Settings (defaultMode 축소, concurrent 제거) -->
+      <section class="card">
+        <div class="card-inner">
+          <h3 class="settings-title"><span class="st-dot st-gen"></span>일반 설정</h3>
+          <div class="setting-row">
+            <label>작업 간 대기 (초)</label>
+            <div class="range-inputs">
+              <input type="number" id="cooldownMin" class="input-sm" value="10" min="1" max="300">
+              <span class="range-sep">~</span>
+              <input type="number" id="cooldownMax" class="input-sm" value="15" min="1" max="300">
+            </div>
+          </div>
+          <div class="setting-hint">완료 후 다음 작업 시작까지 랜덤 대기</div>
           <label class="check-label">
             <input type="checkbox" id="retryOnFailure" checked>
-            실패 시 재시도
+            <span>실패 시 재시도</span>
           </label>
+          <div class="setting-row">
+            <label>최대 재시도</label>
+            <input type="number" id="maxRetries" class="input-sm" value="2" min="1" max="20">
+          </div>
+          <div class="setting-row">
+            <label>기본 모드</label>
+            <select id="defaultMode" class="select-sm">
+              <option value="text-image" selected>텍스트→이미지</option>
+              <option value="image-video">프레임→영상</option>
+            </select>
+          </div>
         </div>
-        <div class="setting-row">
-          <label>최대 재시도 횟수</label>
-          <input type="number" id="maxRetries" class="input-sm" value="2" min="1" max="20">
-        </div>
-        <div class="setting-row">
-          <label>기본 모드</label>
-          <select id="defaultMode" class="select-sm">
-            <option value="text-image" selected>텍스트→이미지</option>
-            <option value="text-video">텍스트→영상</option>
-            <option value="image-video">프레임→영상</option>
-            <option value="image-image">이미지→이미지</option>
-          </select>
-        </div>
-      </div>
+      </section>
 
-      <!-- LLM 프롬프트 수정 설정 -->
-      <div class="settings-section">
-        <h3 class="settings-title llm-title">검열 회피 (LLM 프롬프트 수정)</h3>
-        <div class="setting-hint">생성 실패(검열) 시 LLM으로 프롬프트를 수정하여 재시도합니다</div>
-        <div class="setting-row">
+      <!-- LLM Prompt Rewrite -->
+      <section class="card">
+        <div class="card-inner">
+          <h3 class="settings-title"><span class="st-dot st-llm"></span>검열 회피 (LLM 프롬프트 수정)</h3>
+          <div class="setting-hint">생성 실패(검열) 시 LLM으로 프롬프트를 수정해 재시도합니다</div>
           <label class="check-label">
             <input type="checkbox" id="llmRewriteEnabled" checked>
-            검열 실패 시 LLM 프롬프트 수정 사용
+            <span>검열 실패 시 LLM 프롬프트 수정</span>
           </label>
+          <div class="setting-row col">
+            <label>KIE API Key</label>
+            <input type="password" id="kieApiKey" class="input-full" placeholder="kie_xxxxxxxx...">
+          </div>
+          <div class="row gap-4" style="margin-top:4px;">
+            <button id="exportApiKeyBtn" class="btn btn-sm flex-1" title="다른 프로필에서 사용할 수 있도록 파일로 내보내기">키 내보내기</button>
+            <label class="btn btn-sm flex-1" style="text-align:center;cursor:pointer;" title="다른 프로필에서 내보낸 키 파일 불러오기">
+              키 가져오기
+              <input type="file" id="importApiKeyFile" accept=".key,.txt" style="display:none">
+            </label>
+          </div>
+          <div class="setting-hint">
+            <a href="https://kie.ai/api-key" target="_blank">kie.ai/api-key</a>에서 발급
+          </div>
+          <div class="setting-row">
+            <label>LLM 재시도 횟수</label>
+            <input type="number" id="llmRetryCount" class="input-sm" value="3" min="1" max="5">
+          </div>
         </div>
-        <div class="setting-row">
-          <label>KIE API Key</label>
-          <input type="password" id="kieApiKey" class="input-full" placeholder="kie_xxxxxxxx...">
-        </div>
-        <div class="setting-row" style="gap:4px;">
-          <button id="exportApiKeyBtn" class="btn btn-sm" style="flex:1;" title="다른 프로필에서 사용할 수 있도록 파일로 내보내기">키 내보내기</button>
-          <label class="btn btn-sm" style="flex:1;text-align:center;cursor:pointer;" title="다른 프로필에서 내보낸 키 파일 불러오기">
-            키 가져오기
-            <input type="file" id="importApiKeyFile" accept=".key,.txt" style="display:none">
-          </label>
-        </div>
-        <div class="setting-hint">
-          <a href="https://kie.ai/api-key" target="_blank" style="color:#aaa;">kie.ai/api-key</a>에서 발급 | 같은 PC 다른 프로필: 내보내기 → 가져오기
-        </div>
-        <div class="setting-row">
-          <label>LLM 재시도 횟수</label>
-          <input type="number" id="llmRetryCount" class="input-sm" value="3" min="1" max="5">
-        </div>
-      </div>
+      </section>
 
-      <button id="saveSettingsBtn" class="btn btn-primary" style="width:100%;margin-top:8px;">설정 저장</button>
+      <button id="saveSettingsBtn" class="btn btn-primary btn-lg" style="width:100%;margin-top:8px;">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M17 21v-8H7v8M7 3v5h8" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span>설정 저장</span>
+      </button>
     </div>
 
     </div><!-- /mainContent -->
