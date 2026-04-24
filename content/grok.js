@@ -426,6 +426,8 @@
   // ─── DOM Selectors ───
 
   // Grok uses TipTap ProseMirror editor (try multiple selectors)
+  // 🔑 /imagine 페이지가 리뉴얼되어 <textarea> 로 바뀐 UI 대응 — textarea 도 findEditor()에
+  // 매칭되도록 placeholder/aria-label 휴리스틱을 후순위에 둠. TipTap 은 여전히 다른 페이지에서 사용.
   const EDITOR_SELECTORS = [
     '.tiptap.ProseMirror',
     '.ProseMirror',
@@ -435,11 +437,59 @@
   ];
 
   function findEditor() {
+    // 1. TipTap / ProseMirror / contenteditable 기반 (구 UI)
     for (const sel of EDITOR_SELECTORS) {
       const el = document.querySelector(sel);
       if (el) return el;
     }
+    // 2. 리뉴얼된 /imagine 페이지 <textarea> 대응
+    const textareas = Array.from(document.querySelectorAll('textarea'));
+    // 2a. placeholder/aria-label 힌트 매칭
+    const hints = ['상상', '텍스트를 입력', '프롬프트', 'imagine', 'prompt', 'describe', 'type'];
+    for (const ta of textareas) {
+      const ph = (ta.getAttribute('placeholder') || '').toLowerCase();
+      const aria = (ta.getAttribute('aria-label') || '').toLowerCase();
+      if (hints.some(h => ph.includes(h) || aria.includes(h))) {
+        return ta;
+      }
+    }
+    // 2b. 첫 번째 visible textarea
+    for (const ta of textareas) {
+      if (ta.offsetParent !== null && !ta.disabled && !ta.readOnly) return ta;
+    }
     return null;
+  }
+
+  // Find the drop-zone container (form or wrapper div surrounding editor) for file drop.
+  // 리뉴얼된 UI 의 드롭 존은 textarea 주변 wrapper에 있음 — 여러 조상을 후보로 반환.
+  function findDropTargets() {
+    const targets = new Set();
+    const editor = findEditor();
+    if (editor) {
+      targets.add(editor);
+      // 상위로 최대 8레벨까지 form / role="form" / data-slot 계열 wrapper 후보 포함
+      let cur = editor.parentElement;
+      for (let i = 0; i < 8 && cur; i++) {
+        const tag = cur.tagName;
+        if (tag === 'FORM' || cur.getAttribute('role') === 'form') {
+          targets.add(cur);
+          break;
+        }
+        // drop zone 힌트 (class 에 drop/upload/compose/form 포함)
+        const cls = (cur.className || '').toString().toLowerCase();
+        if (/\b(drop|upload|compose|form|input)\b/.test(cls)) {
+          targets.add(cur);
+        }
+        cur = cur.parentElement;
+      }
+    }
+    // 보편적 후보
+    document.querySelectorAll('form').forEach(f => targets.add(f));
+    ['.tiptap', '[contenteditable="true"]', 'main', 'body'].forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) targets.add(el);
+    });
+    return Array.from(targets);
   }
 
   // Submit button: aria-label="제출" or text "제출"/"Submit"
@@ -487,9 +537,20 @@
     return null;
   }
 
-  // File input for image attachment (may be hidden)
+  // File input for image attachment (may be hidden). 리뉴얼 UI 대응 — 이미지 accept 포함 우선.
   function findFileInput() {
-    return document.querySelector('input[type="file"]');
+    // 1. accept 에 image/ 포함된 input 우선
+    const all = Array.from(document.querySelectorAll('input[type="file"]'));
+    const imgInput = all.find(i => (i.accept || '').toLowerCase().includes('image'));
+    if (imgInput) return imgInput;
+    // 2. name/id 에 image/upload/photo 힌트
+    const hinted = all.find(i => {
+      const s = ((i.name || '') + ' ' + (i.id || '') + ' ' + (i.className || '')).toLowerCase();
+      return /image|upload|photo|attach|file/.test(s);
+    });
+    if (hinted) return hinted;
+    // 3. 최후의 보편 input (숨김 포함)
+    return all[0] || null;
   }
 
   // Upload/attach button for images on the main page
@@ -1093,6 +1154,53 @@
   // ═══════════════════════════════════════════════════
   // ─── Image Attachment ───
   // ═══════════════════════════════════════════════════
+  // 🎯 React + preventDefault 핸들러 까지 확실히 통과시키는 강화 drop 시퀀스.
+  // dragenter → dragover(여러번, window+target) → drop → dragleave.
+  // DataTransfer 에 items + files 모두 세팅.
+  async function dispatchRobustDrop(target, file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    // 일부 사이트는 effectAllowed/dropEffect 를 보고 필터하므로 정상값 세팅 시도
+    try { dt.effectAllowed = 'all'; } catch (_) {}
+
+    const makeEvt = (type) => {
+      const evt = new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        dataTransfer: dt,
+      });
+      return evt;
+    };
+
+    // React 가 window/document 에서도 drag 이벤트 리스닝하는 케이스 대응
+    const rect = target.getBoundingClientRect ? target.getBoundingClientRect() : null;
+    const clientX = rect ? Math.round(rect.left + rect.width / 2) : 100;
+    const clientY = rect ? Math.round(rect.top + rect.height / 2) : 100;
+
+    // dragenter
+    target.dispatchEvent(makeEvt('dragenter'));
+    await delay(60);
+    // dragover × 3 (React batched state 업데이트용)
+    for (let i = 0; i < 3; i++) {
+      const over = new DragEvent('dragover', {
+        bubbles: true, cancelable: true, composed: true,
+        dataTransfer: dt, clientX, clientY,
+      });
+      target.dispatchEvent(over);
+      await delay(50);
+    }
+    // drop
+    const dropEvt = new DragEvent('drop', {
+      bubbles: true, cancelable: true, composed: true,
+      dataTransfer: dt, clientX, clientY,
+    });
+    target.dispatchEvent(dropEvt);
+    await delay(100);
+    // dragleave (일부 페이지는 이걸로 hover 상태 해제 후 파일 처리)
+    try { target.dispatchEvent(makeEvt('dragleave')); } catch (_) {}
+  }
+
   async function attachImage(imageDataUrl) {
     try {
       console.log(LOG_PREFIX, '=== 이미지 첨부 시작 ===');
@@ -1104,13 +1212,17 @@
       const file = MangoDom.dataUrlToFile(imageDataUrl, `image-${Date.now()}.png`);
       console.log(LOG_PREFIX, `파일 생성: ${file.name}, 크기: ${file.size}`);
 
-      // ── Strategy 1: Clipboard Paste on TipTap editor ──
-      // Grok Imagine 페이지는 TipTap 에디터의 paste 핸들러를 통해 이미지 업로드 처리
-      // file input onChange → chatUploadFile API는 400을 반환하므로 paste 방식 우선 사용
-      console.log(LOG_PREFIX, 'Strategy 1: Clipboard Paste (에디터 붙여넣기)');
+      // ── Strategy 1: Clipboard Paste on TipTap editor (구 UI) ──
+      // 🔑 textarea 는 image paste 를 네이티브 지원 안 함 → TipTap/contenteditable 에서만 시도
+      console.log(LOG_PREFIX, 'Strategy 1: Clipboard Paste (TipTap/contenteditable 한정)');
       try {
         const editor = findEditor();
-        if (editor) {
+        const isPasteCapable = editor && (
+          editor.classList?.contains('tiptap') ||
+          editor.classList?.contains('ProseMirror') ||
+          editor.getAttribute?.('contenteditable') === 'true'
+        );
+        if (isPasteCapable) {
           editor.focus();
           await delay(200);
 
@@ -1131,7 +1243,7 @@
           }
           console.log(LOG_PREFIX, 'Paste 디스패치했으나 미확인, 다음 방식 시도');
         } else {
-          console.log(LOG_PREFIX, '에디터 없음, 다음 방식 시도');
+          console.log(LOG_PREFIX, 'Paste-capable 에디터 없음 (리뉴얼된 textarea UI), Strategy 3 직행');
         }
       } catch (e) {
         console.warn(LOG_PREFIX, 'Clipboard Paste 실패:', e.message);
@@ -1204,25 +1316,22 @@
         return true;
       }
 
-      // ── Strategy 3: Drag-and-drop on editor ──
-      console.log(LOG_PREFIX, 'Strategy 3: Drag-and-drop');
+      // ── Strategy 3: Drag-and-drop on editor + wrapper candidates (리뉴얼 UI 대응) ──
+      console.log(LOG_PREFIX, 'Strategy 3: Drag-and-drop (확장된 타겟 헌팅)');
       try {
-        const dropTargets = [
-          findEditor(),
-          document.querySelector('.tiptap'),
-          document.querySelector('[contenteditable]'),
-          document.querySelector('main'),
-          document.body
-        ].filter(Boolean);
+        const dropTargets = findDropTargets();
+        console.log(LOG_PREFIX, `드롭 후보 ${dropTargets.length}개`);
 
         for (const target of dropTargets) {
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ Drag-and-drop 중 첨부 확인됨');
             return true;
           }
-          console.log(LOG_PREFIX, `드래그 대상: ${target.tagName}.${target.className?.substring?.(0, 30) || ''}`);
-          await MangoDom.dropFileOnElement(target, file);
-          await delay(4000);
+          const tag = target.tagName || '';
+          const cls = (target.className || '').toString().substring(0, 40);
+          console.log(LOG_PREFIX, `드래그 대상: ${tag}.${cls}`);
+          await dispatchRobustDrop(target, file);
+          await delay(3000);
           if (checkImageAttached() || !isOnMainPage()) {
             console.log(LOG_PREFIX, '✅ Drag-and-drop 첨부 성공');
             return true;
@@ -1238,25 +1347,34 @@
         return true;
       }
 
-      // ── Strategy 4: DataTransfer on file input (레거시 폴백) ──
-      console.log(LOG_PREFIX, 'Strategy 4: DataTransfer (file input, 레거시)');
+      // ── Strategy 4: DataTransfer on file input (React-compatible setter) ──
+      console.log(LOG_PREFIX, 'Strategy 4: DataTransfer (file input, React setter)');
       try {
         const fileInput = findFileInput();
         if (fileInput) {
-          fileInput.value = '';
+          console.log(LOG_PREFIX, `file input 발견: accept=${fileInput.accept || '(none)'}`);
           const dt = new DataTransfer();
           dt.items.add(file);
-          fileInput.files = dt.files;
-          fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-          fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+          // React 가 value 변경 감지하려면 native prototype setter 호출 필요
+          const proto = Object.getPrototypeOf(fileInput);
+          const desc = Object.getOwnPropertyDescriptor(proto, 'files') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+          if (desc && desc.set) {
+            desc.set.call(fileInput, dt.files);
+          } else {
+            fileInput.files = dt.files;
+          }
+          fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+          fileInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
           await delay(3000);
           if (checkImageAttached() || !isOnMainPage()) {
-            console.log(LOG_PREFIX, '✅ DataTransfer 레거시 방식 첨부 성공');
+            console.log(LOG_PREFIX, '✅ DataTransfer + React setter 첨부 성공');
             return true;
           }
+        } else {
+          console.log(LOG_PREFIX, 'file input 을 찾을 수 없음');
         }
       } catch (e) {
-        console.warn(LOG_PREFIX, 'DataTransfer 레거시 실패:', e.message);
+        console.warn(LOG_PREFIX, 'DataTransfer 실패:', e.message);
       }
 
       console.error(LOG_PREFIX, '❌ 모든 이미지 첨부 방식 실패');
