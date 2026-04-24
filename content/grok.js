@@ -17,6 +17,15 @@
  */
 
 (() => {
+  // 🔒 중복 주입 가드 — background 의 ensureContentScript 가 버전 체크 실패로
+  // 이 스크립트를 두 번 executeScript 해도 두 번째 실행은 여기서 바로 종료.
+  // 두 인스턴스가 동시에 EXECUTE_PROMPT 를 받아 파일첨부·전송을 중복 수행하던 버그 방지.
+  if (window.__MANGOAUTO_GROK_LOADED__) {
+    console.log('[MangoAuto:Grok] 이미 로드됨 — 중복 주입 차단');
+    return;
+  }
+  window.__MANGOAUTO_GROK_LOADED__ = true;
+
   const LOG_PREFIX = '[MangoAuto:Grok]';
   let isProcessing = false;
   let shouldStop = false;
@@ -153,7 +162,11 @@
       return false;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'grok' });
+      // 🔑 background/background.js 의 EXPECTED_VERSION 과 일치해야 함
+      // 일치하지 않으면 background 가 content_script 를 강제 재주입하여
+      // 같은 탭에 두 인스턴스가 동시에 EXECUTE_PROMPT 를 처리해서
+      // "409 Conflict" + "전송 실패" 연쇄 버그가 재발함.
+      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-04-19' });
       return false;
     }
   });
