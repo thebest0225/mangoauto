@@ -451,26 +451,39 @@ function bindEvents() {
     }
   });
 
-  // 대기열 퀵 선택 (25%, 50%, 75%)
+  // 대기열 퀵 선택 (25%, 50%, 75%, hybrid)
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const pct = parseInt(btn.dataset.pct);
+      const mode = btn.dataset.mode;
       const allCbs = $$('.queue-select');
       const total = allCbs.length;
       if (total === 0) return;
-      const selectCount = Math.max(1, Math.round(total * pct / 100));
-      allCbs.forEach((cb, i) => { cb.checked = i < selectCount; });
-      // active 상태 토글 (같은 버튼 다시 누르면 전체 선택)
       const wasActive = btn.classList.contains('active');
       $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
       if (wasActive) {
         // 같은 버튼 다시 누르면 전체 선택
         allCbs.forEach(cb => { cb.checked = true; });
-      } else {
-        btn.classList.add('active');
+        const selectAll = $('#queueSelectAll');
+        if (selectAll) selectAll.checked = true;
+        updateQueueSelectedCount();
+        return;
       }
+      if (mode === 'hybrid') {
+        // 1~25번 (index 0~24) 전체 선택 + 26번부터(index 25+) 홀수번만(= 26,28,30... index 25,27,29...)
+        // 사용자 표기 기준 1-based — "26번부터 홀수만" = 인덱스 25, 27, 29, ...
+        allCbs.forEach((cb, i) => {
+          const oneBased = i + 1;
+          if (oneBased <= 25) cb.checked = true;
+          else cb.checked = (oneBased % 2 === 1);  // 27, 29, 31, ... (홀수번)
+        });
+      } else {
+        const pct = parseInt(btn.dataset.pct);
+        const selectCount = Math.max(1, Math.round(total * pct / 100));
+        allCbs.forEach((cb, i) => { cb.checked = i < selectCount; });
+      }
+      btn.classList.add('active');
       const selectAll = $('#queueSelectAll');
-      if (selectAll) selectAll.checked = (wasActive || selectCount === total);
+      if (selectAll) selectAll.checked = false;
       updateQueueSelectedCount();
     });
   });
