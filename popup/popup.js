@@ -227,25 +227,51 @@ function getProjectStatus(project) {
 
 // ─── Bind All Events ───
 function bindEvents() {
-  // Auth badge (Not Connected 상태 클릭 시 로그인 페이지 열기)
+  // Auth badge — connected 면 로그아웃 옵션, 안 connected 면 폼에 포커스
   const badgeEl = $('#authBadge');
-  if (badgeEl) badgeEl.addEventListener('click', () => {
-    if (badgeEl.classList.contains('badge-off')) openMangoHubLogin();
-  });
-  const authLoginBtn = $('#authLoginBtn');
-  if (authLoginBtn) authLoginBtn.addEventListener('click', openMangoHubLogin);
-  const authRecheckBtn = $('#authRecheckBtn');
-  if (authRecheckBtn) authRecheckBtn.addEventListener('click', async () => {
-    authRecheckBtn.disabled = true;
-    await checkAuth();
-    authRecheckBtn.disabled = false;
-    const badge = $('#authBadge');
-    if (badge && badge.classList.contains('badge-on')) {
-      showToast('MangoHub 연결 확인 성공', 'success');
+  if (badgeEl) badgeEl.addEventListener('click', async () => {
+    if (badgeEl.classList.contains('badge-on')) {
+      if (!confirm('MangoHub 에서 로그아웃할까요?')) return;
+      try { await sendBg({ type: 'API_LOGOUT' }); } catch (_) {}
+      showToast('로그아웃됨', 'info');
+      await checkAuth();
     } else {
-      showToast('아직 로그인 확인 안 됨. 다시 시도해주세요.', 'error');
+      const userInput = $('#authLoginUser');
+      if (userInput) userInput.focus();
     }
   });
+
+  // Inline 로그인 폼 — POST /api/auth/login (background 가 fetch + Set-Cookie 처리)
+  const loginForm = $('#authLoginForm');
+  const loginBtn = $('#authLoginBtn');
+  const loginErr = $('#authLoginError');
+  if (loginForm) loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = ($('#authLoginUser').value || '').trim();
+    const password = $('#authLoginPass').value || '';
+    const autoLogin = !!($('#authAutoLogin') && $('#authAutoLogin').checked);
+    if (!username || !password) { showToast('아이디와 비밀번호를 입력해주세요', 'error'); return; }
+    if (loginErr) loginErr.classList.add('hidden');
+    if (loginBtn) { loginBtn.disabled = true; loginBtn.style.opacity = 0.6; }
+    try {
+      const r = await sendBg({ type: 'API_LOGIN', username, password, autoLogin });
+      if (!r || !r.ok) throw new Error((r && r.error) || '로그인 실패');
+      showToast(`환영합니다, ${(r.user && (r.user.username || r.user.email)) || ''}`, 'success');
+      const passEl = $('#authLoginPass'); if (passEl) passEl.value = '';
+      // 쿠키 반영 약간 대기 후 재확인
+      setTimeout(() => checkAuth(), 250);
+    } catch (er) {
+      const msg = er.message || String(er);
+      if (loginErr) { loginErr.textContent = msg; loginErr.classList.remove('hidden'); }
+      showToast(msg, 'error');
+    } finally {
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = 1; }
+    }
+  });
+
+  // 웹에서 로그인 — 기존 동작 fallback (인라인 로그인 막힐 때, 또는 Cloudflare Access 같은 외부 인증 우회)
+  const openWebBtn = $('#authOpenWebBtn');
+  if (openWebBtn) openWebBtn.addEventListener('click', openMangoHubLogin);
 
   // Unsupported page links - navigate current tab
   $$('.unsupported-link').forEach(link => {

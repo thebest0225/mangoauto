@@ -28,7 +28,7 @@
       </button>
     </header>
 
-    <!-- MangoHub 로그인 안내 (connected 가 아니면 노출) -->
+    <!-- MangoHub 로그인 — 인라인 폼 (connected 가 아니면 노출) -->
     <div id="authLoginCard" class="card auth-card hidden">
       <div class="card-inner">
         <div class="auth-icon">
@@ -37,18 +37,27 @@
             <path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" stroke-width="1.7"/>
           </svg>
         </div>
-        <div class="auth-title">MangoHub 연결 필요</div>
-        <div class="auth-desc">MangoHub 에 로그인되어 있지 않습니다.<br>로그인하면 프로젝트 불러오기와 자동 업로드가 가능합니다.</div>
-        <div class="auth-actions">
-          <button id="authLoginBtn" class="btn btn-primary flex-1">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span>MangoHub 로그인</span>
-          </button>
-          <button id="authRecheckBtn" class="btn flex-1" title="로그인 후 눌러서 재확인">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12a9 9 0 01-15 6.7L3 16M3 12a9 9 0 0115-6.7L21 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 3v5h-5M3 21v-5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span>다시 확인</span>
-          </button>
-        </div>
+        <div class="auth-title">MangoHub 로그인</div>
+        <div class="auth-desc" style="margin-bottom:10px;">계정으로 로그인하면 프로젝트 불러오기와 자동 업로드가 활성화됩니다.</div>
+        <form id="authLoginForm" autocomplete="on" style="display:flex;flex-direction:column;gap:6px;">
+          <input id="authLoginUser" type="text" name="username" autocomplete="username" placeholder="아이디" required class="auth-input">
+          <input id="authLoginPass" type="password" name="password" autocomplete="current-password" placeholder="비밀번호" required class="auth-input">
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;opacity:0.8;cursor:pointer;">
+            <input id="authAutoLogin" type="checkbox" checked style="margin:0;">
+            <span>이 기기 기억하기 (자동 로그인)</span>
+          </label>
+          <div id="authLoginError" class="auth-error hidden"></div>
+          <div class="auth-actions" style="margin-top:6px;">
+            <button type="submit" id="authLoginBtn" class="btn btn-primary flex-1">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>로그인</span>
+            </button>
+            <button type="button" id="authOpenWebBtn" class="btn flex-1" title="브라우저에서 로그인 페이지 열기">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14 3h7v7M21 3l-9 9M21 14v5a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>웹에서 로그인</span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
 

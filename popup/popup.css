@@ -879,6 +879,30 @@ button.badge.badge-on { cursor: default; }
   gap: 6px;
   margin-top: 4px;
 }
+.auth-input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  background: var(--bg-input, rgba(255,255,255,0.04));
+  color: var(--text, #e5e5e5);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+.auth-input:focus {
+  border-color: var(--accent, #f47b16);
+  box-shadow: 0 0 0 2px rgba(244,123,22,0.15);
+}
+.auth-error {
+  font-size: 11px;
+  color: #f87171;
+  background: rgba(248,113,113,0.08);
+  border: 1px solid rgba(248,113,113,0.2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  line-height: 1.4;
+}
 
 /* ═══ Toast ═══ */
 .toast-container {

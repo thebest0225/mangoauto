@@ -239,6 +239,25 @@ async function handleMessage(msg, sender) {
     case 'API_CHECK_AUTH':
       return { loggedIn: await MangoHubAPI.checkAuth() };
 
+    case 'API_LOGIN':
+      try {
+        const data = await MangoHubAPI.login(msg.username, msg.password, msg.autoLogin !== false);
+        return { ok: true, user: data.user || null };
+      } catch (e) {
+        return { ok: false, error: e.message || String(e) };
+      }
+
+    case 'API_LOGOUT':
+      try {
+        await fetch(`${MangoHubAPI.BASE_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+      } catch (_) {}
+      try {
+        // 쿠키 직접 정리 (보장)
+        await chrome.cookies.remove({ url: MangoHubAPI.BASE_URL, name: 'session_token' });
+        await chrome.cookies.remove({ url: MangoHubAPI.BASE_URL, name: 'device_token' });
+      } catch (_) {}
+      return { ok: true };
+
     case 'API_LIST_PROJECTS':
       return await MangoHubAPI.listProjects(msg.apiType);
 
