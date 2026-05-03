@@ -494,13 +494,19 @@ function bindEvents() {
         updateQueueSelectedCount();
         return;
       }
-      if (mode === 'hybrid') {
-        // 1~25번 (index 0~24) 전체 선택 + 26번부터(index 25+) 홀수번만(= 26,28,30... index 25,27,29...)
-        // 사용자 표기 기준 1-based — "26번부터 홀수만" = 인덱스 25, 27, 29, ...
+      if (mode === 'hybrid25') {
+        // 1~25번 전체 + 26번부터 홀수번만 (27, 29, 31, ...)
         allCbs.forEach((cb, i) => {
           const oneBased = i + 1;
           if (oneBased <= 25) cb.checked = true;
-          else cb.checked = (oneBased % 2 === 1);  // 27, 29, 31, ... (홀수번)
+          else cb.checked = (oneBased % 2 === 1);
+        });
+      } else if (mode === 'hybrid40') {
+        // 1~40번 전체 + 41번부터 짝수번만 (42, 44, 46, ...)
+        allCbs.forEach((cb, i) => {
+          const oneBased = i + 1;
+          if (oneBased <= 40) cb.checked = true;
+          else cb.checked = (oneBased % 2 === 0);
         });
       } else {
         const pct = parseInt(btn.dataset.pct);
