@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v6-cdp-trusted' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v7-learning' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1730,6 +1730,50 @@
     });
   }
 
+  // ─── 학습된 strategy 저장/로드 (self-healing) ───
+  //   chrome.storage.local 에 마지막으로 성공한 strategy id 저장. 다음 작업 시 이걸
+  //   먼저 시도해서 fallback chain 전체를 매번 거치지 않음.
+  //   Flow UI 가 업뎃되어 학습된 방법이 실패하면 자동으로 다른 strategy fallthrough →
+  //   새 successful strategy 가 저장됨. 코드 수정 없이 자동 복구.
+  const LEARNED_STRATEGY_KEY = 'mangoauto_flow_submit_strategy';
+
+  async function getLearnedStrategy() {
+    try {
+      const r = await chrome.storage.local.get(LEARNED_STRATEGY_KEY);
+      return r[LEARNED_STRATEGY_KEY] || null;  // { id, name, lastSuccess, consecutiveSuccesses }
+    } catch (_) { return null; }
+  }
+
+  async function saveLearnedStrategy(id, name) {
+    try {
+      const cur = await getLearnedStrategy();
+      const same = cur && cur.id === id;
+      const next = {
+        id, name,
+        lastSuccess: Date.now(),
+        consecutiveSuccesses: same ? (cur.consecutiveSuccesses || 0) + 1 : 1,
+        consecutiveFailures: 0,
+      };
+      await chrome.storage.local.set({ [LEARNED_STRATEGY_KEY]: next });
+      console.log(LOG_PREFIX, `[learn] ✓ "${name}" 학습 (연속 성공 ${next.consecutiveSuccesses}회)`);
+    } catch (_) {}
+  }
+
+  async function noteStrategyFailure() {
+    try {
+      const cur = await getLearnedStrategy();
+      if (!cur) return;
+      cur.consecutiveFailures = (cur.consecutiveFailures || 0) + 1;
+      // 3회 연속 실패 시 학습 리셋 → 처음부터 다시 search
+      if (cur.consecutiveFailures >= 3) {
+        await chrome.storage.local.remove(LEARNED_STRATEGY_KEY);
+        console.warn(LOG_PREFIX, '[learn] 학습된 방법 3회 연속 실패 → 리셋, 처음부터 search');
+      } else {
+        await chrome.storage.local.set({ [LEARNED_STRATEGY_KEY]: cur });
+      }
+    } catch (_) {}
+  }
+
   async function clickGenerate() {
     // 1) prompt textarea 의 change/blur dispatch — Slate state 커밋 보장
     const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
@@ -1755,91 +1799,111 @@
     }
     const clickedLabel = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
 
-    // 3) ① simulateClick (강화된 PointerEvent + MouseEvent 시퀀스)
-    MangoDom.simulateClick(btn);
-    console.log(LOG_PREFIX, `Generate button clicked via simulateClick (label="${clickedLabel}")`);
-    await delay(800);
-    if (hasGenerationStarted()) {
-      console.log(LOG_PREFIX, 'Generation 시작 감지 ✓');
-      return;
-    }
+    // ─── Strategy table (id → 실행 함수). 위에서 아래로 fallback. ───
+    const strategies = [
+      {
+        id: 'simulate-click',
+        name: 'simulateClick',
+        run: async () => {
+          MangoDom.simulateClick(btn);
+          await delay(800);
+        },
+      },
+      {
+        id: 'react-isolated',
+        name: 'React fiber (isolated world)',
+        run: async () => {
+          callReactOnClick(btn);
+          await delay(1200);
+        },
+      },
+      {
+        id: 'react-main-world',
+        name: 'React fiber (MAIN world via inject.js)',
+        run: async () => {
+          const r = await submitViaInjectMainWorld(3000);
+          console.log(LOG_PREFIX, '[strat] MAIN world result:', r);
+          await delay(1500);
+        },
+      },
+      {
+        id: 'child-click',
+        name: 'inner child element click',
+        run: async () => {
+          for (const inner of btn.querySelectorAll('i, span, div')) {
+            const rect = inner.getBoundingClientRect();
+            if (rect.width > 8 && rect.height > 8) {
+              MangoDom.simulateClick(inner);
+              await delay(300);
+              if (hasGenerationStarted()) return;
+            }
+          }
+          await delay(400);
+        },
+      },
+      {
+        id: 'form-submit',
+        name: 'form.requestSubmit()',
+        run: async () => {
+          tryFormRequestSubmit();
+          await delay(1000);
+        },
+      },
+      {
+        id: 'enter-key',
+        name: 'Enter key dispatch',
+        run: async () => {
+          await trySubmitByEnter();
+          await delay(1500);
+        },
+      },
+      {
+        id: 'cdp-trusted',
+        name: 'chrome.debugger CDP trusted click',
+        run: async () => {
+          const r = await trustedClickViaDebugger(btn);
+          console.log(LOG_PREFIX, '[strat] CDP trusted-click result:', r);
+          await delay(1500);
+        },
+      },
+    ];
 
-    // 4) ② React fiber 직접 호출 (isolated world) — props.onClick 을 우회없이 invoke
-    console.warn(LOG_PREFIX, '시작 신호 없음 — React fiber onClick 직접 호출 시도 (isolated world)');
-    const reactNode = callReactOnClick(btn);
-    if (reactNode) {
-      console.log(LOG_PREFIX, `[btn] React onClick 호출 성공 (${reactNode.tagName}${reactNode.className ? '.' + reactNode.className.toString().slice(0, 30) : ''})`);
-      await delay(1200);
-      if (hasGenerationStarted()) {
-        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (React fiber)');
-        return;
+    // 학습된 strategy 가 있으면 우선 시도 후, 실패 시 나머지 순차 시도
+    const learned = await getLearnedStrategy();
+    const tryOrder = [];
+    if (learned) {
+      const idx = strategies.findIndex(s => s.id === learned.id);
+      if (idx >= 0) {
+        tryOrder.push(strategies[idx]);
+        for (let i = 0; i < strategies.length; i++) {
+          if (i !== idx) tryOrder.push(strategies[i]);
+        }
+        console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선: "${learned.name}" (연속 성공 ${learned.consecutiveSuccesses}회)`);
+      } else {
+        tryOrder.push(...strategies);
       }
     } else {
-      console.warn(LOG_PREFIX, '[btn] isolated world 에서 React props.onClick 못찾음 → MAIN world 시도');
+      tryOrder.push(...strategies);
     }
 
-    // 4b) ②-2 MAIN world (inject.js) 에서 React onClick 호출 — content script isolated world
-    //      에선 같은 fiber 의 props 가 안보일 수 있어 inject.js 가 페이지 context 에서 호출.
-    console.log(LOG_PREFIX, 'MAIN world (inject.js) 에 SUBMIT_FLOW_CLICK 전송');
-    const mainResult = await submitViaInjectMainWorld(3000);
-    console.log(LOG_PREFIX, `MAIN world submit 결과:`, mainResult);
-    if (mainResult.ok) {
-      await delay(1500);
-      if (hasGenerationStarted()) {
-        console.log(LOG_PREFIX, `Generation 시작 감지 ✓ (MAIN world: ${mainResult.where})`);
-        return;
-      }
-    }
-
-    // 5) ③ button 내부 자식 (icon span) 클릭 — onClick 이 자식에 있을 수도
-    const innerTargets = btn.querySelectorAll('i, span, div');
-    for (const inner of innerTargets) {
-      const rect = inner.getBoundingClientRect();
-      if (rect.width > 8 && rect.height > 8) {
-        MangoDom.simulateClick(inner);
-        await delay(400);
+    // 순차 실행 — 첫 success 시 학습 저장 후 return
+    for (const strat of tryOrder) {
+      try {
+        console.log(LOG_PREFIX, `[strat] ▶ ${strat.name} 시도 (label="${clickedLabel}")`);
+        await strat.run();
         if (hasGenerationStarted()) {
-          console.log(LOG_PREFIX, `Generation 시작 감지 ✓ (inner click: ${inner.tagName})`);
+          console.log(LOG_PREFIX, `[strat] ✅ Generation 시작 — ${strat.name}`);
+          await saveLearnedStrategy(strat.id, strat.name);
           return;
         }
+      } catch (e) {
+        console.warn(LOG_PREFIX, `[strat] "${strat.name}" 에러: ${e.message}`);
       }
     }
 
-    // 6) ④ form.requestSubmit() (form 이 있을 경우)
-    if (tryFormRequestSubmit()) {
-      await delay(1000);
-      if (hasGenerationStarted()) {
-        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (requestSubmit)');
-        return;
-      }
-    }
-
-    // 7) ⑤ Enter key fallback
-    console.warn(LOG_PREFIX, 'click 시도 실패 — Enter key fallback');
-    const ok = await trySubmitByEnter();
-    if (ok) {
-      await delay(1500);
-      if (hasGenerationStarted()) {
-        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (Enter)');
-        return;
-      }
-    }
-
-    // 8) ⑥ chrome.debugger 통한 trusted click — Flow 가 isTrusted 체크 시 유일한 우회법
-    //    노란 디버깅 배너가 잠시 표시되지만 100% 동작 보장.
-    console.warn(LOG_PREFIX, '모든 일반 click 실패 — chrome.debugger trusted-click 시도 (배너 표시됨)');
-    const dbgResp = await trustedClickViaDebugger(btn);
-    console.log(LOG_PREFIX, `chrome.debugger trusted-click 결과:`, dbgResp);
-    if (dbgResp && dbgResp.ok) {
-      await delay(1500);
-      if (hasGenerationStarted()) {
-        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (chrome.debugger trusted click)');
-        return;
-      }
-    }
-
-    // 9) 모든 시도 실패 — 계속 진행 (waitForGenerationComplete 가 타임아웃으로 잡음)
-    console.warn(LOG_PREFIX, `클릭은 됐으나 generation 시작 신호 없음. label="${clickedLabel}" — 계속 대기`);
+    // 모든 strategy 실패
+    console.warn(LOG_PREFIX, `[strat] ❌ 모든 strategy 실패. label="${clickedLabel}" — 계속 대기`);
+    await noteStrategyFailure();
   }
 
   // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
