@@ -225,6 +225,52 @@ function getGenerationTimeoutMs() {
   return base + 2 * 60 * 1000;
 }
 
+// ─── Trusted Click via chrome.debugger (CDP Input.dispatchMouseEvent) ───
+// React/Slate 가 e.isTrusted 체크하는 보안 모드 페이지 (e.g. Google Flow) 대응.
+// 디버거 attach → mouseMoved/Pressed/Released → detach. 노란 디버깅 배너 잠시 표시.
+//
+// 사용: { type: 'DEBUGGER_TRUSTED_CLICK', x: 123, y: 456 }
+// 응답: { ok: true } 또는 { ok: false, error: '...' }
+const _debuggerAttachedTabs = new Set();
+
+async function ensureDebuggerAttached(tabId) {
+  if (_debuggerAttachedTabs.has(tabId)) return;
+  await chrome.debugger.attach({ tabId }, '1.3');
+  _debuggerAttachedTabs.add(tabId);
+}
+
+async function detachDebuggerSafe(tabId) {
+  if (!_debuggerAttachedTabs.has(tabId)) return;
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch (_) {}
+  _debuggerAttachedTabs.delete(tabId);
+}
+
+async function trustedClickAt(tabId, x, y) {
+  await ensureDebuggerAttached(tabId);
+  const target = { tabId };
+  // mouseMoved → 호버 상태 적용
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x, y, button: 'none', buttons: 0,
+  });
+  await new Promise(r => setTimeout(r, 30));
+  // mousePressed
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1,
+  });
+  await new Promise(r => setTimeout(r, 50)); // 실제 human click hold time
+  // mouseReleased
+  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1,
+  });
+}
+
+// 탭 닫힐 때 디버거 자동 detach
+chrome.tabs.onRemoved.addListener((tabId) => {
+  _debuggerAttachedTabs.delete(tabId);
+});
+
 // ─── Message Router ───
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handleMessage(msg, sender).then(sendResponse).catch(err => {
@@ -327,6 +373,31 @@ async function handleMessage(msg, sender) {
       return await retrySelected(msg.indices);
 
     // ── File Injection (MAIN world) ──
+    case 'DEBUGGER_TRUSTED_CLICK': {
+      // tabId 은 sender.tab.id 우선, 없으면 활성 탭
+      let tabId = sender?.tab?.id;
+      if (!tabId) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tabId = tab?.id;
+      }
+      if (!tabId) return { ok: false, error: 'no-tab' };
+      try {
+        await trustedClickAt(tabId, msg.x, msg.y);
+        // 자동 detach 는 안함 — 연속 클릭 가능 (배너 한번만 표시)
+        // 명시적 detach 가 필요하면 별도 메시지로
+        return { ok: true };
+      } catch (e) {
+        await detachDebuggerSafe(tabId);
+        return { ok: false, error: e.message };
+      }
+    }
+
+    case 'DEBUGGER_DETACH': {
+      const tabId = sender?.tab?.id;
+      if (tabId) await detachDebuggerSafe(tabId);
+      return { ok: true };
+    }
+
     case 'INJECT_GROK_FILE':
       return await injectFileToGrok(msg, sender);
 

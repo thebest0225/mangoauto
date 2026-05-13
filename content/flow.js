@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v5-synthetic-event' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v6-cdp-trusted' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1694,6 +1694,23 @@
     return null;
   }
 
+  // ─── chrome.debugger 통한 trusted click 요청 (background.js 경유) ───
+  // isTrusted 체크하는 보안 모드 페이지 (Google Flow) 대응. 노란 배너 잠시 표시됨.
+  async function trustedClickViaDebugger(btn) {
+    const rect = btn.getBoundingClientRect();
+    const cx = Math.round(rect.left + rect.width / 2);
+    const cy = Math.round(rect.top + rect.height / 2);
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'DEBUGGER_TRUSTED_CLICK',
+        x: cx, y: cy,
+      });
+      return resp;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
   // ─── MAIN world 의 inject.js 에 submit 요청 보내고 결과 대기 ───
   async function submitViaInjectMainWorld(timeoutMs = 3000) {
     return new Promise((resolve) => {
@@ -1798,7 +1815,7 @@
     }
 
     // 7) ⑤ Enter key fallback
-    console.warn(LOG_PREFIX, '모든 click 시도 실패 — Enter key fallback');
+    console.warn(LOG_PREFIX, 'click 시도 실패 — Enter key fallback');
     const ok = await trySubmitByEnter();
     if (ok) {
       await delay(1500);
@@ -1808,7 +1825,20 @@
       }
     }
 
-    // 8) 모든 시도 실패 — 계속 진행 (waitForGenerationComplete 가 타임아웃으로 잡음)
+    // 8) ⑥ chrome.debugger 통한 trusted click — Flow 가 isTrusted 체크 시 유일한 우회법
+    //    노란 디버깅 배너가 잠시 표시되지만 100% 동작 보장.
+    console.warn(LOG_PREFIX, '모든 일반 click 실패 — chrome.debugger trusted-click 시도 (배너 표시됨)');
+    const dbgResp = await trustedClickViaDebugger(btn);
+    console.log(LOG_PREFIX, `chrome.debugger trusted-click 결과:`, dbgResp);
+    if (dbgResp && dbgResp.ok) {
+      await delay(1500);
+      if (hasGenerationStarted()) {
+        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (chrome.debugger trusted click)');
+        return;
+      }
+    }
+
+    // 9) 모든 시도 실패 — 계속 진행 (waitForGenerationComplete 가 타임아웃으로 잡음)
     console.warn(LOG_PREFIX, `클릭은 됐으나 generation 시작 신호 없음. label="${clickedLabel}" — 계속 대기`);
   }
 
