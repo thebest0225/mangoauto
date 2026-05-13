@@ -271,6 +271,58 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   _debuggerAttachedTabs.delete(tabId);
 });
 
+// ─── Video Blob 검증 — Flow 가 가끔 반환하는 "0초 정지 프레임" 영상 차단 ───
+// Service worker 컨텍스트에선 <video> 요소 못 만들어서 MP4 atom 직접 파싱.
+// 검증 기준:
+//   1. blob.size < 30KB → 거의 확실 손상
+//   2. mvhd atom 에서 duration / timescale 추출 → 1.5초 미만 reject
+async function validateVideoBlob(blob) {
+  const MIN_SIZE = 30 * 1024;      // 30KB
+  const MIN_DURATION_SEC = 1.5;
+  if (!blob || blob.size === 0) return { valid: false, reason: 'empty', duration: 0 };
+  if (blob.size < MIN_SIZE)        return { valid: false, reason: `size<${MIN_SIZE}B`, duration: 0 };
+
+  try {
+    const headBytes = Math.min(blob.size, 1024 * 1024);  // 첫 1MB 안에 mvhd 있을 확률 매우 높음
+    const buf = await blob.slice(0, headBytes).arrayBuffer();
+    const dv = new DataView(buf);
+    // mvhd atom 찾기 — "mvhd" 4바이트 시그니처
+    for (let i = 0; i < dv.byteLength - 32; i++) {
+      if (dv.getUint8(i)     === 0x6d &&   // m
+          dv.getUint8(i + 1) === 0x76 &&   // v
+          dv.getUint8(i + 2) === 0x68 &&   // h
+          dv.getUint8(i + 3) === 0x64) {   // d
+        // mvhd box: version(1) flags(3) [v0: creation(4) modification(4) timescale(4) duration(4)]
+        //                                [v1: creation(8) modification(8) timescale(4) duration(8)]
+        const version = dv.getUint8(i + 4);
+        let timescale, duration;
+        if (version === 0) {
+          timescale = dv.getUint32(i + 16);
+          duration = dv.getUint32(i + 20);
+        } else if (version === 1) {
+          timescale = dv.getUint32(i + 24);
+          duration = Number(dv.getBigUint64(i + 28));
+        } else {
+          continue;
+        }
+        if (timescale > 0) {
+          const sec = duration / timescale;
+          if (sec < MIN_DURATION_SEC) {
+            return { valid: false, reason: `duration<${MIN_DURATION_SEC}s`, duration: sec };
+          }
+          return { valid: true, duration: sec };
+        }
+      }
+    }
+    // mvhd 못 찾음 — webm 등 다른 컨테이너 또는 비정상 파일.
+    // 크기 충분히 크면 통과 (false negative 보다 false positive 가 더 안 좋음)
+    return { valid: true, reason: 'mvhd-not-found (size ok)', duration: 0 };
+  } catch (e) {
+    // 파싱 에러 — 크기 통과했으면 일단 진행
+    return { valid: true, reason: `parse-error: ${e.message}`, duration: 0 };
+  }
+}
+
 // ─── Message Router ───
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handleMessage(msg, sender).then(sendResponse).catch(err => {
@@ -1406,6 +1458,20 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
         } else {
           throw new Error('No media data available');
         }
+
+        // ─── 영상 사전 검증 — 실패한 Veo 출력 차단 (0초/정지프레임 영상) ───
+        // 사용자 보고: Flow 가 가끔 0초 짜리 정지 이미지 같은 mp4 를 반환. 그대로 업로드되면
+        // MangoHub 에 쓰레기 파일이 쌓임. duration < 1.5초 거나 size 비정상이면 reject.
+        if (!item._isThumbnail && sm.mediaType === 'video') {
+          const v = await validateVideoBlob(blob);
+          broadcastLog(`영상 검증: ${v.valid ? '✓' : '✗'} duration=${v.duration?.toFixed?.(2) || '?'}s, size=${Math.round(blob.size/1024)}KB${v.reason ? ` (${v.reason})` : ''}`, v.valid ? 'info' : 'warn');
+          if (!v.valid) {
+            const err = new Error(`영상 손상 — ${v.reason} (duration=${v.duration?.toFixed?.(2) || '?'}s, ${Math.round(blob.size/1024)}KB)`);
+            err.errorCode = 'VIDEO_CORRUPTED';
+            throw err;
+          }
+        }
+
         _uploadBlob = blob; // 프로젝트 폴더 저장용 보관
         _reuploadBlobCache.set(item.segmentIndex, blob); // 재업로드용 캐시
         if (item._isThumbnail) {
@@ -1435,11 +1501,12 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
           broadcastState({ ...getExtendedSnapshot(), authExpired: true });
           return;
         }
-        // 업로드 실패: 생성은 성공했으므로 실패 기록 후 다음으로 진행
-        // 🔑 업로드 실패 후 다음 세그먼트에 이전 이미지/영상이 덮어쓰이는 현상 방지 위해
-        //    탭을 새로고침해서 깨끗한 DOM/전역 상태로 다음 항목 진행.
-        broadcastLog(`업로드 실패: ${err.message} → 탭 새로고침 후 다음 항목`, 'error');
-        sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message, uploadFailed: true, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
+        // VIDEO_CORRUPTED — 검증 단계에서 차단된 영상 (0초/정지프레임 등).
+        // 업로드 안 함 + 다음 항목으로 (이미 사후 reload 가 아래에서 동작).
+        const isCorrupted = err.errorCode === 'VIDEO_CORRUPTED';
+        const errLabel = isCorrupted ? '영상 손상 차단' : '업로드 실패';
+        broadcastLog(`${errLabel}: ${err.message} → 탭 새로고침 후 다음 항목`, isCorrupted ? 'warn' : 'error');
+        sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: err.message, uploadFailed: !isCorrupted, videoCorrupted: isCorrupted, mediaUrl: mediaUrl || null, mediaDataUrl: mediaDataUrl || null, isThumbnail: !!item._isThumbnail });
         // 업로드 실패해도 Flow UI 다운로드 원본 파일 정리 (로컬 저장 후 원본 삭제)
         if (_uiDownloadId) {
           try {
