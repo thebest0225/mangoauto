@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v3-react-fiber' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v4-main-world' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1672,6 +1672,25 @@
     return null;
   }
 
+  // ─── MAIN world 의 inject.js 에 submit 요청 보내고 결과 대기 ───
+  async function submitViaInjectMainWorld(timeoutMs = 3000) {
+    return new Promise((resolve) => {
+      const listener = (event) => {
+        if (event.data?.type === 'SUBMIT_FLOW_CLICK_RESULT') {
+          window.removeEventListener('message', listener);
+          clearTimeout(timer);
+          resolve(event.data);
+        }
+      };
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', listener);
+        resolve({ ok: false, reason: 'timeout' });
+      }, timeoutMs);
+      window.addEventListener('message', listener);
+      window.postMessage({ type: 'SUBMIT_FLOW_CLICK' }, '*');
+    });
+  }
+
   async function clickGenerate() {
     // 1) prompt textarea 의 change/blur dispatch — Slate state 커밋 보장
     const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
@@ -1706,8 +1725,8 @@
       return;
     }
 
-    // 4) ② React fiber 직접 호출 — props.onClick 을 우회없이 invoke
-    console.warn(LOG_PREFIX, '시작 신호 없음 — React fiber onClick 직접 호출 시도');
+    // 4) ② React fiber 직접 호출 (isolated world) — props.onClick 을 우회없이 invoke
+    console.warn(LOG_PREFIX, '시작 신호 없음 — React fiber onClick 직접 호출 시도 (isolated world)');
     const reactNode = callReactOnClick(btn);
     if (reactNode) {
       console.log(LOG_PREFIX, `[btn] React onClick 호출 성공 (${reactNode.tagName}${reactNode.className ? '.' + reactNode.className.toString().slice(0, 30) : ''})`);
@@ -1717,7 +1736,20 @@
         return;
       }
     } else {
-      console.warn(LOG_PREFIX, '[btn] React props.onClick 못찾음');
+      console.warn(LOG_PREFIX, '[btn] isolated world 에서 React props.onClick 못찾음 → MAIN world 시도');
+    }
+
+    // 4b) ②-2 MAIN world (inject.js) 에서 React onClick 호출 — content script isolated world
+    //      에선 같은 fiber 의 props 가 안보일 수 있어 inject.js 가 페이지 context 에서 호출.
+    console.log(LOG_PREFIX, 'MAIN world (inject.js) 에 SUBMIT_FLOW_CLICK 전송');
+    const mainResult = await submitViaInjectMainWorld(3000);
+    console.log(LOG_PREFIX, `MAIN world submit 결과:`, mainResult);
+    if (mainResult.ok) {
+      await delay(1500);
+      if (hasGenerationStarted()) {
+        console.log(LOG_PREFIX, `Generation 시작 감지 ✓ (MAIN world: ${mainResult.where})`);
+        return;
+      }
     }
 
     // 5) ③ button 내부 자식 (icon span) 클릭 — onClick 이 자식에 있을 수도

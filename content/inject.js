@@ -30,7 +30,125 @@
 
       window.postMessage({ type: 'SET_FLOW_PROMPT_RESULT', ok: true, slateOk }, '*');
     }
+    // ─── MAIN world 에서 React onClick 직접 호출 (content script isolated world 우회) ───
+    if (event.data?.type === 'SUBMIT_FLOW_CLICK') {
+      const result = trySubmitFlowFromMainWorld();
+      window.postMessage({ type: 'SUBMIT_FLOW_CLICK_RESULT', ...result }, '*');
+    }
   });
+
+  // ─── React fiber 에서 onClick props 찾기 ───
+  function findReactPropsFromFiber(el) {
+    if (!el) return null;
+    for (const key of Object.getOwnPropertyNames(el)) {
+      if (key.startsWith('__reactProps$')) return el[key];
+    }
+    return null;
+  }
+
+  // ─── Generate button 찾기 (inject.js 버전, MAIN world) ───
+  function findGenerateButtonMainWorld() {
+    const SUBMIT_ICONS = new Set(['arrow_forward', 'arrow_upward', 'send', 'play_arrow', 'auto_awesome']);
+    const isEnabled = (b) => {
+      if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return false;
+      const r = b.getBoundingClientRect();
+      return r.width > 4 && r.height > 4;
+    };
+    const hasSubmitIcon = (b) => {
+      const icons = b.querySelectorAll('i, .material-icons, .material-symbols-outlined');
+      for (const ic of icons) if (SUBMIT_ICONS.has((ic.textContent || '').trim())) return true;
+      return false;
+    };
+    // prompt 근처 우선
+    const promptEl = document.querySelector('[data-slate-node="value"], [contenteditable="true"]');
+    if (promptEl) {
+      let p = promptEl.parentElement;
+      for (let i = 0; i < 8 && p; i++, p = p.parentElement) {
+        const btns = p.querySelectorAll('button');
+        for (const b of btns) if (isEnabled(b) && hasSubmitIcon(b)) return b;
+      }
+    }
+    // 전역 fallback
+    for (const b of document.querySelectorAll('button')) {
+      if (isEnabled(b) && hasSubmitIcon(b)) return b;
+    }
+    return null;
+  }
+
+  // ─── MAIN world 에서 generate button 의 React onClick 호출 ───
+  function trySubmitFlowFromMainWorld() {
+    const btn = findGenerateButtonMainWorld();
+    if (!btn) {
+      console.warn(LOG_PREFIX, '🚫 [submit] generate button 못찾음 (MAIN world)');
+      return { ok: false, reason: 'button-not-found' };
+    }
+    const label = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
+    console.log(LOG_PREFIX, `🎯 [submit] button 발견 (MAIN world): "${label}"`);
+
+    // ① button 자체 → 자식 → 부모(6단계) 순회하며 props.onClick 찾기
+    const tryCallOnClick = (node) => {
+      const props = findReactPropsFromFiber(node);
+      if (props && typeof props.onClick === 'function') {
+        try {
+          const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+          Object.defineProperty(ev, 'currentTarget', { value: node, configurable: true });
+          Object.defineProperty(ev, 'target', { value: node, configurable: true });
+          props.onClick(ev);
+          return true;
+        } catch (e) {
+          console.warn(LOG_PREFIX, `🚫 [submit] onClick 호출 에러: ${e.message}`);
+        }
+      }
+      return false;
+    };
+
+    // 자식 우선 (Lit/React 가 가끔 icon span 에 listener 달음)
+    if (tryCallOnClick(btn)) {
+      console.log(LOG_PREFIX, '✅ [submit] React onClick 호출 성공 (button 자체)');
+      return { ok: true, where: 'button' };
+    }
+    for (const child of btn.querySelectorAll('*')) {
+      if (tryCallOnClick(child)) {
+        console.log(LOG_PREFIX, `✅ [submit] React onClick 호출 성공 (자식: ${child.tagName})`);
+        return { ok: true, where: 'child:' + child.tagName };
+      }
+    }
+    let p = btn.parentElement;
+    for (let i = 0; i < 6 && p; i++, p = p.parentElement) {
+      if (tryCallOnClick(p)) {
+        console.log(LOG_PREFIX, `✅ [submit] React onClick 호출 성공 (부모 ${i+1}단계: ${p.tagName})`);
+        return { ok: true, where: 'parent:' + p.tagName };
+      }
+    }
+
+    // ② React fiber 의 stateNode (class component) 에서 handleClick/onSubmit 메서드 찾기
+    let fiber = null;
+    for (const key of Object.getOwnPropertyNames(btn)) {
+      if (key.startsWith('__reactFiber$')) { fiber = btn[key]; break; }
+    }
+    if (fiber) {
+      let cur = fiber;
+      for (let level = 0; level < 20 && cur; level++, cur = cur.return) {
+        const inst = cur.stateNode;
+        if (inst && typeof inst === 'object') {
+          for (const m of ['handleClick', 'handleSubmit', 'onSubmit', 'submit', 'generate', 'handleGenerate']) {
+            if (typeof inst[m] === 'function') {
+              try {
+                inst[m].call(inst, { preventDefault: () => {}, stopPropagation: () => {} });
+                console.log(LOG_PREFIX, `✅ [submit] stateNode.${m}() 호출 성공 (fiber level ${level})`);
+                return { ok: true, where: `stateNode.${m}:level${level}` };
+              } catch (e) {
+                console.warn(LOG_PREFIX, `🚫 [submit] stateNode.${m} 호출 에러: ${e.message}`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    console.warn(LOG_PREFIX, '🚫 [submit] React onClick / stateNode 메서드 모두 못찾음');
+    return { ok: false, reason: 'no-handler' };
+  }
 
   // ─── Find Slate editor element ───
   function findSlateElement() {
