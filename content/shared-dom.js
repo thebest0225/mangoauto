@@ -1,8 +1,12 @@
 /**
  * MangoAuto - Shared DOM Utilities for Content Scripts
+ * 중복 주입 가드 — Chrome 이 같은 페이지에 두번 주입할 때 SyntaxError 방지.
  */
 
-const MangoDom = {
+if (!window.__MANGOAUTO_SHARED_DOM_LOADED__) {
+window.__MANGOAUTO_SHARED_DOM_LOADED__ = true;
+
+var MangoDom = {
   /**
    * Wait for an element to appear in the DOM
    */
@@ -339,6 +343,9 @@ const MangoDom = {
    * Why: Some frameworks (Lit/Slate) only respond to the full handshake — pointerdown/up
    * alone won't dispatch React onClick if mousedown/up are missing. composed:true crosses
    * shadow DOM boundaries (Flow uses web-components).
+   *
+   * Sequence: pointerover → pointerenter → pointermove → mouseover → mouseenter →
+   *           pointerdown → mousedown → pointerup → mouseup → click → native click()
    */
   simulateClick(el) {
     try { el.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (_) {}
@@ -347,18 +354,23 @@ const MangoDom = {
     const cy = rect.top + rect.height / 2;
     const baseOpts = {
       bubbles: true, cancelable: true, composed: true,
-      view: window, clientX: cx, clientY: cy, button: 0, buttons: 1,
+      view: window, clientX: cx, clientY: cy, screenX: cx, screenY: cy,
+      button: 0, buttons: 1,
     };
     try { el.focus({ preventScroll: true }); } catch (_) {}
-    el.dispatchEvent(new PointerEvent('pointerover', { ...baseOpts, pointerType: 'mouse' }));
-    el.dispatchEvent(new PointerEvent('pointerenter', { ...baseOpts, pointerType: 'mouse', bubbles: false }));
+    el.dispatchEvent(new PointerEvent('pointerover', { ...baseOpts, pointerType: 'mouse', pointerId: 1 }));
+    el.dispatchEvent(new PointerEvent('pointerenter', { ...baseOpts, pointerType: 'mouse', pointerId: 1, bubbles: false }));
+    el.dispatchEvent(new PointerEvent('pointermove', { ...baseOpts, pointerType: 'mouse', pointerId: 1, buttons: 0 }));
     el.dispatchEvent(new MouseEvent('mouseover', baseOpts));
     el.dispatchEvent(new MouseEvent('mouseenter', { ...baseOpts, bubbles: false }));
-    el.dispatchEvent(new PointerEvent('pointerdown', { ...baseOpts, pointerType: 'mouse', isPrimary: true }));
+    el.dispatchEvent(new MouseEvent('mousemove', { ...baseOpts, buttons: 0 }));
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...baseOpts, pointerType: 'mouse', pointerId: 1, isPrimary: true }));
     el.dispatchEvent(new MouseEvent('mousedown', baseOpts));
-    el.dispatchEvent(new PointerEvent('pointerup', { ...baseOpts, pointerType: 'mouse', buttons: 0 }));
-    el.dispatchEvent(new MouseEvent('mouseup', { ...baseOpts, buttons: 0 }));
-    el.dispatchEvent(new MouseEvent('click', { ...baseOpts, buttons: 0, detail: 1 }));
+    // 짧은 hold (실제 사람 클릭 timing 모방 — 일부 React handler 는 too-fast click 무시)
+    const upOpts = { ...baseOpts, buttons: 0 };
+    el.dispatchEvent(new PointerEvent('pointerup', { ...upOpts, pointerType: 'mouse', pointerId: 1 }));
+    el.dispatchEvent(new MouseEvent('mouseup', upOpts));
+    el.dispatchEvent(new MouseEvent('click', { ...upOpts, detail: 1 }));
     // Native .click() as belt-and-suspenders — triggers default form submission etc.
     try { el.click(); } catch (_) {}
   },
@@ -560,3 +572,5 @@ if (typeof window !== 'undefined') {
   // Auto-start dialog dismissal on all platforms
   MangoDialogDismisser.startAutoDismisal();
 }
+
+} // ─── end duplicate-injection guard

@@ -15,6 +15,15 @@
  */
 
 (() => {
+  // ─── 중복 주입 가드 ───
+  // Chrome 이 동일 페이지에 content script 를 두번 주입하는 경우 (SPA 네비게이션, 확장 reload 등)
+  // 모든 이벤트가 2배 발화되어 클릭이 서로 간섭할 수 있음. 두번째 주입은 조용히 무시.
+  if (window.__MANGOAUTO_FLOW_LOADED__) {
+    console.warn('[MangoAuto:Flow] 중복 주입 감지 — 두번째 로드 무시');
+    return;
+  }
+  window.__MANGOAUTO_FLOW_LOADED__ = true;
+
   const LOG_PREFIX = '[MangoAuto:Flow]';
   let isProcessing = false;
   let shouldStop = false;
@@ -140,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v2' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v3-react-fiber' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1621,8 +1630,50 @@
     return false;
   }
 
+  // ─── React fiber 직접 호출 — Flow 는 <form> 미사용 + Slate(React) 기반.
+  // simulateClick 이 onClick handler 를 미발화하면 fiber 에서 props.onClick 을 직접 호출.
+  function findReactProps(el) {
+    if (!el) return null;
+    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+    return propsKey ? el[propsKey] : null;
+  }
+
+  function callReactOnClick(el) {
+    // 버튼 자체 + 자식 + 부모 (최대 4단계) 순회하며 onClick props 찾기
+    const tryOn = (node) => {
+      const props = findReactProps(node);
+      if (props && typeof props.onClick === 'function') {
+        try {
+          const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+          Object.defineProperty(ev, 'currentTarget', { value: node, configurable: true });
+          Object.defineProperty(ev, 'target', { value: node, configurable: true });
+          props.onClick(ev);
+          return node;
+        } catch (e) {
+          console.warn(LOG_PREFIX, '[btn] React onClick 호출 에러:', e.message);
+        }
+      }
+      return null;
+    };
+    // 1. 버튼 자체
+    let found = tryOn(el);
+    if (found) return found;
+    // 2. 자식 (button 안의 span/i/div)
+    for (const child of el.querySelectorAll('*')) {
+      found = tryOn(child);
+      if (found) return found;
+    }
+    // 3. 부모 (최대 4단계)
+    let p = el.parentElement;
+    for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+      found = tryOn(p);
+      if (found) return found;
+    }
+    return null;
+  }
+
   async function clickGenerate() {
-    // 1) prompt textarea 가 blur 되도록 살짝 다른 곳 포커스 — Slate state 커밋 보장
+    // 1) prompt textarea 의 change/blur dispatch — Slate state 커밋 보장
     const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
                      document.querySelector('textarea[id*="PINHOLE" i], textarea, [contenteditable="true"]');
     if (promptEl) {
@@ -1631,31 +1682,59 @@
         promptEl.dispatchEvent(new Event('blur', { bubbles: true }));
       } catch (_) {}
     }
-    await delay(200);
+    await delay(300);
 
-    // 2) 버튼 찾고 클릭 (최대 5초 대기)
+    // 2) 버튼 찾기 (최대 5초 대기)
     const start = Date.now();
-    let clickedLabel = null;
+    let btn = null;
     while (Date.now() - start < 5000) {
-      const btn = findGenerateButton();
-      if (btn) {
-        clickedLabel = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
-        MangoDom.simulateClick(btn);
-        console.log(LOG_PREFIX, `Generate button clicked (label="${clickedLabel}")`);
-        break;
-      }
+      btn = findGenerateButton();
+      if (btn) break;
       await delay(300);
     }
+    if (!btn) {
+      throw new Error('Cannot find generate button');
+    }
+    const clickedLabel = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
 
-    // 3) 클릭 후 800ms 대기 — generation 시작 신호 감지
+    // 3) ① simulateClick (강화된 PointerEvent + MouseEvent 시퀀스)
+    MangoDom.simulateClick(btn);
+    console.log(LOG_PREFIX, `Generate button clicked via simulateClick (label="${clickedLabel}")`);
     await delay(800);
     if (hasGenerationStarted()) {
       console.log(LOG_PREFIX, 'Generation 시작 감지 ✓');
       return;
     }
 
-    // 4) 시작 신호 없음 → form.requestSubmit() 시도
-    console.warn(LOG_PREFIX, 'Generation 시작 신호 없음 — form.requestSubmit() 재시도');
+    // 4) ② React fiber 직접 호출 — props.onClick 을 우회없이 invoke
+    console.warn(LOG_PREFIX, '시작 신호 없음 — React fiber onClick 직접 호출 시도');
+    const reactNode = callReactOnClick(btn);
+    if (reactNode) {
+      console.log(LOG_PREFIX, `[btn] React onClick 호출 성공 (${reactNode.tagName}${reactNode.className ? '.' + reactNode.className.toString().slice(0, 30) : ''})`);
+      await delay(1200);
+      if (hasGenerationStarted()) {
+        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (React fiber)');
+        return;
+      }
+    } else {
+      console.warn(LOG_PREFIX, '[btn] React props.onClick 못찾음');
+    }
+
+    // 5) ③ button 내부 자식 (icon span) 클릭 — onClick 이 자식에 있을 수도
+    const innerTargets = btn.querySelectorAll('i, span, div');
+    for (const inner of innerTargets) {
+      const rect = inner.getBoundingClientRect();
+      if (rect.width > 8 && rect.height > 8) {
+        MangoDom.simulateClick(inner);
+        await delay(400);
+        if (hasGenerationStarted()) {
+          console.log(LOG_PREFIX, `Generation 시작 감지 ✓ (inner click: ${inner.tagName})`);
+          return;
+        }
+      }
+    }
+
+    // 6) ④ form.requestSubmit() (form 이 있을 경우)
     if (tryFormRequestSubmit()) {
       await delay(1000);
       if (hasGenerationStarted()) {
@@ -1664,8 +1743,8 @@
       }
     }
 
-    // 5) 그래도 없음 → Enter fallback
-    console.warn(LOG_PREFIX, 'requestSubmit 도 실패 — Enter key fallback');
+    // 7) ⑤ Enter key fallback
+    console.warn(LOG_PREFIX, '모든 click 시도 실패 — Enter key fallback');
     const ok = await trySubmitByEnter();
     if (ok) {
       await delay(1500);
@@ -1675,12 +1754,8 @@
       }
     }
 
-    // 6) 모든 시도 실패 — 그래도 진행 (waitForGenerationComplete 가 타임아웃으로 잡음)
-    if (clickedLabel) {
-      console.warn(LOG_PREFIX, `클릭은 됐으나 generation 시작 신호 없음. label="${clickedLabel}" — 계속 대기`);
-      return;
-    }
-    throw new Error('Cannot find or click generate button (all fallbacks failed)');
+    // 8) 모든 시도 실패 — 계속 진행 (waitForGenerationComplete 가 타임아웃으로 잡음)
+    console.warn(LOG_PREFIX, `클릭은 됐으나 generation 시작 신호 없음. label="${clickedLabel}" — 계속 대기`);
   }
 
   // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
