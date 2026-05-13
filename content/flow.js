@@ -144,12 +144,12 @@
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'EXECUTE_PROMPT') {
       handleExecutePrompt(msg).then(sendResponse).catch(err => {
-        sendResponse({ error: err.message });
+        sendResponse({ error: err.message, errorCode: err.errorCode || '' });
       });
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v7-learning' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v8-reload-on-desync' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1345,26 +1345,52 @@
     const isTextarea = (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT');
     console.log(LOG_PREFIX, `[prompt] 발견: ${input.tagName}#${input.id}, isTextarea=${isTextarea}`);
 
-    input.click();
-    await delay(200);
-    input.focus();
-    await delay(100);
+    // 최대 2회 시도 — 첫 시도에서 DOM 검증 실패하면 한번 더 강제 clear + paste
+    let attempt = 0;
+    let lastActual = '';
+    while (attempt < 2) {
+      attempt++;
+      input.click();
+      await delay(200);
+      input.focus();
+      await delay(100);
 
-    if (isTextarea) {
-      MangoDom.setTextareaValue(input, text);
-    } else {
-      // contenteditable div: 여러 방법 시도
-      await typeIntoContentEditable(input, text);
-    }
-    await delay(300);
+      if (isTextarea) {
+        MangoDom.setTextareaValue(input, text);
+      } else {
+        // contenteditable div: 여러 방법 시도
+        await typeIntoContentEditable(input, text);
+      }
+      await delay(300);
 
-    // 검증
-    const actual = isTextarea ? (input.value || '') : (input.textContent || '');
-    if (actual.includes(text.substring(0, 20))) {
-      console.log(LOG_PREFIX, `[prompt] 검증 OK: "${actual.substring(0, 40)}..."`);
-    } else {
-      console.warn(LOG_PREFIX, `[prompt] 검증 실패: "${actual.substring(0, 40)}"`);
+      // 검증
+      const actual = isTextarea ? (input.value || '') : (input.textContent || '');
+      lastActual = actual;
+      if (actual.includes(text.substring(0, 20))) {
+        console.log(LOG_PREFIX, `[prompt] 검증 OK (시도 ${attempt}): "${actual.substring(0, 40)}..."`);
+        return;
+      }
+      console.warn(LOG_PREFIX, `[prompt] 검증 실패 (시도 ${attempt}): "${actual.substring(0, 40)}"`);
+
+      // 1번 실패 시 강제 clear 후 재시도
+      if (attempt < 2 && !isTextarea) {
+        try {
+          input.focus();
+          await delay(100);
+          document.execCommand('selectAll', false, null);
+          await delay(50);
+          document.execCommand('delete', false, null);
+          await delay(200);
+          console.log(LOG_PREFIX, '[prompt] 강제 clear 후 재시도');
+        } catch (_) {}
+      }
     }
+
+    // 2회 모두 실패 — Slate state desync 추정. background 가 잡아서 탭 reload + retry.
+    // 사용자 보고: "새로고침하면 다시 됨". reload 가 유일한 복구법.
+    const err = new Error(`Prompt 입력 검증 실패 (Slate desync 추정, 마지막 textContent: "${lastActual.substring(0, 60)}")`);
+    err.errorCode = 'PROMPT_INSERT_FAILED';
+    throw err;
   }
 
   async function typeIntoContentEditable(input, text) {

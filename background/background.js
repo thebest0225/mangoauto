@@ -814,11 +814,39 @@ async function runSequentialLoop(loopId) {
       // 에러 유형 분류 (flow.js에서 전달된 errorCode 활용)
       const isAudioFailed = resp.errorCode === 'AUDIO_FAILED';
       const isSomethingWrong = resp.errorCode === 'SOMETHING_WRONG';
+      // Slate desync (연속 동일 prompt 후 4-5회째 발생) — 새로고침이 유일한 복구법
+      const isPromptInsertFailed = resp.errorCode === 'PROMPT_INSERT_FAILED';
       const errTypeLabel = isImageRejected ? '이미지 거부' :
                            isAudioFailed ? '오디오 실패' :
-                           isSomethingWrong ? '일시적 오류' : '';
+                           isSomethingWrong ? '일시적 오류' :
+                           isPromptInsertFailed ? 'Prompt 입력 실패 (Slate desync)' : '';
 
       broadcastLog(`생성 에러: ${resp.error}${errTypeLabel ? ` (${errTypeLabel})` : ''}`, 'error');
+
+      // ─── Slate desync 처리: 탭 reload + 같은 항목 재시도 (skip 안함) ───
+      // 패턴: 4-5개 작업 후 Slate editor 가 같은 텍스트 paste 시 변화 인식 못함 → DOM placeholder 만 남음.
+      // 사용자 보고: "새로고침하면 다시 됨". 따라서 reload + 큐는 그대로 유지하고 retry.
+      if (isPromptInsertFailed && activeTabIds[0]) {
+        broadcastLog('Prompt 입력 실패 → 탭 새로고침 후 같은 항목 재시도 (Slate desync 복구)', 'warn');
+        try {
+          await chrome.tabs.reload(activeTabIds[0]);
+          await MangoUtils.sleep(5000);
+          broadcastLog('탭 새로고침 완료, 같은 항목 재시도', 'info');
+        } catch (e) {
+          broadcastLog(`탭 새로고침 실패: ${e.message}`, 'warn');
+        }
+        // 재시도 카운트만 증가, 다음 iteration 에서 같은 item 다시 처리
+        sm.retryCount = (sm.retryCount || 0) + 1;
+        if (sm.retryCount >= (sm.maxRetries || 3)) {
+          broadcastLog(`Prompt 입력 ${sm.maxRetries}회 실패 → 항목 skip`, 'error');
+          sm.results.push({ success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex, error: 'Prompt 입력 반복 실패' });
+          sm.retryCount = 0;
+          await handleCooldownAndNext();
+        } else {
+          sm.transition(AutoState.PREPARING);
+        }
+        continue;
+      }
 
       // 이미지 업로드 거부 → 재시도 무의미 (같은 이미지로 또 거부됨), 바로 실패 처리 후 다음으로
       // 🔑 에러 직후 DOM/전역 상태가 오염되어 다음 세그먼트에 이전 이미지/영상이 덮어쓰이는 현상 있어서
