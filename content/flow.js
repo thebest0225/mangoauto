@@ -26,8 +26,19 @@
     PROMPT_TEXTAREA_ID: 'PINHOLE_TEXT_AREA_ELEMENT_ID',
 
     GENERATE_BUTTON_XPATH:
-      "//button[.//i[text()='arrow_forward']] | " +
-      "(//button[.//i[normalize-space(text())='arrow_forward']])",
+      // Flow UI 개편 (2026-05): arrow_forward → arrow_upward / play_arrow / send 등 다양화.
+      // 또한 aria-label='Generate'/'생성' / data-test-id='generate-button' 등 신패턴 추가.
+      // 다중 OR 후보를 한 XPath 안에 묶어 어떤 변형도 잡히게.
+      "//button[.//i[normalize-space(text())='arrow_forward']] | " +
+      "//button[.//i[normalize-space(text())='arrow_upward']] | " +
+      "//button[.//i[normalize-space(text())='send']] | " +
+      "//button[.//i[normalize-space(text())='play_arrow']] | " +
+      "//button[.//i[normalize-space(text())='auto_awesome']] | " +
+      "//button[contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'generate')] | " +
+      "//button[contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'send')] | " +
+      "//button[@aria-label='생성' or @aria-label='만들기' or @aria-label='보내기'] | " +
+      "//button[@data-test-id='generate-button' or @data-testid='generate-button'] | " +
+      "//button[@type='submit' and not(@disabled)]",
 
     VIDEOS_TAB_XPATH:
       "//button[@role='radio' and (contains(., 'Videos') or contains(., '동영상') or contains(., 'Video'))]",
@@ -129,7 +140,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-04-19' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-04-flow-submit' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1424,46 +1435,119 @@
   }
 
   // ─── Generate Button ───
+  // Flow UI 가 자주 개편됨 — 다층 fallback 으로 어떤 변형이든 잡아낸다.
+  //   ① XPath (다중 아이콘/aria-label/type=submit 후보)
+  //   ② 아이콘 텍스트 매칭 (arrow_forward/arrow_upward/send/play_arrow/auto_awesome)
+  //   ③ aria-label / data-testid 매칭
+  //   ④ 텍스트 매칭 (Generate / Create / 만들기 / 생성)
+  //   ⑤ Prompt textarea 근처 form 의 submit 버튼
   function findGenerateButton() {
-    // Primary: XPath (button with arrow_forward icon)
+    // ① Primary: XPath
     const byXPath = getByXPath(SELECTORS.GENERATE_BUTTON_XPATH);
     if (byXPath) return byXPath;
 
-    // Fallback: find button with arrow_forward text in icon
-    const buttons = document.querySelectorAll('button');
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const SUBMIT_ICONS = new Set([
+      'arrow_forward', 'arrow_upward', 'send', 'play_arrow', 'auto_awesome',
+      'check', 'east', 'rocket_launch',
+    ]);
+
+    // ② 아이콘 텍스트 매칭
     for (const btn of buttons) {
       const icons = btn.querySelectorAll('i');
       for (const icon of icons) {
-        if (icon.textContent.trim() === 'arrow_forward') return btn;
+        if (SUBMIT_ICONS.has((icon.textContent || '').trim())) return btn;
       }
     }
 
-    // Fallback: text match
+    // ③ aria-label / data-testid 매칭
     for (const btn of buttons) {
-      const text = btn.textContent || '';
-      if ((text.includes('만들기') || text.includes('Create')) &&
-          text.includes('arrow_forward')) {
-        return btn;
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const testid = (btn.getAttribute('data-test-id') || btn.getAttribute('data-testid') || '').toLowerCase();
+      if (
+        label.includes('generate') || label.includes('send') ||
+        label === '생성' || label === '만들기' || label === '보내기' ||
+        testid.includes('generate') || testid.includes('submit')
+      ) return btn;
+    }
+
+    // ④ 텍스트 매칭
+    for (const btn of buttons) {
+      const t = (btn.textContent || '').trim().toLowerCase();
+      if (t === 'generate' || t === 'create' || t === '만들기' || t === '생성') return btn;
+    }
+
+    // ⑤ Prompt textarea/input 근처 form 의 submit 버튼
+    const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+                     document.querySelector('textarea, [contenteditable="true"]');
+    if (promptEl) {
+      const form = promptEl.closest('form');
+      if (form) {
+        const submitBtn = form.querySelector('button[type="submit"]:not([disabled])');
+        if (submitBtn) return submitBtn;
+      }
+      // form 없으면 가장 가까운 ancestor 안의 type=submit
+      let p = promptEl.parentElement;
+      let depth = 0;
+      while (p && depth < 6) {
+        const sb = p.querySelector('button[type="submit"]:not([disabled])');
+        if (sb) return sb;
+        p = p.parentElement;
+        depth++;
       }
     }
 
     return null;
   }
 
+  // ─── Enter-key fallback — 버튼 못 찾을 때 prompt 에 직접 Enter 발사 ───
+  async function trySubmitByEnter() {
+    const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+                     document.querySelector('textarea, [contenteditable="true"]');
+    if (!promptEl) return false;
+    promptEl.focus();
+    await delay(150);
+    const dispatchKey = (which, modifier = {}) => {
+      const opts = {
+        bubbles: true, cancelable: true,
+        key: 'Enter', code: 'Enter', keyCode: which, which: which,
+        ...modifier,
+      };
+      promptEl.dispatchEvent(new KeyboardEvent('keydown', opts));
+      promptEl.dispatchEvent(new KeyboardEvent('keypress', opts));
+      promptEl.dispatchEvent(new KeyboardEvent('keyup', opts));
+    };
+    // Plain Enter 시도
+    dispatchKey(13);
+    await delay(300);
+    // Ctrl+Enter / Cmd+Enter — 일부 UI 가 modifier 요구
+    dispatchKey(13, { ctrlKey: true });
+    await delay(200);
+    dispatchKey(13, { metaKey: true });
+    return true;
+  }
+
   async function clickGenerate() {
-    // Wait for button to be enabled
     const start = Date.now();
     while (Date.now() - start < 5000) {
       const btn = findGenerateButton();
-      if (btn && !btn.disabled) {
+      if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
         MangoDom.simulateClick(btn);
-        console.log(LOG_PREFIX, 'Generate button clicked');
+        console.log(LOG_PREFIX, `Generate button clicked (label="${btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 20) || '?'}")`);
         await delay(1000);
         return;
       }
       await delay(300);
     }
-    throw new Error('Cannot find or click generate button');
+    // 버튼 못 찾음 → Enter fallback
+    console.warn(LOG_PREFIX, 'Generate button not found — falling back to Enter key submit');
+    const ok = await trySubmitByEnter();
+    if (ok) {
+      await delay(1500);
+      console.log(LOG_PREFIX, 'Submitted via Enter fallback');
+      return;
+    }
+    throw new Error('Cannot find or click generate button (Enter fallback also failed)');
   }
 
   // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
