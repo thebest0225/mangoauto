@@ -335,13 +335,32 @@ const MangoDom = {
   },
 
   /**
-   * Click with PointerEvent sequence (more reliable for React apps)
+   * Click with full PointerEvent + MouseEvent sequence (reliable for Lit/React apps).
+   * Why: Some frameworks (Lit/Slate) only respond to the full handshake — pointerdown/up
+   * alone won't dispatch React onClick if mousedown/up are missing. composed:true crosses
+   * shadow DOM boundaries (Flow uses web-components).
    */
   simulateClick(el) {
-    el.scrollIntoView({ behavior: 'instant', block: 'center' });
-    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    try { el.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (_) {}
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const baseOpts = {
+      bubbles: true, cancelable: true, composed: true,
+      view: window, clientX: cx, clientY: cy, button: 0, buttons: 1,
+    };
+    try { el.focus({ preventScroll: true }); } catch (_) {}
+    el.dispatchEvent(new PointerEvent('pointerover', { ...baseOpts, pointerType: 'mouse' }));
+    el.dispatchEvent(new PointerEvent('pointerenter', { ...baseOpts, pointerType: 'mouse', bubbles: false }));
+    el.dispatchEvent(new MouseEvent('mouseover', baseOpts));
+    el.dispatchEvent(new MouseEvent('mouseenter', { ...baseOpts, bubbles: false }));
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...baseOpts, pointerType: 'mouse', isPrimary: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', baseOpts));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...baseOpts, pointerType: 'mouse', buttons: 0 }));
+    el.dispatchEvent(new MouseEvent('mouseup', { ...baseOpts, buttons: 0 }));
+    el.dispatchEvent(new MouseEvent('click', { ...baseOpts, buttons: 0, detail: 1 }));
+    // Native .click() as belt-and-suspenders — triggers default form submission etc.
+    try { el.click(); } catch (_) {}
   },
 
   /**

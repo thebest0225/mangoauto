@@ -140,7 +140,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-04-flow-submit' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v2' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1435,69 +1435,146 @@
   }
 
   // ─── Generate Button ───
-  // Flow UI 가 자주 개편됨 — 다층 fallback 으로 어떤 변형이든 잡아낸다.
-  //   ① XPath (다중 아이콘/aria-label/type=submit 후보)
-  //   ② 아이콘 텍스트 매칭 (arrow_forward/arrow_upward/send/play_arrow/auto_awesome)
-  //   ③ aria-label / data-testid 매칭
-  //   ④ 텍스트 매칭 (Generate / Create / 만들기 / 생성)
-  //   ⑤ Prompt textarea 근처 form 의 submit 버튼
+  // Flow UI 개편 (May 2026): "만들기" 라벨 버튼이 여러개 존재 (새 프로젝트/챕터 등).
+  // 잘못된 "만들기" 클릭하면 Flow 가 무반응 → 반드시 prompt 와 같은 컨테이너 안의 것만.
+  //
+  // 우선순위:
+  //   ① prompt 의 closest form 안 type=submit (가장 강한 신호)
+  //   ② prompt 의 가까운 ancestor (최대 8단계) 안의 submit-icon 버튼
+  //   ③ prompt 의 가까운 ancestor 안의 aria-label submit/generate 버튼
+  //   ④ 페이지 전체에서 아이콘-only submit 버튼 (텍스트 없음, "만들기" 무관)
+  //   ⑤ aria-label / data-testid 매칭 (전역)
+  //   ⑥ 텍스트 매칭 ("만들기" 단독은 위험 → 마지막 resort)
   function findGenerateButton() {
-    // ① Primary: XPath
-    const byXPath = getByXPath(SELECTORS.GENERATE_BUTTON_XPATH);
-    if (byXPath) return byXPath;
-
-    const buttons = Array.from(document.querySelectorAll('button'));
     const SUBMIT_ICONS = new Set([
       'arrow_forward', 'arrow_upward', 'send', 'play_arrow', 'auto_awesome',
       'check', 'east', 'rocket_launch',
     ]);
 
-    // ② 아이콘 텍스트 매칭
-    for (const btn of buttons) {
-      const icons = btn.querySelectorAll('i');
+    const isEnabledButton = (btn) => {
+      if (!btn || btn.tagName !== 'BUTTON' && btn.getAttribute('role') !== 'button') return false;
+      if (btn.disabled) return false;
+      if (btn.getAttribute('aria-disabled') === 'true') return false;
+      const rect = btn.getBoundingClientRect();
+      return rect.width > 4 && rect.height > 4;
+    };
+
+    const hasSubmitIcon = (btn) => {
+      const icons = btn.querySelectorAll('i, .material-icons, .material-symbols-outlined');
       for (const icon of icons) {
-        if (SUBMIT_ICONS.has((icon.textContent || '').trim())) return btn;
+        if (SUBMIT_ICONS.has((icon.textContent || '').trim())) return true;
       }
-    }
+      return false;
+    };
 
-    // ③ aria-label / data-testid 매칭
-    for (const btn of buttons) {
-      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      const testid = (btn.getAttribute('data-test-id') || btn.getAttribute('data-testid') || '').toLowerCase();
-      if (
-        label.includes('generate') || label.includes('send') ||
-        label === '생성' || label === '만들기' || label === '보내기' ||
-        testid.includes('generate') || testid.includes('submit')
-      ) return btn;
-    }
-
-    // ④ 텍스트 매칭
-    for (const btn of buttons) {
-      const t = (btn.textContent || '').trim().toLowerCase();
-      if (t === 'generate' || t === 'create' || t === '만들기' || t === '생성') return btn;
-    }
-
-    // ⑤ Prompt textarea/input 근처 form 의 submit 버튼
+    // prompt element 찾기
     const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
-                     document.querySelector('textarea, [contenteditable="true"]');
+                     document.querySelector('textarea[id*="PINHOLE" i], textarea, [contenteditable="true"]');
+
+    // ① prompt 의 closest form 안 type=submit
     if (promptEl) {
       const form = promptEl.closest('form');
       if (form) {
-        const submitBtn = form.querySelector('button[type="submit"]:not([disabled])');
-        if (submitBtn) return submitBtn;
+        const submitBtns = Array.from(form.querySelectorAll('button[type="submit"]'));
+        for (const sb of submitBtns) {
+          if (isEnabledButton(sb)) {
+            console.log(LOG_PREFIX, '[btn] ① prompt-form submit 선택');
+            return sb;
+          }
+        }
       }
-      // form 없으면 가장 가까운 ancestor 안의 type=submit
+
+      // ② prompt 의 ancestor (최대 8단계) 안의 submit-icon 버튼
       let p = promptEl.parentElement;
       let depth = 0;
-      while (p && depth < 6) {
-        const sb = p.querySelector('button[type="submit"]:not([disabled])');
-        if (sb) return sb;
+      while (p && depth < 8) {
+        const btns = Array.from(p.querySelectorAll('button'));
+        for (const btn of btns) {
+          if (isEnabledButton(btn) && hasSubmitIcon(btn)) {
+            console.log(LOG_PREFIX, `[btn] ② prompt-ancestor(depth=${depth}) submit-icon 선택`);
+            return btn;
+          }
+        }
+        p = p.parentElement;
+        depth++;
+      }
+
+      // ③ prompt 의 ancestor 안의 aria-label generate/send 버튼
+      p = promptEl.parentElement;
+      depth = 0;
+      while (p && depth < 8) {
+        const btns = Array.from(p.querySelectorAll('button'));
+        for (const btn of btns) {
+          if (!isEnabledButton(btn)) continue;
+          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+          const testid = (btn.getAttribute('data-test-id') || btn.getAttribute('data-testid') || '').toLowerCase();
+          if (label.includes('generate') || label.includes('send') || label === '생성' || label === '만들기' || label === '보내기' ||
+              testid.includes('generate') || testid.includes('submit')) {
+            console.log(LOG_PREFIX, `[btn] ③ prompt-ancestor(depth=${depth}) aria-label 선택 (label="${label||testid}")`);
+            return btn;
+          }
+        }
         p = p.parentElement;
         depth++;
       }
     }
 
+    // ④ 전역 fallback: 아이콘-only submit 버튼 (텍스트 없는 화살표 단독)
+    const allButtons = Array.from(document.querySelectorAll('button'));
+    for (const btn of allButtons) {
+      if (!isEnabledButton(btn) || !hasSubmitIcon(btn)) continue;
+      const text = (btn.textContent || '').replace(/[\s ]+/g, '').trim();
+      // 아이콘 텍스트만 있고 다른 글자 없음 (e.g. "arrow_forward" 만)
+      const iconNames = Array.from(SUBMIT_ICONS);
+      const isIconOnly = iconNames.some(name => text === name);
+      if (isIconOnly) {
+        console.log(LOG_PREFIX, `[btn] ④ 전역 icon-only submit 선택 (text="${text}")`);
+        return btn;
+      }
+    }
+
+    // ⑤ 전역 aria-label / data-testid
+    for (const btn of allButtons) {
+      if (!isEnabledButton(btn)) continue;
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const testid = (btn.getAttribute('data-test-id') || btn.getAttribute('data-testid') || '').toLowerCase();
+      if ((label.includes('generate') && !label.includes('project')) || label.includes('send') ||
+          testid.includes('generate') || testid.includes('submit')) {
+        console.log(LOG_PREFIX, `[btn] ⑤ 전역 aria-label 선택 (label="${label||testid}")`);
+        return btn;
+      }
+    }
+
+    // ⑥ 마지막 resort: XPath (기존 광범위 fallback)
+    const byXPath = getByXPath(SELECTORS.GENERATE_BUTTON_XPATH);
+    if (byXPath && isEnabledButton(byXPath)) {
+      console.log(LOG_PREFIX, '[btn] ⑥ XPath fallback 선택');
+      return byXPath;
+    }
+
     return null;
+  }
+
+  // ─── Form submit fallback — form 이 있으면 button.click() 대신 form.requestSubmit() ───
+  function tryFormRequestSubmit() {
+    const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+                     document.querySelector('textarea[id*="PINHOLE" i], textarea, [contenteditable="true"]');
+    if (!promptEl) return false;
+    const form = promptEl.closest('form');
+    if (!form) return false;
+    try {
+      if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+        console.log(LOG_PREFIX, '[btn] form.requestSubmit() 호출');
+        return true;
+      }
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      console.log(LOG_PREFIX, '[btn] form submit event dispatch');
+      return true;
+    } catch (e) {
+      console.warn(LOG_PREFIX, '[btn] form submit 에러:', e.message);
+      return false;
+    }
   }
 
   // ─── Enter-key fallback — 버튼 못 찾을 때 prompt 에 직접 Enter 발사 ───
@@ -1527,27 +1604,83 @@
     return true;
   }
 
+  // 클릭 후 generation 이 실제 시작됐는지 감지 — UI 신호: progress_activity icon,
+  // 진행률 텍스트, 또는 disabled 상태 변화.
+  function hasGenerationStarted() {
+    // progress icon
+    const icons = document.querySelectorAll('i, .material-icons, .material-symbols-outlined');
+    for (const ic of icons) {
+      const t = (ic.textContent || '').trim();
+      if (t === 'progress_activity' || t === 'hourglass_empty' || t === 'hourglass_top') return true;
+    }
+    // 진행률 텍스트 (e.g. "5%", "10%")
+    const main = document.body.innerText || '';
+    if (/\b\d{1,3}%/.test(main)) return true;
+    // role=progressbar
+    if (document.querySelector('[role="progressbar"]')) return true;
+    return false;
+  }
+
   async function clickGenerate() {
+    // 1) prompt textarea 가 blur 되도록 살짝 다른 곳 포커스 — Slate state 커밋 보장
+    const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+                     document.querySelector('textarea[id*="PINHOLE" i], textarea, [contenteditable="true"]');
+    if (promptEl) {
+      try {
+        promptEl.dispatchEvent(new Event('change', { bubbles: true }));
+        promptEl.dispatchEvent(new Event('blur', { bubbles: true }));
+      } catch (_) {}
+    }
+    await delay(200);
+
+    // 2) 버튼 찾고 클릭 (최대 5초 대기)
     const start = Date.now();
+    let clickedLabel = null;
     while (Date.now() - start < 5000) {
       const btn = findGenerateButton();
-      if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+      if (btn) {
+        clickedLabel = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
         MangoDom.simulateClick(btn);
-        console.log(LOG_PREFIX, `Generate button clicked (label="${btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 20) || '?'}")`);
-        await delay(1000);
-        return;
+        console.log(LOG_PREFIX, `Generate button clicked (label="${clickedLabel}")`);
+        break;
       }
       await delay(300);
     }
-    // 버튼 못 찾음 → Enter fallback
-    console.warn(LOG_PREFIX, 'Generate button not found — falling back to Enter key submit');
+
+    // 3) 클릭 후 800ms 대기 — generation 시작 신호 감지
+    await delay(800);
+    if (hasGenerationStarted()) {
+      console.log(LOG_PREFIX, 'Generation 시작 감지 ✓');
+      return;
+    }
+
+    // 4) 시작 신호 없음 → form.requestSubmit() 시도
+    console.warn(LOG_PREFIX, 'Generation 시작 신호 없음 — form.requestSubmit() 재시도');
+    if (tryFormRequestSubmit()) {
+      await delay(1000);
+      if (hasGenerationStarted()) {
+        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (requestSubmit)');
+        return;
+      }
+    }
+
+    // 5) 그래도 없음 → Enter fallback
+    console.warn(LOG_PREFIX, 'requestSubmit 도 실패 — Enter key fallback');
     const ok = await trySubmitByEnter();
     if (ok) {
       await delay(1500);
-      console.log(LOG_PREFIX, 'Submitted via Enter fallback');
+      if (hasGenerationStarted()) {
+        console.log(LOG_PREFIX, 'Generation 시작 감지 ✓ (Enter)');
+        return;
+      }
+    }
+
+    // 6) 모든 시도 실패 — 그래도 진행 (waitForGenerationComplete 가 타임아웃으로 잡음)
+    if (clickedLabel) {
+      console.warn(LOG_PREFIX, `클릭은 됐으나 generation 시작 신호 없음. label="${clickedLabel}" — 계속 대기`);
       return;
     }
-    throw new Error('Cannot find or click generate button (Enter fallback also failed)');
+    throw new Error('Cannot find or click generate button (all fallbacks failed)');
   }
 
   // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
