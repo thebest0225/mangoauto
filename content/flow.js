@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v4-main-world' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v5-synthetic-event' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1639,18 +1639,40 @@
   }
 
   function callReactOnClick(el) {
+    // React handler 가 e.nativeEvent.isTrusted 접근 시 에러 안 나도록 SyntheticEvent-like 객체 빌드
+    const buildSyntheticEvent = (node) => {
+      const nativeEvent = new MouseEvent('click', {
+        bubbles: true, cancelable: true, composed: true, view: window,
+        button: 0, buttons: 0, detail: 1,
+      });
+      const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      return {
+        type: 'click', bubbles: true, cancelable: true, defaultPrevented: false,
+        eventPhase: 0, isTrusted: false, timeStamp: Date.now(),
+        nativeEvent, currentTarget: node, target: node, relatedTarget: null,
+        view: window, detail: 1, button: 0, buttons: 0,
+        clientX: cx, clientY: cy, screenX: cx, screenY: cy, pageX: cx, pageY: cy,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+        getModifierState: () => false,
+        preventDefault() { this.defaultPrevented = true; nativeEvent.preventDefault(); },
+        stopPropagation() { nativeEvent.stopPropagation(); },
+        stopImmediatePropagation() {},
+        isPropagationStopped: () => false,
+        isDefaultPrevented() { return this.defaultPrevented; },
+        persist() {},
+      };
+    };
     // 버튼 자체 + 자식 + 부모 (최대 4단계) 순회하며 onClick props 찾기
     const tryOn = (node) => {
       const props = findReactProps(node);
       if (props && typeof props.onClick === 'function') {
         try {
-          const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
-          Object.defineProperty(ev, 'currentTarget', { value: node, configurable: true });
-          Object.defineProperty(ev, 'target', { value: node, configurable: true });
-          props.onClick(ev);
+          props.onClick(buildSyntheticEvent(node));
           return node;
         } catch (e) {
-          console.warn(LOG_PREFIX, '[btn] React onClick 호출 에러:', e.message);
+          console.warn(LOG_PREFIX, `[btn] React onClick 호출 에러 (${node.tagName}):`, e.message);
         }
       }
       return null;

@@ -86,17 +86,66 @@
     console.log(LOG_PREFIX, `🎯 [submit] button 발견 (MAIN world): "${label}"`);
 
     // ① button 자체 → 자식 → 부모(6단계) 순회하며 props.onClick 찾기
+    //   주의: React handler 가 e.nativeEvent.isTrusted 를 읽는 경우 있으므로
+    //   SyntheticEvent-like 객체로 wrap 해서 nativeEvent 채워줘야 함.
+    const buildSyntheticEvent = (node) => {
+      const nativeEvent = new MouseEvent('click', {
+        bubbles: true, cancelable: true, composed: true, view: window,
+        button: 0, buttons: 0, detail: 1,
+      });
+      const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { left: 0, top: 0, width: 0, height: 0 };
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      return {
+        type: 'click',
+        bubbles: true,
+        cancelable: true,
+        defaultPrevented: false,
+        eventPhase: 0,
+        isTrusted: false,
+        timeStamp: Date.now(),
+        nativeEvent,
+        currentTarget: node,
+        target: node,
+        relatedTarget: null,
+        view: window,
+        detail: 1,
+        button: 0,
+        buttons: 0,
+        clientX: cx, clientY: cy,
+        screenX: cx, screenY: cy,
+        pageX: cx, pageY: cy,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+        getModifierState: () => false,
+        preventDefault() { this.defaultPrevented = true; nativeEvent.preventDefault(); },
+        stopPropagation() { nativeEvent.stopPropagation(); },
+        stopImmediatePropagation() { nativeEvent.stopImmediatePropagation && nativeEvent.stopImmediatePropagation(); },
+        isPropagationStopped: () => false,
+        isDefaultPrevented() { return this.defaultPrevented; },
+        persist() {},
+      };
+    };
+
     const tryCallOnClick = (node) => {
       const props = findReactPropsFromFiber(node);
       if (props && typeof props.onClick === 'function') {
         try {
-          const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
-          Object.defineProperty(ev, 'currentTarget', { value: node, configurable: true });
-          Object.defineProperty(ev, 'target', { value: node, configurable: true });
-          props.onClick(ev);
+          const synth = buildSyntheticEvent(node);
+          props.onClick(synth);
           return true;
         } catch (e) {
-          console.warn(LOG_PREFIX, `🚫 [submit] onClick 호출 에러: ${e.message}`);
+          console.warn(LOG_PREFIX, `🚫 [submit] onClick 호출 에러 (${node.tagName}): ${e.message}`);
+        }
+      }
+      // onPointerDown / onMouseDown handler 도 시도 (일부 react component 는 click 대신 pointerdown 사용)
+      if (props && typeof props.onPointerDown === 'function' && typeof props.onPointerUp === 'function') {
+        try {
+          const synth = buildSyntheticEvent(node);
+          props.onPointerDown(synth);
+          props.onPointerUp(synth);
+          return true;
+        } catch (e) {
+          console.warn(LOG_PREFIX, `🚫 [submit] onPointerDown/Up 호출 에러: ${e.message}`);
         }
       }
       return false;
