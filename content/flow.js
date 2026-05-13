@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v8-reload-on-desync' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v9-fetch-signal' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1639,20 +1639,43 @@
     return true;
   }
 
-  // 클릭 후 generation 이 실제 시작됐는지 감지 — UI 신호: progress_activity icon,
-  // 진행률 텍스트, 또는 disabled 상태 변화.
-  function hasGenerationStarted() {
-    // progress icon
-    const icons = document.querySelectorAll('i, .material-icons, .material-symbols-outlined');
-    for (const ic of icons) {
-      const t = (ic.textContent || '').trim();
-      if (t === 'progress_activity' || t === 'hourglass_empty' || t === 'hourglass_top') return true;
+  // ─── Generation 시작 감지 ───
+  // 1순위: inject.js (MAIN world) 의 fetch interceptor 가 보내는 GENERATION_FETCH_STARTED
+  //        신호 — 진짜 API 호출 발사 = 100% 확정.
+  // 2순위: DOM heuristics (baseline 대비 progress_activity 아이콘 / role=progressbar 증가)
+  //        — fetch 신호가 너무 늦거나 누락 시 보조용. % 텍스트는 false positive 잦아서 제외.
+  let _lastGenerationFetchTimestamp = 0;
+  window.addEventListener('message', (event) => {
+    if (event.data?.type === 'GENERATION_FETCH_STARTED') {
+      _lastGenerationFetchTimestamp = event.data.timestamp || Date.now();
+      console.log(LOG_PREFIX, `[gen-detect] 🌐 inject.js fetch 신호 수신 (${event.data.kind})`);
     }
-    // 진행률 텍스트 (e.g. "5%", "10%")
-    const main = document.body.innerText || '';
-    if (/\b\d{1,3}%/.test(main)) return true;
-    // role=progressbar
-    if (document.querySelector('[role="progressbar"]')) return true;
+  });
+
+  function countProgressIndicators() {
+    let n = 0;
+    document.querySelectorAll('i, .material-icons, .material-symbols-outlined').forEach(ic => {
+      const t = (ic.textContent || '').trim();
+      if (t === 'progress_activity' || t === 'hourglass_empty' || t === 'hourglass_top') n++;
+    });
+    n += document.querySelectorAll('[role="progressbar"]').length;
+    return n;
+  }
+
+  // 클릭 전 baseline 캡처. 클릭 후 변화 감지.
+  let _genBaselineCount = 0;
+  let _genStartCutoff = 0;
+  function captureGenerationBaseline() {
+    _genBaselineCount = countProgressIndicators();
+    _genStartCutoff = Date.now();
+    console.log(LOG_PREFIX, `[gen-detect] baseline 캡처: progress=${_genBaselineCount}`);
+  }
+
+  function hasGenerationStarted() {
+    // 1순위: fetch 신호 (clickGenerate 시작 시점 이후)
+    if (_lastGenerationFetchTimestamp >= _genStartCutoff) return true;
+    // 2순위: progress 아이콘 수가 baseline 보다 증가
+    if (countProgressIndicators() > _genBaselineCount) return true;
     return false;
   }
 
@@ -1812,7 +1835,10 @@
     }
     await delay(300);
 
-    // 2) 버튼 찾기 (최대 5초 대기)
+    // 2) Generation 감지 baseline 캡처 — 이전 작업의 잔존 progress 아이콘/%텍스트 false positive 방지
+    captureGenerationBaseline();
+
+    // 3) 버튼 찾기 (최대 5초 대기)
     const start = Date.now();
     let btn = null;
     while (Date.now() - start < 5000) {

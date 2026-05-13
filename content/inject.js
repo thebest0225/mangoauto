@@ -460,6 +460,17 @@
 
     console.log(LOG_PREFIX, `🌐 Fetch intercepted: ${url.substring(0, 80)}`);
 
+    // ─── Generation 시작 신호 — flow.js 가 clickGenerate 후 이 신호를 기다림 ───
+    // batchCheckAsyncVideo 는 polling 이므로 시작 신호 제외 (실제 generation 요청 아님)
+    if (!isVideoCheck) {
+      window.postMessage({
+        type: 'GENERATION_FETCH_STARTED',
+        url: url.substring(0, 120),
+        kind: isImageApi ? 'image' : (isVideoStartImage ? 'video-start-image' : 'video'),
+        timestamp: Date.now(),
+      }, '*');
+    }
+
     // Extract prompt from request body
     try {
       const body = args[1]?.body;
