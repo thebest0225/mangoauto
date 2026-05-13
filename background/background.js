@@ -1603,6 +1603,29 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
     }
   }
 
+  // ─── 프레임→영상/이미지 모드: 매 작업 완료 후 자동 reload ───
+  // Flow UI 가 이전 소스 이미지를 DOM/내부 state 에 잔존시켜 다음 작업에서:
+  //   (a) "이미 업로드됨" 으로 거부 (IMAGE_REJECTED)
+  //   (b) 더 위험: 이전 이미지로 새 영상 생성
+  // 사용자 확인 시나리오: image-video 65개 큐 중 막판 거부 → 새로고침 → 정상.
+  // 판정: item 에 source 이미지(URL or dataUrl) 가 있었으면 image-to-* 모드.
+  // 동시 모드 (concurrent>1) 와 thumbnail (탭 별도 처리) 제외.
+  const hadSourceImage = !!(item?.sourceImageUrl || item?.sourceImageDataUrl);
+  const needPreReload = hadSourceImage
+                        && !item._isThumbnail
+                        && concurrentCount <= 1
+                        && activeTabIds[0];
+  if (needPreReload) {
+    try {
+      broadcastLog('프레임→영상/이미지 모드: 다음 작업 전 탭 새로고침 (이전 이미지 잔존 방지)', 'info');
+      await chrome.tabs.reload(activeTabIds[0]);
+      await MangoUtils.sleep(5000);
+      broadcastLog('탭 새로고침 완료', 'info');
+    } catch (e) {
+      broadcastLog(`사전 새로고침 실패 (무시하고 계속): ${e.message}`, 'warn');
+    }
+  }
+
   await handleCooldownAndNext();
 }
 
