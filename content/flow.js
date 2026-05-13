@@ -18,11 +18,11 @@
   // ─── 중복 주입 가드 ───
   // Chrome 이 동일 페이지에 content script 를 두번 주입하는 경우 (SPA 네비게이션, 확장 reload 등)
   // 모든 이벤트가 2배 발화되어 클릭이 서로 간섭할 수 있음. 두번째 주입은 조용히 무시.
-  if (window.__MANGOAUTO_FLOW_LOADED__) {
+  if (globalThis.__MANGOAUTO_FLOW_LOADED__) {
     console.warn('[MangoAuto:Flow] 중복 주입 감지 — 두번째 로드 무시');
     return;
   }
-  window.__MANGOAUTO_FLOW_LOADED__ = true;
+  globalThis.__MANGOAUTO_FLOW_LOADED__ = true;
 
   const LOG_PREFIX = '[MangoAuto:Flow]';
   let isProcessing = false;

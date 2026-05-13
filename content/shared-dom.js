@@ -3,8 +3,8 @@
  * 중복 주입 가드 — Chrome 이 같은 페이지에 두번 주입할 때 SyntaxError 방지.
  */
 
-if (!window.__MANGOAUTO_SHARED_DOM_LOADED__) {
-window.__MANGOAUTO_SHARED_DOM_LOADED__ = true;
+if (!globalThis.__MANGOAUTO_SHARED_DOM_LOADED__) {
+globalThis.__MANGOAUTO_SHARED_DOM_LOADED__ = true;
 
 var MangoDom = {
   /**
