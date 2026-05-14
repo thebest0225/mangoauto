@@ -477,10 +477,11 @@ function bindEvents() {
     }
   });
 
-  // 대기열 퀵 선택 (25%, 50%, 75%, hybrid)
+  // 대기열 퀵 선택 (홀수/짝수, hybrid25/hybrid40)
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
+      const parity = btn.dataset.parity;
       const allCbs = $$('.queue-select');
       const total = allCbs.length;
       if (total === 0) return;
@@ -508,10 +509,12 @@ function bindEvents() {
           if (oneBased <= 40) cb.checked = true;
           else cb.checked = (oneBased % 2 === 0);
         });
-      } else {
-        const pct = parseInt(btn.dataset.pct);
-        const selectCount = Math.max(1, Math.round(total * pct / 100));
-        allCbs.forEach((cb, i) => { cb.checked = i < selectCount; });
+      } else if (parity === 'odd') {
+        // 홀수 번호만 (1, 3, 5, ...)
+        allCbs.forEach((cb, i) => { cb.checked = ((i + 1) % 2 === 1); });
+      } else if (parity === 'even') {
+        // 짝수 번호만 (2, 4, 6, ...)
+        allCbs.forEach((cb, i) => { cb.checked = ((i + 1) % 2 === 0); });
       }
       btn.classList.add('active');
       const selectAll = $('#queueSelectAll');
