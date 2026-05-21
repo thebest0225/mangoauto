@@ -217,20 +217,31 @@
         if (!switched) throw new Error('비디오 모드 전환 실패');
         checkStopped();
 
-        // Step 3: 프롬프트 먼저 입력 (이미지 붙여넣기 전에 프롬프트 설정)
-        // 이미지를 비디오 모드에서 붙여넣으면 자동 전송될 수 있으므로 프롬프트부터 입력
-        if (prompt?.trim()) {
-          showToast('Step 3: 비디오 프롬프트 입력...', 'info');
-          await typePrompt(prompt);
-          await delay(500);
-        }
-        checkStopped();
-
-        // Step 4: 이미지 첨부 (비디오 모드에서 이미지 = 시작 프레임)
-        showToast('Step 4: 이미지 첨부 중...', 'info');
+        // Step 3: 이미지 먼저 첨부 (프롬프트보다 먼저 — 단일 업로드 + 업로드 완료 보장)
+        // ⚠️ 핵심: 이미지가 1장만 올라가면 @참조 없이 자동으로 시작 프레임 처리됨.
+        //    여러 장이면 @ 로 선택해야 전송 활성화 → 그래서 단일 업로드가 관건.
+        showToast('Step 3: 이미지 첨부 중...', 'info');
         const attached = await attachImage(sourceImageDataUrl);
         if (!attached) throw new Error('이미지 첨부 실패');
-        showToast('이미지 첨부 완료!', 'success');
+        // 업로드 완료 대기 (로딩 스피너 사라질 때까지) — 미완료 시 전송 비활성
+        await waitForImageUploadComplete(20000);
+        // 중복 정리 — 2장 이상이면 1장만 남김 (dedupe 는 attachImage 내부에서도 1회 실행됨)
+        const imgCount = countAttachedImages();
+        showToast(`이미지 첨부 완료! (${imgCount}장)`, 'success');
+        checkStopped();
+
+        // Step 4: 프롬프트 입력 — 이미지가 여러 장이면 먼저 @참조 로 1장 선택
+        if (imgCount > 1) {
+          showToast('Step 4: 이미지 여러 장 — @참조로 선택...', 'info');
+          await insertImageReference();
+          await delay(400);
+        }
+        if (prompt?.trim()) {
+          showToast('Step 4: 비디오 프롬프트 입력...', 'info');
+          // @참조 칩이 이미 있으면 그 뒤에 프롬프트 append (전체 selectAll+delete 하면 칩도 지워짐)
+          await typePromptAppend(prompt, imgCount > 1);
+          await delay(500);
+        }
         checkStopped();
 
         // Step 5: 전송 (이미지 첨부로 자동 전송됐으면 건너뛰기)
@@ -1068,6 +1079,31 @@
     return null;
   }
 
+  // 프롬프트 append — @참조 칩을 보존한 채 뒤에 텍스트 추가 (selectAll+delete 안 함).
+  // keepExisting=true 면 커서를 끝으로 옮기고 insertText 만. false 면 일반 typePrompt 위임.
+  async function typePromptAppend(text, keepExisting) {
+    if (!keepExisting) return typePrompt(text);
+    if (!text || !text.trim()) return;
+    const editor = findEditor();
+    if (!editor) return typePrompt(text);
+    editor.focus();
+    await delay(150);
+    // 커서를 끝으로 이동
+    try {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);  // 끝으로
+      sel.addRange(range);
+    } catch (_) {}
+    // 칩 뒤에 공백 + 프롬프트
+    document.execCommand('insertText', false, ' ' + text);
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await delay(200);
+    console.log(LOG_PREFIX, '프롬프트 append (@ 칩 보존)');
+  }
+
   // ─── Prompt Input ───
   async function typePrompt(text) {
     if (!text || !text.trim()) {
@@ -1509,6 +1545,86 @@
       console.error(LOG_PREFIX, '❌ 이미지 첨부 에러:', e);
       return false;
     }
+  }
+
+  // ─── 이미지 업로드 완료 대기 (로딩 스피너 사라질 때까지) ───
+  // 그록은 첨부 직후 썸네일에 로딩 스피너를 표시 → 완료돼야 @ 참조 가능.
+  async function waitForImageUploadComplete(timeoutMs = 20000) {
+    const start = Date.now();
+    await delay(800);
+    while (Date.now() - start < timeoutMs) {
+      // 첨부 영역 안 로딩 인디케이터 (스피너/progress) 검사
+      const loaders = document.querySelectorAll(
+        '[class*="attach"] [class*="spin"], [class*="attach"] [class*="load"], ' +
+        '[class*="preview"] [class*="spin"], [class*="upload"] [class*="progress"], ' +
+        '[role="progressbar"], svg[class*="animate-spin"], [class*="animate-spin"]'
+      );
+      // 로딩 인디케이터가 첨부 썸네일 근처에 없으면 완료로 판단
+      let stillLoading = false;
+      for (const ld of loaders) {
+        const r = ld.getBoundingClientRect();
+        // 화면 하단 입력바 영역 (대략 아래쪽 절반) 의 로더만 카운트
+        if (r.width > 0 && r.top > window.innerHeight * 0.4) { stillLoading = true; break; }
+      }
+      if (!stillLoading) {
+        console.log(LOG_PREFIX, '이미지 업로드 완료 (로더 사라짐)');
+        return true;
+      }
+      await delay(500);
+    }
+    console.warn(LOG_PREFIX, '이미지 업로드 완료 대기 타임아웃 — 계속 진행');
+    return false;
+  }
+
+  // ─── @ 참조 워크플로우 — 첨부 이미지를 프롬프트에 @Image 참조로 삽입 ───
+  // 그록 프레임→영상: @ 입력 → 드롭다운에서 이미지 선택 → @Image 1 칩 → 그래야 전송 활성화.
+  async function insertImageReference() {
+    const editor = findEditor();
+    if (!editor) { console.warn(LOG_PREFIX, '@참조: 에디터 없음'); return false; }
+    editor.focus();
+    await delay(200);
+
+    // 1) 기존 내용 비우고 "@" 입력
+    document.execCommand('selectAll', false);
+    document.execCommand('delete', false);
+    await delay(150);
+    // "@" 를 실제 키 입력처럼 — execCommand insertText 로 트리거
+    document.execCommand('insertText', false, '@');
+    // beforeinput/input 이벤트도 발생시켜 드롭다운 트리거 보강
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: '@', inputType: 'insertText' }));
+    await delay(900);  // 드롭다운 등장 대기
+
+    // 2) 드롭다운에서 이미지 항목 찾기 (썸네일 + "Image N" 텍스트)
+    //    role=option / li / [class*=mention] / [class*=suggestion] 안에서 이미지 항목 탐색
+    const start = Date.now();
+    let picked = null;
+    while (Date.now() - start < 4000 && !picked) {
+      const candidates = document.querySelectorAll(
+        '[role="option"], [role="menuitem"], [class*="mention"] li, [class*="suggestion"] li, ' +
+        '[class*="popover"] button, [class*="dropdown"] button, [class*="menu"] [role="option"], ul li'
+      );
+      for (const c of candidates) {
+        const txt = (c.textContent || '').trim();
+        const hasImg = !!c.querySelector('img');
+        const r = c.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) continue;
+        // "Image" / "이미지" 텍스트를 포함하거나 썸네일 이미지가 있는 항목
+        if (hasImg || /image\s*\d|이미지\s*\d|^image|^이미지/i.test(txt)) {
+          picked = c;
+          break;
+        }
+      }
+      if (!picked) await delay(300);
+    }
+
+    if (!picked) {
+      console.warn(LOG_PREFIX, '@참조: 드롭다운에서 이미지 항목 못 찾음');
+      return false;
+    }
+    console.log(LOG_PREFIX, `@참조: 이미지 항목 선택 "${(picked.textContent || '').trim().slice(0, 20)}"`);
+    MangoDom.simulateClick(picked);
+    await delay(600);
+    return true;
   }
 
   // 첨부된 이미지 미리보기의 삭제(X) 버튼들을 모두 찾기 — 리뉴얼 UI 의 X 아이콘 포함.
