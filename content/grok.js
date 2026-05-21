@@ -173,20 +173,25 @@
 
   async function handleExecutePrompt(msg) {
     if (isProcessing) {
-      showToast('이전 작업 진행 중, 5초 대기...', 'warn');
-      // 이전 작업이 끝나기를 최대 10초 대기
+      // 🔑 새 작업이 오면 이전 작업(zombie)을 먼저 **중단 신호** 로 끊는다.
+      //    예전엔 isProcessing 만 강제 리셋해서 이전 run 의 대기 루프가 계속 돌며
+      //    같은 페이지에서 재전송/충돌을 일으켰음 (2번째 항목부터 영상 여러개 생성 버그).
+      showToast('이전 작업 중단 신호 → 정리 대기...', 'warn');
+      shouldStop = true;  // 이전 run 의 waitForVideoReady/대기 루프가 이걸 보고 빠져나감
+      // 이전 작업이 실제로 끝나기를 최대 10초 대기
       for (let i = 0; i < 20; i++) {
         await delay(500);
         if (!isProcessing) break;
       }
       if (isProcessing) {
-        // 강제 리셋 (이전 작업이 stuck 된 경우)
+        // 그래도 안 끝나면 강제 리셋 (stuck)
         showToast('이전 작업 강제 리셋', 'warn');
         isProcessing = false;
       }
+      await delay(300);
     }
     isProcessing = true;
-    shouldStop = false; // 새 작업 시작 시 중지 플래그 리셋
+    shouldStop = false; // 새 작업 시작 시 중지 플래그 리셋 (위 중단 신호 해제)
     showToast('handleExecutePrompt 시작', 'info');
 
     try {
@@ -971,6 +976,7 @@
     console.log(LOG_PREFIX, 'Waiting for result page...');
     const start = Date.now();
     while (Date.now() - start < timeout) {
+      if (shouldStop) throw new Error('사용자에 의해 중지됨');  // 새 작업이 오면 즉시 빠져나감
       if (!isOnMainPage()) return true;
       await delay(1000);
     }
@@ -2132,6 +2138,7 @@
     const checkInterval = 3000; // 참고자료: 3초 간격
 
     while (Date.now() - start < timeout) {
+      if (shouldStop) throw new Error('사용자에 의해 중지됨');  // 새 작업 오면 zombie 즉시 종료
       if (isModerated()) return 'moderated';
 
       // 참고자료 방식: video[src]에서 실제 URL 감지
