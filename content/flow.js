@@ -1926,6 +1926,17 @@
         run: async () => {
           const r = await trustedClickViaDebugger(btn);
           console.log(LOG_PREFIX, '[strat] CDP trusted-click result:', r);
+          // DevTools 가 열려있으면 chrome.debugger attach 실패 → 명확히 안내.
+          if (r && !r.ok && /debugg|attach|devtools|target/i.test(String(r.error || ''))) {
+            console.error(LOG_PREFIX, '⚠️ CDP attach 실패 — DevTools(F12) 가 열려있으면 디버거 충돌. DevTools 닫고 재시도 필요.');
+            try {
+              chrome.runtime.sendMessage({
+                type: 'SHOW_NOTIFICATION',
+                title: 'MangoAuto — 전송 실패',
+                message: 'DevTools(F12)가 열려있어 자동 전송 불가. DevTools 창을 닫고 다시 시도하세요.',
+              });
+            } catch (_) {}
+          }
           await delay(1500);
         },
       },

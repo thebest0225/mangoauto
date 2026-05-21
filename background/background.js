@@ -471,6 +471,12 @@ async function handleMessage(msg, sender) {
       return { ok: true };
     }
 
+    case 'SHOW_NOTIFICATION': {
+      // popup 로그 패널 + 콘솔에 경고 표시 (notifications 권한 없이)
+      broadcastLog(`⚠️ ${msg.title || ''}: ${msg.message || ''}`, 'error');
+      return { ok: true };
+    }
+
     case 'INJECT_GROK_FILE':
       return await injectFileToGrok(msg, sender);
 
