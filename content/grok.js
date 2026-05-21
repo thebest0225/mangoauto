@@ -505,49 +505,94 @@
     return Array.from(targets);
   }
 
-  // Submit button: aria-label="제출" or text "제출"/"Submit"
+  // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05).
   function findSubmitButton() {
-    // 1. aria-label 기반 (여러 가능한 라벨)
-    const ariaLabels = ['제출', '전송', 'Submit', 'Send', '동영상 만들기', 'Create video', '생성'];
-    for (const label of ariaLabels) {
+    // 1. aria-label 기반 (여러 가능한 라벨 — 부분일치 포함)
+    const exactLabels = ['제출', '전송', 'Submit', 'Send', '동영상 만들기', 'Create video', '생성', '보내기'];
+    for (const label of exactLabels) {
       const btn = document.querySelector(`button[aria-label="${label}"]`);
-      if (btn) return btn;
+      if (btn && !btn.disabled) return btn;
+    }
+    // 부분일치 aria-label (Send message / 메시지 보내기 등)
+    const allBtns0 = Array.from(document.querySelectorAll('button'));
+    for (const b of allBtns0) {
+      const al = (b.getAttribute('aria-label') || '').toLowerCase();
+      if (!b.disabled && (al.includes('submit') || al.includes('send') || al.includes('보내') ||
+          al.includes('전송') || al.includes('제출') || al.includes('생성'))) {
+        return b;
+      }
     }
 
     // 2. type="submit"
-    const typeSubmit = document.querySelector('button[type="submit"]');
+    const typeSubmit = document.querySelector('button[type="submit"]:not([disabled])');
     if (typeSubmit) return typeSubmit;
 
     // 3. 텍스트 기반
     const submitTexts = ['제출', 'Submit', '전송', 'Send'];
-    const buttons = document.querySelectorAll('button');
-    for (const b of buttons) {
+    for (const b of allBtns0) {
       const text = (b.textContent || '').trim();
-      if (submitTexts.includes(text)) return b;
+      if (!b.disabled && submitTexts.includes(text)) return b;
     }
 
-    // 4. 에디터 입력 영역 근처의 화살표 아이콘 버튼 (fallback)
+    // 4. ↑ 화살표 SVG 아이콘 버튼 — 에디터 같은 form/container 안 (리뉴얼 UI 핵심)
     const editor = findEditor();
     if (editor) {
+      // editor 의 form 우선, 없으면 ancestor 6단계
+      const scopes = [];
+      const form = editor.closest && editor.closest('form');
+      if (form) scopes.push(form);
       let container = editor;
-      for (let i = 0; i < 5; i++) container = container?.parentElement;
-      if (container) {
-        const btns = Array.from(container.querySelectorAll('button'));
-        // SVG 아이콘만 있는 버튼 (텍스트 없음) — 보통 화살표 전송 버튼
-        const iconBtns = btns.filter(b => {
-          const text = (b.textContent || '').trim();
-          return text.length === 0 && b.querySelector('svg') && !b.disabled;
-        });
+      for (let i = 0; i < 6; i++) { container = container?.parentElement; if (container) scopes.push(container); }
+
+      for (const scope of scopes) {
+        const btns = Array.from(scope.querySelectorAll('button')).filter(b => !b.disabled);
+        // (a) ↑ 화살표 path 가진 SVG 버튼 우선 — arrow-up 형태 (M..l..l 패턴, viewBox 작음)
+        for (const b of btns) {
+          const svg = b.querySelector('svg');
+          if (!svg) continue;
+          const html = svg.innerHTML || '';
+          // arrow-up 휴리스틱: path 가 위로 향하는 화살표 (대부분 "m" 또는 "M" 으로 시작 + 수직 line)
+          // lucide arrow-up / send 아이콘 모두 대응 — 텍스트 없는 작은 정사각 버튼
+          const rect = b.getBoundingClientRect();
+          const squareish = rect.width > 0 && Math.abs(rect.width - rect.height) < 16 && rect.width <= 64;
+          const noText = (b.textContent || '').trim().length === 0;
+          if (noText && squareish) {
+            console.log(LOG_PREFIX, `전송 버튼 (↑ SVG icon, ${Math.round(rect.width)}x${Math.round(rect.height)})`);
+            return b;
+          }
+        }
+        // (b) 텍스트 없는 SVG 버튼 중 마지막 (보통 전송)
+        const iconBtns = btns.filter(b => (b.textContent || '').trim().length === 0 && b.querySelector('svg'));
         if (iconBtns.length > 0) {
-          // 마지막 아이콘 버튼이 보통 전송 버튼
           const btn = iconBtns[iconBtns.length - 1];
-          console.log(LOG_PREFIX, `전송 버튼 (에디터 SVG fallback): aria="${btn.getAttribute('aria-label') || ''}"`);
+          console.log(LOG_PREFIX, `전송 버튼 (SVG fallback): aria="${btn.getAttribute('aria-label') || ''}"`);
           return btn;
         }
       }
     }
 
     return null;
+  }
+
+  // ─── Enter 키 전송 fallback — 버튼 못 찾을 때 에디터에 Enter 발사 ───
+  async function trySubmitByEnter() {
+    const editor = findEditor();
+    if (!editor) return false;
+    editor.focus();
+    await delay(150);
+    const fire = (mod = {}) => {
+      const opts = { bubbles: true, cancelable: true, composed: true,
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ...mod };
+      editor.dispatchEvent(new KeyboardEvent('keydown', opts));
+      editor.dispatchEvent(new KeyboardEvent('keypress', opts));
+      editor.dispatchEvent(new KeyboardEvent('keyup', opts));
+    };
+    fire();                       // plain Enter
+    await delay(250);
+    fire({ ctrlKey: true });      // Ctrl+Enter (일부 UI)
+    await delay(150);
+    fire({ metaKey: true });      // Cmd+Enter (mac UI)
+    return true;
   }
 
   // File input for image attachment (may be hidden). 리뉴얼 UI 대응 — 이미지 accept 포함 우선.
@@ -1134,12 +1179,29 @@
           });
         }
       }
+      // 버튼 못 찾음 → Enter 키 fallback
+      console.warn(LOG_PREFIX, '전송 버튼 못 찾음 — Enter 키 fallback 시도');
+      const ok = await trySubmitByEnter();
+      if (ok) {
+        await delay(1200);
+        // Enter 후 페이지 전환됐으면 성공
+        if (!isOnMainPage() || isAutoGenerating()) {
+          console.log(LOG_PREFIX, 'Enter fallback 으로 전송 성공');
+          return true;
+        }
+      }
       return false;
     }
 
     MangoDom.simulateClick(btn);
     console.log(LOG_PREFIX, `Submit clicked: aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
     await delay(1000);
+    // 클릭했는데 여전히 메인 페이지 + 생성 안 시작이면 Enter fallback 추가 시도
+    if (isOnMainPage() && !isAutoGenerating()) {
+      console.warn(LOG_PREFIX, '버튼 클릭 후에도 전송 미확인 — Enter fallback 보강');
+      await trySubmitByEnter();
+      await delay(1000);
+    }
     return true;
   }
 
@@ -1214,7 +1276,32 @@
     try { target.dispatchEvent(makeEvt('dragleave')); } catch (_) {}
   }
 
+  // 첨부 성공 후 중복 이미지 정리 — 2장 이상이면 마지막 1장만 남기고 삭제.
+  async function dedupeAttachments() {
+    await delay(600);
+    const cnt = countAttachedImages();
+    if (cnt <= 1) return;
+    console.warn(LOG_PREFIX, `⚠️ 중복 첨부 감지 (${cnt}장) → 초과분 삭제 시도`);
+    // 삭제 버튼이 여러개면 (cnt-1) 개만 클릭 (1장 남김)
+    const btns = findAttachmentRemoveButtons();
+    const toRemove = Math.max(0, Math.min(btns.length, cnt - 1));
+    for (let i = 0; i < toRemove; i++) {
+      try { MangoDom.simulateClick(btns[i]); await delay(400); } catch (_) {}
+    }
+    await delay(400);
+    console.log(LOG_PREFIX, `중복 정리 후 ${countAttachedImages()}장`);
+  }
+
+  // 외부 진입점 — 내부 첨부 후 중복 정리까지 보장.
   async function attachImage(imageDataUrl) {
+    const ok = await _attachImageInner(imageDataUrl);
+    if (ok) {
+      try { await dedupeAttachments(); } catch (_) {}
+    }
+    return ok;
+  }
+
+  async function _attachImageInner(imageDataUrl) {
     try {
       console.log(LOG_PREFIX, '=== 이미지 첨부 시작 ===');
 
@@ -1398,18 +1485,38 @@
     }
   }
 
-  async function removeExistingAttachment() {
-    // Click delete button if exists
-    const buttons = document.querySelectorAll('button');
+  // 첨부된 이미지 미리보기의 삭제(X) 버튼들을 모두 찾기 — 리뉴얼 UI 의 X 아이콘 포함.
+  function findAttachmentRemoveButtons() {
+    const out = [];
+    const buttons = Array.from(document.querySelectorAll('button'));
     for (const btn of buttons) {
       const text = (btn.textContent || '').trim();
-      if (text === '삭제') {
-        btn.click();
-        console.log(LOG_PREFIX, '이전 첨부 이미지 삭제');
-        await delay(1000);
-        break;
-      }
+      const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+      // 텍스트 "삭제" / aria-label remove·delete·삭제·제거·close·첨부 취소
+      const isRemoveLabel = text === '삭제' ||
+        aria.includes('remove') || aria.includes('delete') || aria.includes('삭제') ||
+        aria.includes('제거') || aria.includes('첨부') || aria.includes('attachment');
+      if (!isRemoveLabel) continue;
+      // 이 버튼이 이미지 썸네일 근처에 있는지 확인 (오탐 방지)
+      const near = btn.closest('[class*="attach"],[class*="preview"],[class*="thumb"],[class*="image"],[class*="upload"]')
+                   || (btn.parentElement && btn.parentElement.querySelector('img'));
+      if (near || text === '삭제') out.push(btn);
     }
+    return out;
+  }
+
+  async function removeExistingAttachment() {
+    // 모든 첨부 삭제 버튼 클릭 (X 아이콘 포함) — 중복 누적 방지
+    let removed = 0;
+    for (let pass = 0; pass < 5; pass++) {
+      const btns = findAttachmentRemoveButtons();
+      if (!btns.length) break;
+      for (const btn of btns) {
+        try { MangoDom.simulateClick(btn); removed++; await delay(400); } catch (_) {}
+      }
+      await delay(400);
+    }
+    if (removed) console.log(LOG_PREFIX, `이전 첨부 이미지 ${removed}개 삭제`);
 
     // Clear file input
     const fileInput = findFileInput();
@@ -1418,6 +1525,20 @@
       const emptyDt = new DataTransfer();
       fileInput.files = emptyDt.files;
     }
+  }
+
+  // 첨부된 이미지 개수 카운트 (중복 감지용)
+  function countAttachedImages() {
+    let n = 0;
+    const fileInput = findFileInput();
+    if (fileInput && fileInput.files) n = Math.max(n, fileInput.files.length);
+    // 미리보기 썸네일 (blob/data img 중 에디터 근처)
+    const previews = document.querySelectorAll(
+      '[class*="attach"] img[src^="blob:"], [class*="preview"] img[src^="blob:"], [class*="thumb"] img[src^="blob:"], ' +
+      '[class*="attach"] img[src^="data:"], [class*="preview"] img[src^="data:"]'
+    );
+    n = Math.max(n, previews.length);
+    return n;
   }
 
   function checkImageAttached() {
