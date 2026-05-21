@@ -1374,8 +1374,60 @@
       const file = MangoDom.dataUrlToFile(imageDataUrl, `image-${Date.now()}.png`);
       console.log(LOG_PREFIX, `파일 생성: ${file.name}, 크기: ${file.size}`);
 
+      // ── Strategy 0: file input (가장 결정적 — 정확히 1개 파일만 업로드) ──
+      // 🔑 클립보드 paste 가 에디터에 인라인 이미지를 삽입 → 멈춘 blob 으로 2장처럼 보이는
+      //    문제(2026-05 로그 규명) 회피. file input 은 dt.files 에 1개만 세팅 → 단일 업로드.
+      //    file input 이 없으면 "업로드" 버튼을 클릭해 hidden input 을 생성시킨 뒤 세팅.
+      console.log(LOG_PREFIX, 'Strategy 0: file input (단일 업로드 우선)');
+      const setFileInput = (fi) => {
+        const dt0 = new DataTransfer();
+        dt0.items.add(file);
+        const proto = Object.getPrototypeOf(fi);
+        const desc = Object.getOwnPropertyDescriptor(proto, 'files') ||
+                     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+        if (desc && desc.set) desc.set.call(fi, dt0.files);
+        else fi.files = dt0.files;
+        fi.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        fi.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      };
+      try {
+        let fileInput = findFileInput();
+        // file input 없으면 업로드 버튼 클릭해서 생성 시도
+        if (!fileInput) {
+          const upBtn = findUploadButton();
+          if (upBtn) {
+            console.log(LOG_PREFIX, '업로드 버튼 클릭 → file input 생성 시도');
+            // label[for] 또는 내부 input 이면 클릭 시 파일창 뜨므로, 직접 input 찾기 우선
+            MangoDom.simulateClick(upBtn);
+            await delay(600);
+            fileInput = findFileInput();
+          }
+        }
+        if (fileInput) {
+          console.log(LOG_PREFIX, `file input 발견: accept=${fileInput.accept || '(none)'}`);
+          setFileInput(fileInput);
+          await delay(3500);
+          if (checkImageAttached() || !isOnMainPage()) {
+            console.log(LOG_PREFIX, '✅ Strategy 0 (file input) 단일 첨부 성공');
+            return true;
+          }
+          console.log(LOG_PREFIX, 'Strategy 0 미확인, 다음 방식 시도');
+        } else {
+          console.log(LOG_PREFIX, 'file input 없음 — Strategy 1 로');
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, 'Strategy 0 (file input) 실패:', e.message);
+      }
+
+      // 이미 첨부됐으면 중단 (중복 paste 방지)
+      if (checkImageAttached() || !isOnMainPage()) {
+        console.log(LOG_PREFIX, '✅ Strategy 0 이후 첨부 확인됨');
+        return true;
+      }
+
       // ── Strategy 1: Clipboard Paste on TipTap editor (구 UI) ──
-      // 🔑 textarea 는 image paste 를 네이티브 지원 안 함 → TipTap/contenteditable 에서만 시도
+      // ⚠️ 주의: ProseMirror 에디터 paste 는 이미지를 prose 안에 인라인 삽입 → 멈춘 blob 유발.
+      //    Strategy 0(file input) 이 성공하면 여기 도달 안 함. file input 이 정말 없을 때만 최후로.
       console.log(LOG_PREFIX, 'Strategy 1: Clipboard Paste (TipTap/contenteditable 한정)');
       try {
         const editor = findEditor();
@@ -1698,11 +1750,16 @@
       if (text === '삭제') return true;
     }
 
-    // Check 3: blob/data images (uploaded images show as blob URLs)
-    const images = document.querySelectorAll('img[src^="blob:"], img[src^="data:"]');
-    if (images.length > 0) return true;
+    // Check 3: blob/data images — 단, **에디터 안 인라인 이미지는 제외** (ProseMirror paste 잔재).
+    // 에디터 밖(첨부 영역)의 blob/data 이미지만 진짜 첨부로 인정.
+    const editor = findEditor();
+    const blobImgs = Array.from(document.querySelectorAll('img[src^="blob:"], img[src^="data:"]'));
+    for (const img of blobImgs) {
+      if (editor && editor.contains(img)) continue;  // 에디터 인라인 → 무시 (오탐 방지)
+      return true;
+    }
 
-    // Check 4: thumbnail/preview images near the editor
+    // Check 4: thumbnail/preview images near the editor (첨부 영역)
     const previewImgs = document.querySelectorAll('[class*="preview"] img, [class*="thumb"] img, [class*="attach"] img');
     if (previewImgs.length > 0) return true;
 
