@@ -10,6 +10,14 @@
  */
 
 (() => {
+  // 🔒 중복 주입 가드 — inject.js 가 여러 번 주입되면 fetch interceptor 와 Slate insertText 가
+  //    여러 인스턴스에서 동시 실행되어 prompt/submit 상태가 꼬임 (전송 안되던 원인 중 하나).
+  if (window.__MANGOAUTO_INJECT_LOADED__) {
+    console.warn('[MangoAuto:Inject] 중복 주입 감지 — 두번째 로드 무시');
+    return;
+  }
+  window.__MANGOAUTO_INJECT_LOADED__ = true;
+
   const LOG_PREFIX = '[MangoAuto:Inject]';
   const originalFetch = window.fetch;
   let batchSeq = 0;
