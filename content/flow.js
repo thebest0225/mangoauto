@@ -1942,23 +1942,32 @@
       },
     ];
 
-    // 학습된 strategy 가 있으면 우선 시도 후, 실패 시 나머지 순차 시도
+    // 학습된 strategy 가 있으면 우선 시도 후, 실패 시 나머지 순차 시도.
+    // ⚠️ 단, cdp-trusted(chrome.debugger) 는 봇 감지 위험 + DevTools 충돌이 있어
+    //    **절대 1순위로 올리지 않는다**. 학습값이 cdp 여도 비-CDP 전략을 먼저 다 시도하고
+    //    그래도 실패할 때만 최후로 CDP. (사용자 요청: 가능하면 디버거 없이 정상 생성)
+    const CDP_ID = 'cdp-trusted';
     const learned = await getLearnedStrategy();
+    const nonCdp = strategies.filter(s => s.id !== CDP_ID);
+    const cdpStrat = strategies.find(s => s.id === CDP_ID);
     const tryOrder = [];
-    if (learned) {
-      const idx = strategies.findIndex(s => s.id === learned.id);
+    if (learned && learned.id !== CDP_ID) {
+      const idx = nonCdp.findIndex(s => s.id === learned.id);
       if (idx >= 0) {
-        tryOrder.push(strategies[idx]);
-        for (let i = 0; i < strategies.length; i++) {
-          if (i !== idx) tryOrder.push(strategies[i]);
-        }
-        console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선: "${learned.name}" (연속 성공 ${learned.consecutiveSuccesses}회)`);
+        tryOrder.push(nonCdp[idx]);
+        for (let i = 0; i < nonCdp.length; i++) if (i !== idx) tryOrder.push(nonCdp[i]);
+        console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선(비-CDP): "${learned.name}"`);
       } else {
-        tryOrder.push(...strategies);
+        tryOrder.push(...nonCdp);
       }
     } else {
-      tryOrder.push(...strategies);
+      // 학습 없음 또는 학습값이 CDP → 비-CDP 전부 먼저
+      tryOrder.push(...nonCdp);
+      if (learned && learned.id === CDP_ID) {
+        console.log(LOG_PREFIX, '[learn] 학습값이 CDP 지만 비-CDP 먼저 시도 (디버거 회피)');
+      }
     }
+    if (cdpStrat) tryOrder.push(cdpStrat);  // CDP 는 항상 맨 마지막
 
     // 순차 실행 — 첫 success 시 학습 저장 후 return.
     // ⚠️ 각 strategy 후 generation 시작을 **폴링 대기** (fetch 신호가 비동기로 늦게 도착).
