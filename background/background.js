@@ -227,17 +227,19 @@ function getGenerationTimeoutMs() {
 
 // ─── Trusted Click via chrome.debugger (CDP Input.dispatchMouseEvent) ───
 // React/Slate 가 e.isTrusted 체크하는 보안 모드 페이지 (e.g. Google Flow) 대응.
-// 디버거 attach → mouseMoved/Pressed/Released → detach. 노란 디버깅 배너 잠시 표시.
+//
+// ⚠️ 봇 감지 회피 (2026-05 조사 반영):
+//   · Google Flow 는 "디버거가 부착된 상태" 자체를 감지 (debugger; 타이밍 테스트 등).
+//     → 부착을 유지하면 수동 작업 중에도 "비정상 활동" 경고. 따라서 **클릭마다
+//       attach → click → 즉시 detach** 로 부착 시간을 ~300ms 로 최소화.
+//   · CDP Runtime.enable 은 안 보냄 (Input 도메인만) — 클래식 CDP 감지 회피.
+//   · 좌표/타이밍 jitter + human-like 다단계 mouseMoved 로 로봇 패턴 완화.
 //
 // 사용: { type: 'DEBUGGER_TRUSTED_CLICK', x: 123, y: 456 }
 // 응답: { ok: true } 또는 { ok: false, error: '...' }
 const _debuggerAttachedTabs = new Set();
-
-async function ensureDebuggerAttached(tabId) {
-  if (_debuggerAttachedTabs.has(tabId)) return;
-  await chrome.debugger.attach({ tabId }, '1.3');
-  _debuggerAttachedTabs.add(tabId);
-}
+const _delay = (ms) => new Promise(r => setTimeout(r, ms));
+const _rand = (min, max) => min + Math.random() * (max - min);
 
 async function detachDebuggerSafe(tabId) {
   if (!_debuggerAttachedTabs.has(tabId)) return;
@@ -248,22 +250,42 @@ async function detachDebuggerSafe(tabId) {
 }
 
 async function trustedClickAt(tabId, x, y) {
-  await ensureDebuggerAttached(tabId);
+  // 좌표 jitter — 매번 버튼 정중앙 클릭하는 로봇 패턴 회피 (버튼 중앙 ±7px)
+  const jx = Math.round(x + _rand(-7, 7));
+  const jy = Math.round(y + _rand(-7, 7));
   const target = { tabId };
-  // mouseMoved → 호버 상태 적용
-  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-    type: 'mouseMoved', x, y, button: 'none', buttons: 0,
-  });
-  await new Promise(r => setTimeout(r, 30));
-  // mousePressed
-  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-    type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1,
-  });
-  await new Promise(r => setTimeout(r, 50)); // 실제 human click hold time
-  // mouseReleased
-  await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-    type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1,
-  });
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    _debuggerAttachedTabs.add(tabId);
+
+    // human-like 접근: 먼 지점 → 가까운 지점 → 타겟 (직선 텔레포트 회피)
+    const path = [
+      { x: jx - _rand(30, 55), y: jy - _rand(20, 40) },
+      { x: jx - _rand(8, 18),  y: jy - _rand(4, 12)  },
+      { x: jx, y: jy },
+    ];
+    for (const p of path) {
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: Math.round(p.x), y: Math.round(p.y), button: 'none', buttons: 0,
+      });
+      await _delay(_rand(18, 45));
+    }
+    await _delay(_rand(40, 90));  // 도착 후 살짝 머뭇
+
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: jx, y: jy, button: 'left', buttons: 1, clickCount: 1,
+    });
+    await _delay(_rand(55, 110));  // human click hold time (랜덤)
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: jx, y: jy, button: 'left', buttons: 0, clickCount: 1,
+    });
+    await _delay(_rand(30, 60));
+  } finally {
+    // 🔑 즉시 detach — 부착 시간 최소화 (수동 작업 중 detection 회피)
+    if (attached) await detachDebuggerSafe(tabId);
+  }
 }
 
 // 탭 닫힐 때 디버거 자동 detach
@@ -434,9 +456,8 @@ async function handleMessage(msg, sender) {
       }
       if (!tabId) return { ok: false, error: 'no-tab' };
       try {
+        // trustedClickAt 가 내부에서 attach→click→즉시 detach (봇 감지 회피)
         await trustedClickAt(tabId, msg.x, msg.y);
-        // 자동 detach 는 안함 — 연속 클릭 가능 (배너 한번만 표시)
-        // 명시적 detach 가 필요하면 별도 메시지로
         return { ok: true };
       } catch (e) {
         await detachDebuggerSafe(tabId);
