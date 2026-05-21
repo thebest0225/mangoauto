@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-19-flow-submit-v10-poll-no-double' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v11-wait-btn-ready' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1860,6 +1860,39 @@
     if (!btn) {
       throw new Error('Cannot find generate button');
     }
+
+    // 3.5) ⚠️ 버튼 활성화 대기 — Flow 는 프롬프트 입력 후 ~2초 뒤 submit 버튼이 활성화됨.
+    //      그 전에 클릭하면 (CDP trusted 라도) 무시됨. 버튼이 진짜 enabled 될 때까지 대기.
+    //      Flow 가 disabled 속성을 안 쓸 수 있어 시각 신호(opacity/pointer-events)도 함께 검사.
+    const isButtonReallyReady = (b) => {
+      if (!b) return false;
+      if (b.disabled || b.getAttribute('aria-disabled') === 'true') return false;
+      try {
+        const cs = getComputedStyle(b);
+        if (cs.pointerEvents === 'none') return false;
+        if (parseFloat(cs.opacity || '1') < 0.5) return false;
+        // 버튼 자신 또는 가까운 wrapper 가 disabled 표시하는 경우
+        const wrap = b.closest('[aria-disabled="true"],[data-disabled="true"],.disabled');
+        if (wrap) return false;
+      } catch (_) {}
+      return true;
+    };
+    const readyStart = Date.now();
+    let readyMs = 0;
+    while (Date.now() - readyStart < 8000) {
+      const cur = findGenerateButton() || btn;
+      if (cur) btn = cur;
+      if (isButtonReallyReady(btn)) {
+        readyMs = Date.now() - readyStart;
+        break;
+      }
+      await delay(250);
+    }
+    // 활성화 신호를 못 잡아도 최소 2.5초는 기다린 뒤 진행 (Flow validation 시간 확보)
+    if (readyMs < 2500) {
+      await delay(2500 - readyMs);
+    }
+    console.log(LOG_PREFIX, `[btn] 버튼 활성화 대기 완료 (~${Math.max(readyMs, 2500)}ms)`);
     const clickedLabel = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
 
     // ─── Strategy table (id → 실행 함수). 위에서 아래로 fallback. ───
