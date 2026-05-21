@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-13-flow-submit-v9-fetch-signal' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-19-flow-submit-v10-poll-no-double' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1679,6 +1679,17 @@
     return false;
   }
 
+  // generation 시작을 일정 시간 폴링 — fetch 신호/progress 가 비동기로 늦게 와도 잡음.
+  // 단발 체크로 false 면 다음 strategy 로 넘어가 빈 프롬프트 2차 전송하던 문제 방지.
+  async function waitForGenerationStart(timeoutMs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (hasGenerationStarted()) return true;
+      await delay(150);
+    }
+    return hasGenerationStarted();
+  }
+
   // ─── React fiber 직접 호출 — Flow 는 <form> 미사용 + Slate(React) 기반.
   // simulateClick 이 onClick handler 를 미발화하면 fiber 에서 props.onClick 을 직접 호출.
   function findReactProps(el) {
@@ -1938,12 +1949,20 @@
       tryOrder.push(...strategies);
     }
 
-    // 순차 실행 — 첫 success 시 학습 저장 후 return
+    // 순차 실행 — 첫 success 시 학습 저장 후 return.
+    // ⚠️ 각 strategy 후 generation 시작을 **폴링 대기** (fetch 신호가 비동기로 늦게 도착).
+    //    단발 체크하면 전송 성공했는데도 다음 strategy 가 빈 프롬프트에 2차 전송함.
     for (const strat of tryOrder) {
       try {
+        // 매 strategy 직전 — 이미 generation 시작됐으면 (이전 strategy 가 늦게 성공) 즉시 중단.
+        if (hasGenerationStarted()) {
+          console.log(LOG_PREFIX, `[strat] 이미 generation 시작됨 — 추가 전송 중단`);
+          return;
+        }
         console.log(LOG_PREFIX, `[strat] ▶ ${strat.name} 시도 (label="${clickedLabel}")`);
         await strat.run();
-        if (hasGenerationStarted()) {
+        // strategy 실행 후 최대 4초 폴링 — 전송이 실제 generation 으로 이어지는지 확인.
+        if (await waitForGenerationStart(4000)) {
           console.log(LOG_PREFIX, `[strat] ✅ Generation 시작 — ${strat.name}`);
           await saveLearnedStrategy(strat.id, strat.name);
           return;
