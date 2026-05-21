@@ -505,69 +505,84 @@
     return Array.from(targets);
   }
 
+  // 전송 버튼이 절대 아닌 버튼 (오클릭 방지) — 저장됨/공유/모델/설정/복사/다운로드 등.
+  const _SUBMIT_EXCLUDE_RE = /저장|saved|save|북마크|bookmark|공유|share|모델|model|설정|setting|복사|copy|다운로드|download|좋아요|like|편집|edit|삭제|delete|닫기|close|취소|cancel|메뉴|menu|더보기|more|업스케일|upscale|프로필|profile|계정|account|뒤로|back/i;
+
+  function _isExcludedSubmitBtn(btn) {
+    const al = (btn.getAttribute('aria-label') || '');
+    const txt = (btn.textContent || '').trim();
+    return _SUBMIT_EXCLUDE_RE.test(al) || _SUBMIT_EXCLUDE_RE.test(txt);
+  }
+
   // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05).
   function findSubmitButton() {
-    // 1. aria-label 기반 (여러 가능한 라벨 — 부분일치 포함)
+    // 1. aria-label 기반 (여러 가능한 라벨 — 부분일치 포함). 제외 라벨은 스킵.
     const exactLabels = ['제출', '전송', 'Submit', 'Send', '동영상 만들기', 'Create video', '생성', '보내기'];
     for (const label of exactLabels) {
       const btn = document.querySelector(`button[aria-label="${label}"]`);
-      if (btn && !btn.disabled) return btn;
+      if (btn && !btn.disabled && !_isExcludedSubmitBtn(btn)) return btn;
     }
     // 부분일치 aria-label (Send message / 메시지 보내기 등)
     const allBtns0 = Array.from(document.querySelectorAll('button'));
     for (const b of allBtns0) {
+      if (b.disabled || _isExcludedSubmitBtn(b)) continue;
       const al = (b.getAttribute('aria-label') || '').toLowerCase();
-      if (!b.disabled && (al.includes('submit') || al.includes('send') || al.includes('보내') ||
-          al.includes('전송') || al.includes('제출') || al.includes('생성'))) {
+      if (al.includes('submit') || al.includes('send') || al.includes('보내') ||
+          al.includes('전송') || al.includes('제출') || al.includes('생성')) {
         return b;
       }
     }
 
     // 2. type="submit"
     const typeSubmit = document.querySelector('button[type="submit"]:not([disabled])');
-    if (typeSubmit) return typeSubmit;
+    if (typeSubmit && !_isExcludedSubmitBtn(typeSubmit)) return typeSubmit;
 
     // 3. 텍스트 기반
     const submitTexts = ['제출', 'Submit', '전송', 'Send'];
     for (const b of allBtns0) {
+      if (b.disabled || _isExcludedSubmitBtn(b)) continue;
       const text = (b.textContent || '').trim();
-      if (!b.disabled && submitTexts.includes(text)) return b;
+      if (submitTexts.includes(text)) return b;
     }
 
-    // 4. ↑ 화살표 SVG 아이콘 버튼 — 에디터 같은 form/container 안 (리뉴얼 UI 핵심)
+    // 4. ↑ 화살표 SVG 아이콘 버튼 — 에디터와 같은 입력 바 안 + 위치 기반 선택.
+    //    "저장됨" 같은 엉뚱한 버튼 오클릭 방지: editor 와 같은 행(수평) + editor 오른쪽에 있는 것만.
     const editor = findEditor();
     if (editor) {
-      // editor 의 form 우선, 없으면 ancestor 6단계
+      const edRect = editor.getBoundingClientRect();
       const scopes = [];
       const form = editor.closest && editor.closest('form');
       if (form) scopes.push(form);
       let container = editor;
       for (let i = 0; i < 6; i++) { container = container?.parentElement; if (container) scopes.push(container); }
 
+      // 후보 수집 (제외 라벨 제거, 아이콘만 있는 버튼)
+      const seen = new Set();
+      const candidates = [];
       for (const scope of scopes) {
-        const btns = Array.from(scope.querySelectorAll('button')).filter(b => !b.disabled);
-        // (a) ↑ 화살표 path 가진 SVG 버튼 우선 — arrow-up 형태 (M..l..l 패턴, viewBox 작음)
-        for (const b of btns) {
-          const svg = b.querySelector('svg');
-          if (!svg) continue;
-          const html = svg.innerHTML || '';
-          // arrow-up 휴리스틱: path 가 위로 향하는 화살표 (대부분 "m" 또는 "M" 으로 시작 + 수직 line)
-          // lucide arrow-up / send 아이콘 모두 대응 — 텍스트 없는 작은 정사각 버튼
-          const rect = b.getBoundingClientRect();
-          const squareish = rect.width > 0 && Math.abs(rect.width - rect.height) < 16 && rect.width <= 64;
+        for (const b of scope.querySelectorAll('button')) {
+          if (seen.has(b) || b.disabled || _isExcludedSubmitBtn(b)) continue;
+          seen.add(b);
           const noText = (b.textContent || '').trim().length === 0;
-          if (noText && squareish) {
-            console.log(LOG_PREFIX, `전송 버튼 (↑ SVG icon, ${Math.round(rect.width)}x${Math.round(rect.height)})`);
-            return b;
+          if (!noText || !b.querySelector('svg')) continue;
+          const r = b.getBoundingClientRect();
+          if (r.width < 8 || r.width > 72) continue;
+          const squareish = Math.abs(r.width - r.height) < 18;
+          if (!squareish) continue;
+          // editor 의 입력 바 영역 안 (수직으로 editor 와 겹치거나 바로 아래) + editor 오른쪽
+          const sameRow = r.top < edRect.bottom + 80 && r.bottom > edRect.top - 20;
+          const toRight = r.left >= edRect.left;  // editor 왼쪽 끝보다 오른쪽
+          if (sameRow && toRight) {
+            candidates.push({ b, r });
           }
         }
-        // (b) 텍스트 없는 SVG 버튼 중 마지막 (보통 전송)
-        const iconBtns = btns.filter(b => (b.textContent || '').trim().length === 0 && b.querySelector('svg'));
-        if (iconBtns.length > 0) {
-          const btn = iconBtns[iconBtns.length - 1];
-          console.log(LOG_PREFIX, `전송 버튼 (SVG fallback): aria="${btn.getAttribute('aria-label') || ''}"`);
-          return btn;
-        }
+      }
+      if (candidates.length) {
+        // 가장 오른쪽(전송 버튼은 입력바 맨 우측) 선택
+        candidates.sort((a, c) => c.r.right - a.r.right);
+        const best = candidates[0].b;
+        console.log(LOG_PREFIX, `전송 버튼 (위치기반 ↑, ${Math.round(candidates[0].r.width)}x${Math.round(candidates[0].r.height)}, aria="${best.getAttribute('aria-label') || ''}")`);
+        return best;
       }
     }
 
@@ -1277,18 +1292,29 @@
   }
 
   // 첨부 성공 후 중복 이미지 정리 — 2장 이상이면 마지막 1장만 남기고 삭제.
+  // 2번째 이미지가 업로드 완료 후 1~2초 늦게 나타날 수 있어 2초간 폴링하며 감지.
   async function dedupeAttachments() {
-    await delay(600);
-    const cnt = countAttachedImages();
-    if (cnt <= 1) return;
-    console.warn(LOG_PREFIX, `⚠️ 중복 첨부 감지 (${cnt}장) → 초과분 삭제 시도`);
-    // 삭제 버튼이 여러개면 (cnt-1) 개만 클릭 (1장 남김)
-    const btns = findAttachmentRemoveButtons();
-    const toRemove = Math.max(0, Math.min(btns.length, cnt - 1));
-    for (let i = 0; i < toRemove; i++) {
-      try { MangoDom.simulateClick(btns[i]); await delay(400); } catch (_) {}
+    let cnt = 0;
+    // 최대 2.5초 폴링 — 늦게 뜨는 중복 잡기
+    for (let i = 0; i < 5; i++) {
+      await delay(500);
+      cnt = countAttachedImages();
+      if (cnt >= 2) break;
     }
-    await delay(400);
+    if (cnt <= 1) {
+      console.log(LOG_PREFIX, `[dedupe] 첨부 ${cnt}장 — 정상`);
+      return;
+    }
+    console.warn(LOG_PREFIX, `⚠️ 중복 첨부 감지 (${cnt}장) → 초과분 삭제 시도`);
+    // 초과분 (cnt-1)개 삭제 — 여러 패스로 확실히
+    for (let pass = 0; pass < 4; pass++) {
+      const now = countAttachedImages();
+      if (now <= 1) break;
+      const btns = findAttachmentRemoveButtons();
+      if (!btns.length) break;
+      // 첫번째 삭제 버튼만 (보통 먼저 들어온 중복) 클릭 후 재확인
+      try { MangoDom.simulateClick(btns[0]); await delay(500); } catch (_) {}
+    }
     console.log(LOG_PREFIX, `중복 정리 후 ${countAttachedImages()}장`);
   }
 
