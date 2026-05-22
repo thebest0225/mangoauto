@@ -485,9 +485,7 @@ function bindEvents() {
     btn.addEventListener('click', () => {
       const allCbs = $$('.queue-select');
       if (allCbs.length === 0) return;
-      const lo = parseInt(btn.dataset.rangeLo);
-      const hiRaw = (btn.dataset.rangeHi || '').trim();
-      const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
+      const mode = btn.dataset.mode;
       const wasActive = btn.classList.contains('active');
       $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
       if (wasActive) {
@@ -499,17 +497,33 @@ function bindEvents() {
         return;
       }
       let matched = 0;
-      allCbs.forEach(cb => {
-        const num = parseInt(cb.dataset.num);
-        const inRange = !isNaN(num) && num >= lo && num <= hi;
-        cb.checked = inRange;
-        if (inRange) matched++;
-      });
+      let label;
+      if (mode === 'v1') {
+        // v1: 대기열번호 1~45 전체 + 46번부터는 홀수만 선택 (생성 필요분만)
+        allCbs.forEach(cb => {
+          const num = parseInt(cb.dataset.num);
+          const sel = !isNaN(num) && (num <= 45 || num % 2 === 1);
+          cb.checked = sel;
+          if (sel) matched++;
+        });
+        label = '1~45 전체 + 46~ 홀수';
+      } else {
+        const lo = parseInt(btn.dataset.rangeLo);
+        const hiRaw = (btn.dataset.rangeHi || '').trim();
+        const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
+        allCbs.forEach(cb => {
+          const num = parseInt(cb.dataset.num);
+          const inRange = !isNaN(num) && num >= lo && num <= hi;
+          cb.checked = inRange;
+          if (inRange) matched++;
+        });
+        label = `${lo}~${hiRaw === '' ? '끝' : hi} 범위`;
+      }
       btn.classList.add('active');
       const selectAll = $('#queueSelectAll');
       if (selectAll) selectAll.checked = false;
       updateQueueSelectedCount();
-      addLog(`대기열번호 ${lo}~${hiRaw === '' ? '끝' : hi} 범위: ${matched}개 선택됨 (생성 필요분만)`, 'info');
+      addLog(`대기열번호 ${label}: ${matched}개 선택됨 (생성 필요분만)`, 'info');
     });
   });
 
