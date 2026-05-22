@@ -746,10 +746,10 @@ function updateQueuePreview() {
 }
 
 // ─── Queue Selection Helpers ───
-// 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어. v1 은 (≤45 또는 홀수), 나머지는 lo~hi.
+// 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어. v1 은 (≤44 또는 짝수), 나머지는 lo~hi.
 function btnPredicate(btn) {
   if (btn.dataset.mode === 'v1') {
-    return (num) => num <= 45 || num % 2 === 1;
+    return (num) => num <= 44 || num % 2 === 0;
   }
   const lo = parseInt(btn.dataset.rangeLo);
   const hiRaw = (btn.dataset.rangeHi || '').trim();

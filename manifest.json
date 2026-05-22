@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "1.7.7",
+  "version": "1.7.8",
   "description": "Automate image/video generation on Grok and Flow with MangoHub integration",
   "permissions": [
     "cookies",
