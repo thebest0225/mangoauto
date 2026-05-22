@@ -481,11 +481,20 @@ function bindEvents() {
   // ⚠️ 큐 위치가 아니라 화면에 표시되는 "대기열번호"(data-num) 기준으로 필터.
   //    이미 생성된 항목은 큐에서 빠져있으므로, 범위 안에서 "생성 필요한 것"만 선택됨.
   //    (여러 컴퓨터에서 같은 프로젝트를 1~20 / 21~40 식으로 나눠 작업 가능.)
-  // 다중 토글 — 여러 범위를 동시에 활성화하면 합집합(union)으로 선택.
-  // 예: 1~20 + 61~80 → 두 구간만, 1~20 + 21~40 → 1~40. 활성 버튼 다시 누르면 해제.
+  // 범위 버튼: 다중 토글(합집합). 1~20 + 61~80 → 두 구간만, 1~20 + 21~40 → 1~40.
+  // v1: 단독 선택 — v1 누르면 다른 건 다 해제하고 v1 만. 범위 누르면 v1 해제.
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      btn.classList.toggle('active');
+      if (btn.dataset.mode === 'v1') {
+        const willActivate = !btn.classList.contains('active');
+        $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
+        if (willActivate) btn.classList.add('active');
+      } else {
+        // 범위 버튼 — v1 이 켜져 있으면 해제하고 이 범위 토글
+        const v1btn = document.querySelector('.qs-pct-btn[data-mode="v1"]');
+        if (v1btn) v1btn.classList.remove('active');
+        btn.classList.toggle('active');
+      }
       applyQuickSelect();
     });
   });
@@ -761,7 +770,7 @@ function applyQuickSelect() {
     updateQueueSelectedCount();
     return;
   }
-  const preds = activeBtns.map(btnPredicate);
+  const preds = [...activeBtns].map(btnPredicate);
   let matched = 0;
   allCbs.forEach(cb => {
     const num = parseInt(cb.dataset.num);
