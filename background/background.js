@@ -249,18 +249,27 @@ async function detachDebuggerSafe(tabId) {
   _debuggerAttachedTabs.delete(tabId);
 }
 
+async function ensureDebuggerAttached(tabId) {
+  // ⚠️ persistent attach — 한 번 붙이면 자동화 세션 동안 유지.
+  //    (예전 성공 버전이 이 방식. 클릭 직후 즉시 detach 하면 Flow 의 클릭 핸들러/
+  //     전송 fetch 가 처리되기 전에 디버거 세션이 끊겨 전송이 무시됨.)
+  if (_debuggerAttachedTabs.has(tabId)) return true;
+  broadcastLog(`[CDP] debugger.attach 시도 (tab ${tabId})...`, 'info');
+  await chrome.debugger.attach({ tabId }, '1.3');
+  _debuggerAttachedTabs.add(tabId);
+  broadcastLog('[CDP] attach 성공 (노란 디버깅 배너 유지 — 정상). 자동화 끝나면 자동 해제', 'info');
+  return true;
+}
+
 async function trustedClickAt(tabId, x, y) {
   // 좌표 jitter — 매번 버튼 정중앙 클릭하는 로봇 패턴 회피 (버튼 중앙 ±7px)
   const jx = Math.round(x + _rand(-7, 7));
   const jy = Math.round(y + _rand(-7, 7));
   const target = { tabId };
-  let attached = false;
   try {
-    broadcastLog(`[CDP] debugger.attach 시도 (tab ${tabId}, 좌표 ${jx},${jy})...`, 'info');
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attached = true;
-    _debuggerAttachedTabs.add(tabId);
-    broadcastLog('[CDP] attach 성공 → trusted click 발사 (노란 디버깅 배너가 떠야 정상)', 'info');
+    // 이미 붙어있으면 재사용, 아니면 attach (persistent — detach 안 함)
+    await ensureDebuggerAttached(tabId);
+    broadcastLog(`[CDP] trusted click 발사 (좌표 ${jx},${jy})`, 'info');
 
     // human-like 접근: 먼 지점 → 가까운 지점 → 타겟 (직선 텔레포트 회피)
     const path = [
@@ -284,7 +293,8 @@ async function trustedClickAt(tabId, x, y) {
       type: 'mouseReleased', x: jx, y: jy, button: 'left', buttons: 0, clickCount: 1,
     });
     await _delay(_rand(30, 60));
-    broadcastLog('[CDP] trusted click 완료 (mousePressed/Released 전송됨)', 'info');
+    broadcastLog('[CDP] trusted click 완료 (mousePressed/Released 전송됨, 디버거 유지)', 'info');
+    // 🔑 detach 하지 않음 — persistent attach. 자동화 종료/탭 닫힘 시에만 해제.
   } catch (e) {
     // attach 실패 시 가장 흔한 원인 진단 메시지
     const m = String(e && e.message || e);
@@ -295,10 +305,9 @@ async function trustedClickAt(tabId, x, y) {
     } else {
       broadcastLog(`[CDP] attach/click 실패: ${m}`, 'error');
     }
+    // 클릭 단계에서 실패하면 세션이 깨졌을 수 있으니 정리 후 다음 시도 때 재attach.
+    await detachDebuggerSafe(tabId);
     throw e;
-  } finally {
-    // 🔑 즉시 detach — 부착 시간 최소화 (수동 작업 중 detection 회피)
-    if (attached) await detachDebuggerSafe(tabId);
   }
 }
 
@@ -441,6 +450,10 @@ async function handleMessage(msg, sender) {
         try {
           chrome.tabs.sendMessage(tabId, { type: 'STOP_GENERATION' }).catch(() => {});
         } catch (e) { /* tab may not exist */ }
+      }
+      // persistent 디버거 해제 — 자동화 끝났으니 노란 배너 제거
+      for (const tabId of [..._debuggerAttachedTabs]) {
+        await detachDebuggerSafe(tabId);
       }
       return { ok: true };
 
