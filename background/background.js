@@ -256,9 +256,11 @@ async function trustedClickAt(tabId, x, y) {
   const target = { tabId };
   let attached = false;
   try {
+    broadcastLog(`[CDP] debugger.attach 시도 (tab ${tabId}, 좌표 ${jx},${jy})...`, 'info');
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
     _debuggerAttachedTabs.add(tabId);
+    broadcastLog('[CDP] attach 성공 → trusted click 발사 (노란 디버깅 배너가 떠야 정상)', 'info');
 
     // human-like 접근: 먼 지점 → 가까운 지점 → 타겟 (직선 텔레포트 회피)
     const path = [
@@ -282,6 +284,18 @@ async function trustedClickAt(tabId, x, y) {
       type: 'mouseReleased', x: jx, y: jy, button: 'left', buttons: 0, clickCount: 1,
     });
     await _delay(_rand(30, 60));
+    broadcastLog('[CDP] trusted click 완료 (mousePressed/Released 전송됨)', 'info');
+  } catch (e) {
+    // attach 실패 시 가장 흔한 원인 진단 메시지
+    const m = String(e && e.message || e);
+    if (/devtools|already attached|another debugger|cannot attach/i.test(m)) {
+      broadcastLog(`[CDP] attach 실패: DevTools(F12) 또는 다른 디버거가 이 탭을 점유 중입니다. F12 닫고 재시도하세요. (${m})`, 'error');
+    } else if (/permission|not allowed|Debugger is not allowed/i.test(m)) {
+      broadcastLog(`[CDP] attach 실패: debugger 권한 미승인. 확장 제거 후 재설치 필요. (${m})`, 'error');
+    } else {
+      broadcastLog(`[CDP] attach/click 실패: ${m}`, 'error');
+    }
+    throw e;
   } finally {
     // 🔑 즉시 detach — 부착 시간 최소화 (수동 작업 중 detection 회피)
     if (attached) await detachDebuggerSafe(tabId);
@@ -474,6 +488,12 @@ async function handleMessage(msg, sender) {
     case 'SHOW_NOTIFICATION': {
       // popup 로그 패널 + 콘솔에 경고 표시 (notifications 권한 없이)
       broadcastLog(`⚠️ ${msg.title || ''}: ${msg.message || ''}`, 'error');
+      return { ok: true };
+    }
+
+    case 'CONTENT_LOG': {
+      // content script → popup 로그 패널 직결 (DevTools 없이 진단용)
+      broadcastLog(msg.text || '', msg.level || 'info');
       return { ok: true };
     }
 

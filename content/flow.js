@@ -25,6 +25,10 @@
   globalThis.__MANGOAUTO_FLOW_LOADED__ = true;
 
   const LOG_PREFIX = '[MangoAuto:Flow]';
+  // popup 로그 패널 직결 — DevTools 없이 진단 (DevTools 열면 CDP 가 막히므로 필수 경로)
+  function popupLog(text, level = 'info') {
+    try { chrome.runtime.sendMessage({ type: 'CONTENT_LOG', text: `[Flow] ${text}`, level }); } catch (_) {}
+  }
   let isProcessing = false;
   let shouldStop = false;
   let capturedVideoDownloadUrl = null; // inject.js에서 캡처된 비디오 HTTP URL
@@ -149,7 +153,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v12-cdp-fresh-coords' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v13-cdp-popup-diag' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -2022,20 +2026,24 @@
           return;
         }
         console.log(LOG_PREFIX, `[strat] ▶ ${strat.name} 시도 (label="${clickedLabel}")`);
+        popupLog(`전송 전략 시도: ${strat.name}`, 'info');
         await strat.run();
         // strategy 실행 후 최대 4초 폴링 — 전송이 실제 generation 으로 이어지는지 확인.
         if (await waitForGenerationStart(4000)) {
           console.log(LOG_PREFIX, `[strat] ✅ Generation 시작 — ${strat.name}`);
+          popupLog(`✅ 생성 시작됨 (${strat.name})`, 'info');
           await saveLearnedStrategy(strat.id, strat.name);
           return;
         }
       } catch (e) {
         console.warn(LOG_PREFIX, `[strat] "${strat.name}" 에러: ${e.message}`);
+        popupLog(`전략 "${strat.name}" 에러: ${e.message}`, 'warn');
       }
     }
 
     // 모든 strategy 실패
     console.warn(LOG_PREFIX, `[strat] ❌ 모든 strategy 실패. label="${clickedLabel}" — 계속 대기`);
+    popupLog('❌ 모든 전송 전략 실패. CDP attach 로그가 위에 없으면 debugger 권한 미승인(확장 재설치) 또는 DevTools 충돌 의심', 'error');
     await noteStrategyFailure();
   }
 
