@@ -149,7 +149,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v11-wait-btn-ready' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v12-cdp-fresh-coords' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1757,9 +1757,27 @@
   // ─── chrome.debugger 통한 trusted click 요청 (background.js 경유) ───
   // isTrusted 체크하는 보안 모드 페이지 (Google Flow) 대응. 노란 배너 잠시 표시됨.
   async function trustedClickViaDebugger(btn) {
-    const rect = btn.getBoundingClientRect();
+    // ⚠️ CDP 클릭 직전 버튼을 **fresh 재탐색** — 이전 전략들이 시간 끄는 동안 Flow 가
+    //    re-render 하면 btn 참조가 stale(분리)돼 getBoundingClientRect 가 0,0 → 빈 곳 클릭.
+    let target = btn;
+    try {
+      const fresh = findGenerateButton();
+      if (fresh) target = fresh;
+    } catch (_) {}
+    try { target.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (_) {}
+    await delay(120);
+    let rect = target.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4 || rect.bottom < 0 || rect.top > window.innerHeight) {
+      const fresh2 = findGenerateButton();
+      if (fresh2) { target = fresh2; try { target.scrollIntoView({ block: 'center' }); } catch (_) {} await delay(120); rect = target.getBoundingClientRect(); }
+    }
     const cx = Math.round(rect.left + rect.width / 2);
     const cy = Math.round(rect.top + rect.height / 2);
+    console.log(LOG_PREFIX, `[cdp] 클릭 좌표 (${cx}, ${cy}) rect=${Math.round(rect.width)}x${Math.round(rect.height)}`);
+    if (rect.width < 4 || cx <= 0 || cy <= 0) {
+      console.warn(LOG_PREFIX, '[cdp] 버튼 좌표 비정상 — 클릭 스킵');
+      return { ok: false, error: 'invalid-coords' };
+    }
     try {
       const resp = await chrome.runtime.sendMessage({
         type: 'DEBUGGER_TRUSTED_CLICK',
@@ -1975,32 +1993,23 @@
       },
     ];
 
-    // 학습된 strategy 가 있으면 우선 시도 후, 실패 시 나머지 순차 시도.
-    // ⚠️ 단, cdp-trusted(chrome.debugger) 는 봇 감지 위험 + DevTools 충돌이 있어
-    //    **절대 1순위로 올리지 않는다**. 학습값이 cdp 여도 비-CDP 전략을 먼저 다 시도하고
-    //    그래도 실패할 때만 최후로 CDP. (사용자 요청: 가능하면 디버거 없이 정상 생성)
-    const CDP_ID = 'cdp-trusted';
+    // 학습된 strategy 우선 시도 후, 실패 시 나머지 순차.
+    // ⚠️ Flow 는 isTrusted=true 클릭만 받음(수동 클릭만 됨이 확인됨) → 사실상 CDP 가 유일.
+    //    그래서 학습값이 cdp-trusted 면 그대로 1순위 (비-CDP 헛시도로 20초 낭비 방지).
     const learned = await getLearnedStrategy();
-    const nonCdp = strategies.filter(s => s.id !== CDP_ID);
-    const cdpStrat = strategies.find(s => s.id === CDP_ID);
     const tryOrder = [];
-    if (learned && learned.id !== CDP_ID) {
-      const idx = nonCdp.findIndex(s => s.id === learned.id);
+    if (learned) {
+      const idx = strategies.findIndex(s => s.id === learned.id);
       if (idx >= 0) {
-        tryOrder.push(nonCdp[idx]);
-        for (let i = 0; i < nonCdp.length; i++) if (i !== idx) tryOrder.push(nonCdp[i]);
-        console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선(비-CDP): "${learned.name}"`);
+        tryOrder.push(strategies[idx]);
+        for (let i = 0; i < strategies.length; i++) if (i !== idx) tryOrder.push(strategies[i]);
+        console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선: "${learned.name}"`);
       } else {
-        tryOrder.push(...nonCdp);
+        tryOrder.push(...strategies);
       }
     } else {
-      // 학습 없음 또는 학습값이 CDP → 비-CDP 전부 먼저
-      tryOrder.push(...nonCdp);
-      if (learned && learned.id === CDP_ID) {
-        console.log(LOG_PREFIX, '[learn] 학습값이 CDP 지만 비-CDP 먼저 시도 (디버거 회피)');
-      }
+      tryOrder.push(...strategies);
     }
-    if (cdpStrat) tryOrder.push(cdpStrat);  // CDP 는 항상 맨 마지막
 
     // 순차 실행 — 첫 success 시 학습 저장 후 return.
     // ⚠️ 각 strategy 후 generation 시작을 **폴링 대기** (fetch 신호가 비동기로 늦게 도착).
