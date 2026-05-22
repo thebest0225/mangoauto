@@ -481,49 +481,12 @@ function bindEvents() {
   // ⚠️ 큐 위치가 아니라 화면에 표시되는 "대기열번호"(data-num) 기준으로 필터.
   //    이미 생성된 항목은 큐에서 빠져있으므로, 범위 안에서 "생성 필요한 것"만 선택됨.
   //    (여러 컴퓨터에서 같은 프로젝트를 1~20 / 21~40 식으로 나눠 작업 가능.)
+  // 다중 토글 — 여러 범위를 동시에 활성화하면 합집합(union)으로 선택.
+  // 예: 1~20 + 61~80 → 두 구간만, 1~20 + 21~40 → 1~40. 활성 버튼 다시 누르면 해제.
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const allCbs = $$('.queue-select');
-      if (allCbs.length === 0) return;
-      const mode = btn.dataset.mode;
-      const wasActive = btn.classList.contains('active');
-      $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
-      if (wasActive) {
-        // 같은 버튼 다시 누르면 전체 선택 해제 토글 → 전체 선택
-        allCbs.forEach(cb => { cb.checked = true; });
-        const selectAll = $('#queueSelectAll');
-        if (selectAll) selectAll.checked = true;
-        updateQueueSelectedCount();
-        return;
-      }
-      let matched = 0;
-      let label;
-      if (mode === 'v1') {
-        // v1: 대기열번호 1~45 전체 + 46번부터는 홀수만 선택 (생성 필요분만)
-        allCbs.forEach(cb => {
-          const num = parseInt(cb.dataset.num);
-          const sel = !isNaN(num) && (num <= 45 || num % 2 === 1);
-          cb.checked = sel;
-          if (sel) matched++;
-        });
-        label = '1~45 전체 + 46~ 홀수';
-      } else {
-        const lo = parseInt(btn.dataset.rangeLo);
-        const hiRaw = (btn.dataset.rangeHi || '').trim();
-        const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
-        allCbs.forEach(cb => {
-          const num = parseInt(cb.dataset.num);
-          const inRange = !isNaN(num) && num >= lo && num <= hi;
-          cb.checked = inRange;
-          if (inRange) matched++;
-        });
-        label = `${lo}~${hiRaw === '' ? '끝' : hi} 범위`;
-      }
-      btn.classList.add('active');
-      const selectAll = $('#queueSelectAll');
-      if (selectAll) selectAll.checked = false;
-      updateQueueSelectedCount();
-      addLog(`대기열번호 ${label}: ${matched}개 선택됨 (생성 필요분만)`, 'info');
+      btn.classList.toggle('active');
+      applyQuickSelect();
     });
   });
 
@@ -766,13 +729,52 @@ function updateQueuePreview() {
     queueList.appendChild(div);
   }
 
-  // 전체선택 체크박스 초기 상태
+  // 전체선택 체크박스 초기 상태 + 범위 버튼 활성 상태 초기화 (재렌더 시 stale 방지)
   const selectAll = $('#queueSelectAll');
   if (selectAll) selectAll.checked = true;
+  $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
   updateQueueSelectedCount();
 }
 
 // ─── Queue Selection Helpers ───
+// 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어. v1 은 (≤45 또는 홀수), 나머지는 lo~hi.
+function btnPredicate(btn) {
+  if (btn.dataset.mode === 'v1') {
+    return (num) => num <= 45 || num % 2 === 1;
+  }
+  const lo = parseInt(btn.dataset.rangeLo);
+  const hiRaw = (btn.dataset.rangeHi || '').trim();
+  const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
+  return (num) => num >= lo && num <= hi;
+}
+
+// 활성화된 범위 버튼들의 합집합(union)으로 큐 체크박스 선택. 활성 없으면 전체 선택.
+function applyQuickSelect() {
+  const allCbs = $$('.queue-select');
+  if (allCbs.length === 0) return;
+  const activeBtns = $$('.qs-pct-btn.active');
+  const selectAll = $('#queueSelectAll');
+  if (activeBtns.length === 0) {
+    // 활성 범위 없음 → 전체 선택 (기본 상태)
+    allCbs.forEach(cb => { cb.checked = true; });
+    if (selectAll) selectAll.checked = true;
+    updateQueueSelectedCount();
+    return;
+  }
+  const preds = activeBtns.map(btnPredicate);
+  let matched = 0;
+  allCbs.forEach(cb => {
+    const num = parseInt(cb.dataset.num);
+    const sel = !isNaN(num) && preds.some(p => p(num));
+    cb.checked = sel;
+    if (sel) matched++;
+  });
+  if (selectAll) selectAll.checked = false;
+  updateQueueSelectedCount();
+  const labels = [...activeBtns].map(b => b.textContent.trim()).join(', ');
+  addLog(`대기열 범위 [${labels}]: ${matched}개 선택됨 (생성 필요분만)`, 'info');
+}
+
 function updateQueueSelectedCount() {
   const all = $$('.queue-select');
   const checked = $$('.queue-select:checked');

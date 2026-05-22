@@ -726,6 +726,11 @@ button.badge.badge-on { cursor: default; }
   color: var(--accent);
   border-color: var(--accent);
 }
+.qs-pct-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 .queue-count {
   font-size: 10.5px;
   color: var(--text-dim);
