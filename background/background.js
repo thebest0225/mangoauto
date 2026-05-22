@@ -1785,12 +1785,25 @@ async function handleSequentialComplete(mediaDataUrl, mediaUrl, uiDownloaded = f
                         && activeTabIds[0];
   if (needPreReload) {
     try {
-      broadcastLog('프레임→영상/이미지 모드: 다음 작업 전 탭 새로고침 (이전 이미지 잔존 방지)', 'info');
-      await chrome.tabs.reload(activeTabIds[0]);
+      // ⚠️ Grok 은 생성 후 URL 이 /imagine/post/<id> (결과 게시물)로 바뀜.
+      //    단순 reload 하면 그 post 페이지를 다시 로드 → 업로드 UI 없는 곳에서 멈춤.
+      //    따라서 Grok 은 깨끗한 생성 페이지(/imagine)로 명시 이동.
+      const tabId = activeTabIds[0];
+      let curUrl = '';
+      try { const t = await chrome.tabs.get(tabId); curUrl = t?.url || ''; } catch (_) {}
+      const isGrok = sm.platform === 'grok' || /grok\.com/i.test(curUrl);
+      const driftedAway = isGrok && !/grok\.com\/imagine\/?($|\?)/i.test(curUrl); // /imagine 외 (post 등)
+      if (isGrok && (driftedAway || /\/post\//i.test(curUrl))) {
+        broadcastLog(`프레임→영상: Grok 결과 페이지(${curUrl.slice(0, 60)}) → 생성 페이지(/imagine)로 이동`, 'info');
+        await chrome.tabs.update(tabId, { url: 'https://grok.com/imagine' });
+      } else {
+        broadcastLog('프레임→영상/이미지 모드: 다음 작업 전 탭 새로고침 (이전 이미지 잔존 방지)', 'info');
+        await chrome.tabs.reload(tabId);
+      }
       await MangoUtils.sleep(5000);
-      broadcastLog('탭 새로고침 완료', 'info');
+      broadcastLog('탭 초기화 완료', 'info');
     } catch (e) {
-      broadcastLog(`사전 새로고침 실패 (무시하고 계속): ${e.message}`, 'warn');
+      broadcastLog(`사전 초기화 실패 (무시하고 계속): ${e.message}`, 'warn');
     }
   }
 
