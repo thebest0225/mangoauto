@@ -708,9 +708,11 @@ button.badge.badge-on { cursor: default; }
   display: flex;
   align-items: center;
   gap: 3px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .qs-pct-btn {
-  padding: 2px 6px;
+  padding: 2px 5px;
   font-size: 10px;
   font-weight: 600;
   background: var(--surface-2);
@@ -727,7 +729,8 @@ button.badge.badge-on { cursor: default; }
 .queue-count {
   font-size: 10.5px;
   color: var(--text-dim);
-  margin-left: 4px;
+  margin-left: 6px;
+  white-space: nowrap;
 }
 .queue-list {
   display: flex;

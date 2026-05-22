@@ -477,49 +477,39 @@ function bindEvents() {
     }
   });
 
-  // 대기열 퀵 선택 (홀수/짝수, hybrid25/hybrid40)
+  // 대기열 범위 선택 (대기열번호 기준: 1~20 / 21~40 / 41~60 / 61~80 / 81~끝)
+  // ⚠️ 큐 위치가 아니라 화면에 표시되는 "대기열번호"(data-num) 기준으로 필터.
+  //    이미 생성된 항목은 큐에서 빠져있으므로, 범위 안에서 "생성 필요한 것"만 선택됨.
+  //    (여러 컴퓨터에서 같은 프로젝트를 1~20 / 21~40 식으로 나눠 작업 가능.)
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode;
-      const parity = btn.dataset.parity;
       const allCbs = $$('.queue-select');
-      const total = allCbs.length;
-      if (total === 0) return;
+      if (allCbs.length === 0) return;
+      const lo = parseInt(btn.dataset.rangeLo);
+      const hiRaw = (btn.dataset.rangeHi || '').trim();
+      const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
       const wasActive = btn.classList.contains('active');
       $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
       if (wasActive) {
-        // 같은 버튼 다시 누르면 전체 선택
+        // 같은 버튼 다시 누르면 전체 선택 해제 토글 → 전체 선택
         allCbs.forEach(cb => { cb.checked = true; });
         const selectAll = $('#queueSelectAll');
         if (selectAll) selectAll.checked = true;
         updateQueueSelectedCount();
         return;
       }
-      if (mode === 'hybrid25') {
-        // 1~25번 전체 + 26번부터 홀수번만 (27, 29, 31, ...)
-        allCbs.forEach((cb, i) => {
-          const oneBased = i + 1;
-          if (oneBased <= 25) cb.checked = true;
-          else cb.checked = (oneBased % 2 === 1);
-        });
-      } else if (mode === 'hybrid40') {
-        // 1~40번 전체 + 41번부터 짝수번만 (42, 44, 46, ...)
-        allCbs.forEach((cb, i) => {
-          const oneBased = i + 1;
-          if (oneBased <= 40) cb.checked = true;
-          else cb.checked = (oneBased % 2 === 0);
-        });
-      } else if (parity === 'odd') {
-        // 홀수 번호만 (1, 3, 5, ...)
-        allCbs.forEach((cb, i) => { cb.checked = ((i + 1) % 2 === 1); });
-      } else if (parity === 'even') {
-        // 짝수 번호만 (2, 4, 6, ...)
-        allCbs.forEach((cb, i) => { cb.checked = ((i + 1) % 2 === 0); });
-      }
+      let matched = 0;
+      allCbs.forEach(cb => {
+        const num = parseInt(cb.dataset.num);
+        const inRange = !isNaN(num) && num >= lo && num <= hi;
+        cb.checked = inRange;
+        if (inRange) matched++;
+      });
       btn.classList.add('active');
       const selectAll = $('#queueSelectAll');
       if (selectAll) selectAll.checked = false;
       updateQueueSelectedCount();
+      addLog(`대기열번호 ${lo}~${hiRaw === '' ? '끝' : hi} 범위: ${matched}개 선택됨 (생성 필요분만)`, 'info');
     });
   });
 
@@ -753,7 +743,7 @@ function updateQueuePreview() {
       : (item._isMangoHub && currentApiType !== 'mangomaker' && currentApiType !== 'longform-v2') ? item.idx
       : item.idx + 1;
     div.innerHTML = `
-      <input type="checkbox" class="queue-check queue-select" data-idx="${item.idx}" checked>
+      <input type="checkbox" class="queue-check queue-select" data-idx="${item.idx}" data-num="${displayIdx}" checked>
       <span class="queue-idx">${String(displayIdx).padStart(3, '0')}</span>
       ${thumbHtml}
       <span class="queue-text">${escapeHtml(item.text)}</span>
