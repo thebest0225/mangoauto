@@ -1250,7 +1250,8 @@
       return false;
     }
 
-    MangoDom.simulateClick(btn);
+    // ⚠️ singleClick — 제출 버튼은 클릭 1번만. (합성+native 이중 클릭 시 create 2번 발사 → 409 + 영상 중복)
+    MangoDom.simulateClick(btn, { singleClick: true });
     console.log(LOG_PREFIX, `Submit clicked: aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
     await delay(1000);
     // 클릭했는데 여전히 메인 페이지 + 생성 안 시작이면 Enter fallback 추가 시도

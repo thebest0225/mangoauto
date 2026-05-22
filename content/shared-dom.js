@@ -347,7 +347,7 @@ var MangoDom = {
    * Sequence: pointerover → pointerenter → pointermove → mouseover → mouseenter →
    *           pointerdown → mousedown → pointerup → mouseup → click → native click()
    */
-  simulateClick(el) {
+  simulateClick(el, opts = {}) {
     try { el.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (_) {}
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
@@ -370,9 +370,20 @@ var MangoDom = {
     const upOpts = { ...baseOpts, buttons: 0 };
     el.dispatchEvent(new PointerEvent('pointerup', { ...upOpts, pointerType: 'mouse', pointerId: 1 }));
     el.dispatchEvent(new MouseEvent('mouseup', upOpts));
-    el.dispatchEvent(new MouseEvent('click', { ...upOpts, detail: 1 }));
-    // Native .click() as belt-and-suspenders — triggers default form submission etc.
-    try { el.click(); } catch (_) {}
+    // ⚠️ singleClick: 클릭 이벤트를 **딱 1번**만 발사 (제출 버튼용).
+    //    기본값은 합성 click + native click() 둘 다 발사하는데, 제출처럼
+    //    "한 번 누르면 1개 생성" 동작에선 둘 다 React onClick 에 등록돼
+    //    create 가 2번 발사 → 409 Conflict + 영상 중복 생성됨.
+    if (opts.singleClick) {
+      // native click() 하나만 — React onClick + 기본동작 모두 트리거되며 단일.
+      try { el.click(); } catch (_) {
+        el.dispatchEvent(new MouseEvent('click', { ...upOpts, detail: 1 }));
+      }
+    } else {
+      el.dispatchEvent(new MouseEvent('click', { ...upOpts, detail: 1 }));
+      // Native .click() as belt-and-suspenders — triggers default form submission etc.
+      try { el.click(); } catch (_) {}
+    }
   },
 
   /**
