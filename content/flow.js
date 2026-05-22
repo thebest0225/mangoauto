@@ -153,7 +153,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v13-cdp-popup-diag' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v14-cdp-trusted-enter' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
@@ -1793,6 +1793,38 @@
     }
   }
 
+  // ─── CDP trusted Enter — 수동 Enter 가 생성 발동되는 게 확인됨 (가장 확실한 경로).
+  //     에디터에 포커스를 준 뒤 background 가 CDP 로 진짜 Enter 키를 발사.
+  async function trustedEnterViaDebugger() {
+    // 1) 프롬프트 에디터 포커스 — CDP 키는 "포커스된 요소"로 전달됨.
+    const promptEl =
+      document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+      [...document.querySelectorAll('[contenteditable="true"], textarea')]
+        .find(el => { const r = el.getBoundingClientRect(); return r.width > 40 && r.height > 10; }) ||
+      document.querySelector('textarea, [contenteditable="true"]');
+    if (promptEl) {
+      try { promptEl.focus(); } catch (_) {}
+      // 커서를 텍스트 끝으로 — Slate 가 selection 없으면 Enter 무시할 수 있음.
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(promptEl);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (_) {}
+      await delay(120);
+    } else {
+      console.warn(LOG_PREFIX, '[cdp-enter] 포커스할 프롬프트 에디터 못찾음');
+    }
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'DEBUGGER_TRUSTED_ENTER' });
+      return resp;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
   // ─── MAIN world 의 inject.js 에 submit 요청 보내고 결과 대기 ───
   async function submitViaInjectMainWorld(timeoutMs = 3000) {
     return new Promise((resolve) => {
@@ -1918,7 +1950,28 @@
     const clickedLabel = btn.getAttribute('aria-label') || btn.textContent?.trim().slice(0, 30) || '?';
 
     // ─── Strategy table (id → 실행 함수). 위에서 아래로 fallback. ───
+    // ⚠️ 1순위 = CDP trusted Enter. 사용자가 수동 Enter 로 생성됨을 확인.
+    //    Flow 의 실제 생성 트리거는 "버튼 클릭"이 아니라 "에디터의 Enter keydown" 경로.
+    //    버튼의 React onClick 을 직접 불러도(=MAIN world) 생성 안 됨이 로그로 확인됨.
     const strategies = [
+      {
+        id: 'cdp-enter',
+        name: 'chrome.debugger CDP trusted Enter',
+        run: async () => {
+          const r = await trustedEnterViaDebugger();
+          console.log(LOG_PREFIX, '[strat] CDP trusted-enter result:', r);
+          if (r && !r.ok && /devtools|attach|permission/i.test(String(r.error || ''))) {
+            try {
+              chrome.runtime.sendMessage({
+                type: 'SHOW_NOTIFICATION',
+                title: 'MangoAuto — 전송 실패',
+                message: 'DevTools(F12) 가 열려있으면 자동 Enter 불가. DevTools 닫고 재시도하세요.',
+              });
+            } catch (_) {}
+          }
+          await delay(1200);
+        },
+      },
       {
         id: 'simulate-click',
         name: 'simulateClick',
@@ -1997,23 +2050,25 @@
       },
     ];
 
-    // 학습된 strategy 우선 시도 후, 실패 시 나머지 순차.
-    // ⚠️ Flow 는 isTrusted=true 클릭만 받음(수동 클릭만 됨이 확인됨) → 사실상 CDP 가 유일.
-    //    그래서 학습값이 cdp-trusted 면 그대로 1순위 (비-CDP 헛시도로 20초 낭비 방지).
+    // 전략 순서 결정.
+    // ⚠️ Flow 의 생성 트리거는 "에디터의 Enter keydown" 경로 (수동 Enter 로 확인).
+    //    버튼 클릭 경로(CDP 클릭 포함)는 onClick 직접 호출로도 생성이 안 됨이 로그로 확인됨.
+    //    따라서 cdp-enter 를 **항상 최우선** 으로 고정. 학습값(구버전 cdp-trusted)이
+    //    먼저 와서 헛시도 + 빈 프롬프트 2차전송하던 문제 방지.
     const learned = await getLearnedStrategy();
+    const enterIdx = strategies.findIndex(s => s.id === 'cdp-enter');
     const tryOrder = [];
-    if (learned) {
-      const idx = strategies.findIndex(s => s.id === learned.id);
-      if (idx >= 0) {
-        tryOrder.push(strategies[idx]);
-        for (let i = 0; i < strategies.length; i++) if (i !== idx) tryOrder.push(strategies[i]);
-        console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선: "${learned.name}"`);
-      } else {
-        tryOrder.push(...strategies);
-      }
-    } else {
-      tryOrder.push(...strategies);
+    const pushedIds = new Set();
+    const pushStrat = (s) => { if (s && !pushedIds.has(s.id)) { tryOrder.push(s); pushedIds.add(s.id); } };
+    // 1) cdp-enter 최우선 고정
+    if (enterIdx >= 0) pushStrat(strategies[enterIdx]);
+    // 2) 학습된 전략 (cdp-enter 가 아니면) 다음 우선
+    if (learned && learned.id !== 'cdp-enter') {
+      const ls = strategies.find(s => s.id === learned.id);
+      if (ls) { pushStrat(ls); console.log(LOG_PREFIX, `[learn] 학습된 strategy 우선(2순위): "${learned.name}"`); }
     }
+    // 3) 나머지 순차
+    for (const s of strategies) pushStrat(s);
 
     // 순차 실행 — 첫 success 시 학습 저장 후 return.
     // ⚠️ 각 strategy 후 generation 시작을 **폴링 대기** (fetch 신호가 비동기로 늦게 도착).

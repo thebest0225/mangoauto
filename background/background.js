@@ -311,6 +311,23 @@ async function trustedClickAt(tabId, x, y) {
   }
 }
 
+// ─── CDP trusted Enter 키 — 수동 Enter 가 생성 발동되는 게 확인됨.
+//     합성 KeyboardEvent(isTrusted=false)는 Flow 가 무시 → CDP 로 진짜 Enter 발사.
+//     포커스는 content script 가 에디터에 미리 줘둠 → 포커스된 요소로 키 전달됨.
+async function trustedEnterKey(tabId) {
+  const target = { tabId };
+  await ensureDebuggerAttached(tabId);
+  const ENTER = { windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, code: 'Enter', key: 'Enter', text: '\r', unmodifiedText: '\r' };
+  broadcastLog('[CDP] trusted Enter 키 발사 (수동 Enter 와 동일 경로)', 'info');
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...ENTER });
+  await _delay(_rand(18, 40));
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'char', ...ENTER });
+  await _delay(_rand(30, 70));
+  await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyUp', ...ENTER });
+  await _delay(_rand(20, 50));
+  broadcastLog('[CDP] trusted Enter 완료 (디버거 유지)', 'info');
+}
+
 // 탭 닫힐 때 디버거 자동 detach
 chrome.tabs.onRemoved.addListener((tabId) => {
   _debuggerAttachedTabs.delete(tabId);
@@ -487,6 +504,30 @@ async function handleMessage(msg, sender) {
         await trustedClickAt(tabId, msg.x, msg.y);
         return { ok: true };
       } catch (e) {
+        await detachDebuggerSafe(tabId);
+        return { ok: false, error: e.message };
+      }
+    }
+
+    case 'DEBUGGER_TRUSTED_ENTER': {
+      let tabId = sender?.tab?.id;
+      if (!tabId) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tabId = tab?.id;
+      }
+      if (!tabId) return { ok: false, error: 'no-tab' };
+      try {
+        await trustedEnterKey(tabId);
+        return { ok: true };
+      } catch (e) {
+        const m = String(e && e.message || e);
+        if (/devtools|already attached|another debugger|cannot attach/i.test(m)) {
+          broadcastLog(`[CDP] Enter attach 실패: DevTools(F12)/다른 디버거 점유. F12 닫기. (${m})`, 'error');
+        } else if (/permission|not allowed/i.test(m)) {
+          broadcastLog(`[CDP] Enter attach 실패: debugger 권한 미승인. 확장 재설치. (${m})`, 'error');
+        } else {
+          broadcastLog(`[CDP] Enter 실패: ${m}`, 'error');
+        }
         await detachDebuggerSafe(tabId);
         return { ok: false, error: e.message };
       }
