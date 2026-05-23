@@ -481,18 +481,21 @@ function bindEvents() {
   // ⚠️ 큐 위치가 아니라 화면에 표시되는 "대기열번호"(data-num) 기준으로 필터.
   //    이미 생성된 항목은 큐에서 빠져있으므로, 범위 안에서 "생성 필요한 것"만 선택됨.
   //    (여러 컴퓨터에서 같은 프로젝트를 1~20 / 21~40 식으로 나눠 작업 가능.)
-  // 범위 버튼: 다중 토글(합집합). 1~20 + 61~80 → 두 구간만, 1~20 + 21~40 → 1~40.
-  // v1: 단독 선택 — v1 누르면 다른 건 다 해제하고 v1 만. 범위 누르면 v1 해제.
+  // 범위 버튼: 다중 토글(합집합). 1~22 + 45~ → 두 구간 union.
+  // v1 / 홀수 / 짝수: **단독 선택** — 누르면 다른 버튼 모두 해제 후 자기만 활성.
+  //   범위 버튼을 누르면 단독 모드(v1/odd/even) 는 자동 해제.
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (btn.dataset.mode === 'v1') {
+      const isStandalone = STANDALONE_MODES.has(btn.dataset.mode);
+      if (isStandalone) {
         const willActivate = !btn.classList.contains('active');
         $$('.qs-pct-btn').forEach(b => b.classList.remove('active'));
         if (willActivate) btn.classList.add('active');
       } else {
-        // 범위 버튼 — v1 이 켜져 있으면 해제하고 이 범위 토글
-        const v1btn = document.querySelector('.qs-pct-btn[data-mode="v1"]');
-        if (v1btn) v1btn.classList.remove('active');
+        // 범위 버튼 — 단독 모드 버튼들 해제 후 이 범위 토글
+        $$('.qs-pct-btn').forEach(b => {
+          if (STANDALONE_MODES.has(b.dataset.mode)) b.classList.remove('active');
+        });
         btn.classList.toggle('active');
       }
       applyQuickSelect();
@@ -746,11 +749,14 @@ function updateQueuePreview() {
 }
 
 // ─── Queue Selection Helpers ───
-// 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어. v1 은 (≤44 또는 짝수), 나머지는 lo~hi.
+// 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어.
+// v1=(≤44 또는 짝수), odd=홀수, even=짝수, 그 외=lo~hi 범위.
+const STANDALONE_MODES = new Set(['v1', 'odd', 'even']);
 function btnPredicate(btn) {
-  if (btn.dataset.mode === 'v1') {
-    return (num) => num <= 44 || num % 2 === 0;
-  }
+  const mode = btn.dataset.mode;
+  if (mode === 'v1') return (num) => num <= 44 || num % 2 === 0;
+  if (mode === 'odd') return (num) => num % 2 === 1;
+  if (mode === 'even') return (num) => num % 2 === 0;
   const lo = parseInt(btn.dataset.rangeLo);
   const hiRaw = (btn.dataset.rangeHi || '').trim();
   const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
