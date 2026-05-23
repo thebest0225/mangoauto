@@ -521,8 +521,21 @@
     return Array.from(targets);
   }
 
-  // 전송 버튼이 절대 아닌 버튼 (오클릭 방지) — 저장됨/공유/모델/설정/복사/다운로드 등.
-  const _SUBMIT_EXCLUDE_RE = /저장|saved|save|북마크|bookmark|공유|share|모델|model|설정|setting|복사|copy|다운로드|download|좋아요|like|편집|edit|삭제|delete|닫기|close|취소|cancel|메뉴|menu|더보기|more|업스케일|upscale|프로필|profile|계정|account|뒤로|back/i;
+  // 전송 버튼이 절대 아닌 버튼 (오클릭 방지). 다국어(KO/EN/TH/VI) 모두 포함.
+  const _SUBMIT_EXCLUDE_RE = new RegExp([
+    // KO
+    '저장','북마크','공유','모델','설정','복사','다운로드','좋아요','편집','삭제','닫기','취소',
+    '메뉴','더보기','업스케일','프로필','계정','뒤로','재생','일시정지','음소거','볼륨','전체화면','해제',
+    // EN
+    'saved','save','bookmark','share','model','setting','copy','download','like','edit','delete','close',
+    'cancel','menu','more','upscale','profile','account','back','play','pause','mute','unmute','volume','sound','fullscreen','full screen',
+    // TH (태국어)
+    'บันทึก','แชร์','ใช้ร่วมกัน','โมเดล','การตั้งค่า','คัดลอก','ดาวน์โหลด','ถูกใจ','แก้ไข','ลบ','ปิด',
+    'ยกเลิก','เมนู','เพิ่มเติม','โปรไฟล์','บัญชี','ย้อนกลับ','กลับ','เล่น','หยุดชั่วคราว','ปิดเสียง','ระดับเสียง','เต็มจอ',
+    // VI (베트남어)
+    'lưu','đã lưu','chia sẻ','mô hình','cài đặt','sao chép','tải xuống','tải về','thích','chỉnh sửa','xoá','xóa','đóng',
+    'hủy','huỷ','thêm','xem thêm','hồ sơ','tài khoản','quay lại','phát','tạm dừng','tắt tiếng','âm lượng','toàn màn hình'
+  ].map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
 
   function _isExcludedSubmitBtn(btn) {
     const al = (btn.getAttribute('aria-label') || '');
@@ -530,23 +543,33 @@
     return _SUBMIT_EXCLUDE_RE.test(al) || _SUBMIT_EXCLUDE_RE.test(txt);
   }
 
-  // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05).
+  // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05). 다국어(KO/EN/TH/VI) 지원.
   function findSubmitButton() {
-    // 1. aria-label 기반 (여러 가능한 라벨 — 부분일치 포함). 제외 라벨은 스킵.
-    const exactLabels = ['제출', '전송', 'Submit', 'Send', '동영상 만들기', 'Create video', '생성', '보내기'];
+    // 1. aria-label 기반 (정확 일치). 제외 라벨은 스킵.
+    const exactLabels = [
+      // KO
+      '제출', '전송', '동영상 만들기', '생성', '보내기',
+      // EN
+      'Submit', 'Send', 'Create video', 'Generate',
+      // TH
+      'ส่ง', 'สร้างวิดีโอ', 'สร้าง',
+      // VI
+      'Gửi', 'Tạo video', 'Tạo',
+    ];
     for (const label of exactLabels) {
       const btn = document.querySelector(`button[aria-label="${label}"]`);
       if (btn && !btn.disabled && !_isExcludedSubmitBtn(btn)) return btn;
     }
-    // 부분일치 aria-label (Send message / 메시지 보내기 등)
+    // 부분일치 aria-label
     const allBtns0 = Array.from(document.querySelectorAll('button'));
+    const partials = ['submit','send','generate','create video',
+                      '보내','전송','제출','생성',
+                      'ส่ง','สร้าง',
+                      'gửi','tạo'];
     for (const b of allBtns0) {
       if (b.disabled || _isExcludedSubmitBtn(b)) continue;
       const al = (b.getAttribute('aria-label') || '').toLowerCase();
-      if (al.includes('submit') || al.includes('send') || al.includes('보내') ||
-          al.includes('전송') || al.includes('제출') || al.includes('생성')) {
-        return b;
-      }
+      if (partials.some(k => al.includes(k))) return b;
     }
 
     // 2. type="submit"
@@ -1264,12 +1287,18 @@
   }
 
   function isAutoGenerating() {
+    // 다국어 "비디오/생성 취소" 버튼 — 영상 생성 중 표시.
+    const cancelLabels = [
+      '동영상 취소', '생성 취소', '취소',
+      'Cancel video', 'Cancel generation', 'Cancel',
+      'ยกเลิกวิดีโอ', 'ยกเลิกการสร้าง', 'ยกเลิก',
+      'Hủy video', 'Huỷ video', 'Hủy tạo', 'Hủy', 'Huỷ',
+    ];
+    const lowerSet = new Set(cancelLabels.map(s => s.toLowerCase()));
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
-      const text = (btn.textContent || '').trim();
-      if (text === '동영상 취소' || text === 'Cancel video') {
-        return true;
-      }
+      const text = (btn.textContent || '').trim().toLowerCase();
+      if (lowerSet.has(text)) return true;
     }
     return false;
   }
@@ -2199,32 +2228,40 @@
     console.log(LOG_PREFIX, `업스케일 대상 비디오: ${video.src?.substring(0, 60)}, 총 ${allVideos.length}개`);
 
     // 비디오 부모를 올라가며 "..." 버튼 찾기
-    // 비디오 플레이어 컨트롤(음소거/재생/전체화면)과 구별해야 함
-    const videoControlLabels = ['mute', 'unmute', 'volume', 'sound', 'play', 'pause',
-      'fullscreen', 'full screen', '음소거', '재생', '일시정지', '전체화면', '볼륨'];
+    // 비디오 플레이어 컨트롤(음소거/재생/전체화면)과 구별해야 함. 다국어(KO/EN/TH/VI).
+    const videoControlLabels = [
+      // EN
+      'mute', 'unmute', 'volume', 'sound', 'play', 'pause', 'fullscreen', 'full screen',
+      // KO
+      '음소거', '재생', '일시정지', '전체화면', '볼륨', '해제',
+      // TH
+      'ปิดเสียง', 'เปิดเสียง', 'ระดับเสียง', 'เล่น', 'หยุดชั่วคราว', 'เต็มจอ',
+      // VI
+      'tắt tiếng', 'bật tiếng', 'âm lượng', 'phát', 'tạm dừng', 'toàn màn hình',
+    ];
 
     function isVideoControlBtn(btn) {
       const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
       const textContent = (btn.textContent || '').trim().toLowerCase();
-      // aria-label 또는 텍스트에 비디오 컨트롤 키워드 포함
       if (videoControlLabels.some(l => ariaLabel.includes(l) || textContent.includes(l))) return true;
-      // 시간 표시 패턴: "0:02 / 0:10" 등
+      // 시간 표시 "0:02 / 0:10" / 퍼센트 "79%" 도 컨트롤로 간주
       if (/\d+:\d+\s*\/\s*\d+:\d+/.test(textContent)) return true;
-      // 퍼센트 표시: "79%", "100%" 등 (줌/볼륨 컨트롤)
       if (/^\d+%$/.test(textContent)) return true;
-      // "음소거 해제" 같은 한국어 변형
-      if (textContent.includes('음소거') || textContent.includes('해제')) return true;
-      // 비디오 요소 내부에 있는 버튼 (native controls 근처)
       const parent = btn.closest('video, [class*="player-control" i], [class*="video-control" i]');
       if (parent) return true;
       return false;
     }
 
     function isThreeDotsBtn(btn) {
-      // aria-label로 판별 ("추가 옵션" 포함)
+      // aria-label로 판별 — 다국어 "more / options / additional"
       const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (ariaLabel.includes('more') || ariaLabel.includes('더보기') || ariaLabel.includes('옵션')
-          || ariaLabel.includes('추가')) return true;
+      const moreKeys = [
+        'more', 'options', 'additional',
+        '더보기', '옵션', '추가',
+        'เพิ่มเติม', 'ตัวเลือก',
+        'thêm', 'xem thêm', 'tùy chọn', 'tuỳ chọn',
+      ];
+      if (moreKeys.some(k => ariaLabel.includes(k))) return true;
       // SVG에 circle 3개 (점 세 개 패턴)
       const circles = btn.querySelectorAll('svg circle');
       if (circles.length === 3) return true;

@@ -132,12 +132,18 @@ function getExtendedSnapshot() {
 
 // ─── LLM 프롬프트 수정 (검열 회피) ───
 const CENSORSHIP_PATTERNS = [
+  // EN
   'safety', 'blocked', 'policy', 'harmful', 'inappropriate', 'violat',
   'prohibited', 'not allowed', 'content filter', 'moderat',
   'responsible ai', 'generation failed', 'MEDIA_GENERATION_STATUS_FAILED',
   'could not generate', 'unable to generate', 'error generating',
   'invalid argument',
-  '생성 실패', '생성에 실패', '생성할 수 없', '안전', '차단', '정책', '부적절'
+  // KO
+  '생성 실패', '생성에 실패', '생성할 수 없', '안전', '차단', '정책', '부적절',
+  // TH (태국어)
+  'ล้มเหลว', 'ผิดพลาด', 'ไม่สามารถสร้าง', 'ไม่ปลอดภัย', 'ถูกบล็อก', 'นโยบาย', 'ไม่เหมาะสม', 'ละเมิด',
+  // VI (베트남어)
+  'thất bại', 'không thể tạo', 'không an toàn', 'đã chặn', 'bị chặn', 'chính sách', 'không phù hợp', 'vi phạm'
 ];
 
 function isCensorshipError(errorMsg, errorCode) {
