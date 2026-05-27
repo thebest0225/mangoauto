@@ -2493,20 +2493,77 @@
     }
 
     // 못 찾으면 디버그
+    // 🔑 3차 폴백: 영상 근처 모든 아이콘 버튼 차례로 클릭해서 "업스케일" 항목 뜨는 게 정답
+    //    SVG 패턴이 매치 안 되는 신형 점세개 아이콘 대응 — trial & verify 방식.
     if (!moreBtn) {
-      console.warn(LOG_PREFIX, '=== UPSCALE: 비디오 근처 "..." 버튼 못 찾음 ===');
+      console.log(LOG_PREFIX, '점세개 패턴 매치 실패 — trial&verify: 영상 근처 아이콘 차례 클릭');
+      const candidates = [];
+      let cc = video.parentElement;
+      for (let depth = 0; depth < 6 && cc; depth++) {
+        for (const b of cc.querySelectorAll('button')) {
+          if (candidates.includes(b)) continue;
+          if (!isNearVideo(b)) continue;
+          if (isVideoControlBtn(b)) continue;
+          const t = (b.textContent || '').trim();
+          if (t.length > 6) continue;
+          if (b.querySelector('textarea, input, video')) continue;
+          // 다운로드 화살표 아이콘은 제외 (download / share / like / arrow 명백한 라벨)
+          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+          if (/download|share|like|favorite|좋아요|공유|다운로드|x.com|twitter/i.test(aria)) continue;
+          candidates.push(b);
+        }
+        cc = cc.parentElement;
+      }
+      // y 좌표 정렬 (사이드 패널 위→아래)
+      candidates.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      console.log(LOG_PREFIX, `trial 후보 ${candidates.length}개 — 차례로 클릭해 업스케일 메뉴 검증`);
+      for (const cand of candidates) {
+        // 이 후보 클릭 → 메뉴 뜨는지 + "업스케일" 항목 있는지 검사
+        cand.scrollIntoView({ behavior: 'instant', block: 'center' });
+        await delay(100);
+        cand.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        cand.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        cand.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        await delay(700);
+        // 메뉴 안에 "업스케일" 텍스트 있나
+        const menuItems = document.querySelectorAll('[role="menuitem"], [role="menu"] button, [data-radix-popper-content-wrapper] button, [data-radix-popper-content-wrapper] [role="menuitem"]');
+        let foundUpscale = false;
+        for (const mi of menuItems) {
+          const mt = (mi.textContent || '').trim().toLowerCase();
+          if (mt.length < 30 && (mt.includes('업스케일') || mt.includes('upscale'))) {
+            foundUpscale = true;
+            break;
+          }
+        }
+        if (foundUpscale) {
+          moreBtn = cand;
+          console.log(LOG_PREFIX, `✓ trial&verify 성공 — 점세개 발견: aria="${cand.getAttribute('aria-label') || ''}"`);
+          // 메뉴 닫고 다음 단계 (menuAttempt 루프) 가 정상적으로 메뉴 열고 업스케일 클릭
+          document.body.click();
+          await delay(400);
+          break;
+        } else {
+          // 다른 메뉴면 닫기
+          document.body.click();
+          await delay(300);
+        }
+      }
+    }
+
+    if (!moreBtn) {
+      console.warn(LOG_PREFIX, '=== UPSCALE: 비디오 근처 "..." 버튼 못 찾음 (모든 폴백 실패) ===');
       // 비디오 주변 버튼들 상세 로그
       let dbgContainer = video.parentElement;
-      for (let d = 0; d < 15 && dbgContainer; d++) {
+      for (let d = 0; d < 6 && dbgContainer; d++) {
         const btns = dbgContainer.querySelectorAll('button');
         if (btns.length > 0) {
           console.log(LOG_PREFIX, `  depth=${d}: 버튼 ${btns.length}개`);
           btns.forEach((b, i) => {
             const t = (b.textContent || '').trim().substring(0, 30);
             const aria = b.getAttribute('aria-label') || '';
-            const circles = b.querySelectorAll('svg circle').length;
-            const isCtrl = isVideoControlBtn(b);
-            console.log(LOG_PREFIX, `    [${i}] "${t}" aria="${aria}" circles=${circles} isControl=${isCtrl}`);
+            const r = b.getBoundingClientRect();
+            const near = isNearVideo(b);
+            console.log(LOG_PREFIX, `    [${i}] "${t}" aria="${aria}" rect=${Math.round(r.width)}×${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)} near=${near}`);
           });
         }
         dbgContainer = dbgContainer.parentElement;
