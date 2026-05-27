@@ -1798,12 +1798,35 @@
     let n = 0;
     const fileInput = findFileInput();
     if (fileInput && fileInput.files) n = Math.max(n, fileInput.files.length);
-    // 미리보기 썸네일 (blob/data img 중 에디터 근처)
-    const previews = document.querySelectorAll(
-      '[class*="attach"] img[src^="blob:"], [class*="preview"] img[src^="blob:"], [class*="thumb"] img[src^="blob:"], ' +
-      '[class*="attach"] img[src^="data:"], [class*="preview"] img[src^="data:"]'
-    );
-    n = Math.max(n, previews.length);
+
+    // 미리보기 썸네일 — 다양한 셀렉터 (그록 새 UI 변경 대응)
+    const seen = new Set();
+    const collect = (selector) => {
+      document.querySelectorAll(selector).forEach(img => {
+        const src = img.src || '';
+        if ((src.startsWith('blob:') || src.startsWith('data:')) && !seen.has(src)) {
+          seen.add(src);
+        }
+      });
+    };
+    // 1) class 이름 기반 (구 UI)
+    collect('[class*="attach" i] img[src^="blob:"]');
+    collect('[class*="attach" i] img[src^="data:"]');
+    collect('[class*="preview" i] img[src^="blob:"]');
+    collect('[class*="preview" i] img[src^="data:"]');
+    collect('[class*="thumb" i] img[src^="blob:"]');
+    collect('[class*="thumb" i] img[src^="data:"]');
+    // 2) 에디터 외부의 모든 blob/data 이미지 (새 UI — 첨부 영역이 클래스 이름 없는 div 일 때)
+    const editor = findEditor();
+    document.querySelectorAll('img[src^="blob:"], img[src^="data:"]').forEach(img => {
+      if (editor && editor.contains(img)) return;  // 에디터 인라인 제외 (paste 잔재)
+      // 너무 작은 아바타·아이콘 제외
+      const rect = img.getBoundingClientRect();
+      if (rect.width < 16 || rect.height < 16) return;
+      const src = img.src || '';
+      if (src && !seen.has(src)) seen.add(src);
+    });
+    n = Math.max(n, seen.size);
     return n;
   }
 
@@ -2263,6 +2286,24 @@
     }
     console.log(LOG_PREFIX, `업스케일 대상 비디오: ${video.src?.substring(0, 60)}, 총 ${allVideos.length}개`);
 
+    // 🔑 비디오 위로 호버 트리거 — 새 UI 는 호버해야 액션 버튼(...)이 나타나는 경우 있음
+    try {
+      video.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await delay(150);
+      const vRect = video.getBoundingClientRect();
+      const cx = vRect.left + vRect.width / 2;
+      const cy = vRect.top + vRect.height / 2;
+      // 비디오 컨테이너 (부모 1~3 depth) 에 mouseover/mouseenter/mousemove 발생
+      let hoverTarget = video;
+      for (let i = 0; i < 4 && hoverTarget; i++) {
+        hoverTarget.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: cx, clientY: cy }));
+        hoverTarget.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: cx, clientY: cy }));
+        hoverTarget.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: cx, clientY: cy }));
+        hoverTarget = hoverTarget.parentElement;
+      }
+      await delay(500);
+    } catch (_) {}
+
     // 비디오 부모를 올라가며 "..." 버튼 찾기
     // 비디오 플레이어 컨트롤(음소거/재생/전체화면)과 구별해야 함. 다국어(KO/EN/TH/VI).
     const videoControlLabels = [
@@ -2289,21 +2330,40 @@
     }
 
     function isThreeDotsBtn(btn) {
-      // aria-label로 판별 — 다국어 "more / options / additional"
+      // aria-label / title 기반 (다국어)
       const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const title = (btn.getAttribute('title') || '').toLowerCase();
       const moreKeys = [
-        'more', 'options', 'additional',
-        '더보기', '옵션', '추가',
-        'เพิ่มเติม', 'ตัวเลือก',
+        'more', 'options', 'additional', 'menu',
+        '더보기', '옵션', '추가', '메뉴',
+        'เพิ่มเติม', 'ตัวเลือก', 'เมนู',
         'thêm', 'xem thêm', 'tùy chọn', 'tuỳ chọn',
       ];
-      if (moreKeys.some(k => ariaLabel.includes(k))) return true;
+      if (moreKeys.some(k => ariaLabel.includes(k) || title.includes(k))) return true;
       // SVG에 circle 3개 (점 세 개 패턴)
-      const circles = btn.querySelectorAll('svg circle');
-      if (circles.length === 3) return true;
-      // SVG에 "..." 텍스트 또는 path가 있는 경우
-      const svgText = (btn.querySelector('svg')?.textContent || '').trim();
-      if (svgText === '...' || svgText === '⋯' || svgText === '⋮') return true;
+      const svg = btn.querySelector('svg');
+      if (svg) {
+        const circles = svg.querySelectorAll('circle');
+        if (circles.length === 3) return true;
+        // SVG 텍스트 (...) 패턴
+        const svgText = (svg.textContent || '').trim();
+        if (svgText === '...' || svgText === '⋯' || svgText === '⋮') return true;
+        // SVG path 3개 (각 점이 path 일 때) + 작은 정사각형 버튼
+        const paths = svg.querySelectorAll('path, rect');
+        const rect = btn.getBoundingClientRect();
+        const squareish = Math.abs(rect.width - rect.height) < 8 && rect.width >= 20 && rect.width <= 56;
+        if (paths.length === 3 && squareish) return true;
+        // viewBox 24x24 + 작은 사각 버튼 + 빈 텍스트 + 비디오 컨트롤 아님 → 점 3개 메뉴 가능성 높음
+        const viewBox = svg.getAttribute('viewBox') || '';
+        if (squareish && (viewBox === '0 0 24 24' || viewBox === '0 0 20 20' || viewBox === '0 0 16 16')) {
+          const noText = (btn.textContent || '').trim().length === 0;
+          if (noText) {
+            // ellipse / horizontal-dots SVG 일 가능성 — 마지막 확인: 모든 도형이 horizontal 한 줄에 배치?
+            const shapes = svg.querySelectorAll('circle, rect, ellipse');
+            if (shapes.length >= 2 && shapes.length <= 4) return true;
+          }
+        }
+      }
       return false;
     }
 
@@ -2632,6 +2692,13 @@
           break;
         }
       }
+    }
+
+    // 그래도 못 찾으면 — UUID + 표준 도메인 패턴으로 fallback URL 즉시 생성 (extractVideoUrl 의 fallback 과 동일)
+    if (!hdUrl && !normalUrl && uuid) {
+      const guessUrl = `https://imagine-public.x.ai/imagine-public/share-videos/${uuid}.mp4`;
+      console.log(LOG_PREFIX, 'Video URL fallback (UUID-based):', guessUrl);
+      return guessUrl;
     }
 
     if (hdUrl || normalUrl) {
