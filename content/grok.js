@@ -521,26 +521,58 @@
     return Array.from(targets);
   }
 
-  // 전송 버튼이 절대 아닌 버튼 (오클릭 방지). 다국어(KO/EN/TH/VI) 모두 포함.
-  const _SUBMIT_EXCLUDE_RE = new RegExp([
+  // 전송 버튼 INCLUDE 키워드 — 이게 라벨에 있으면 EXCLUDE 무시 (오제외 방지).
+  const _SUBMIT_INCLUDE_KEYWORDS = [
+    // KO
+    '제출','전송','보내기','동영상 만들기','동영상만들기','생성',
+    // EN
+    'submit','send','generate','create video','create',
+    // TH
+    'ส่ง','สร้าง','สร้างวิดีโอ',
+    // VI
+    'gửi','tạo','tạo video',
+  ];
+
+  // EXCLUDE — 비영어는 substring(글자 자체가 unique), 영어는 word boundary(playback/background 오매치 방지).
+  const _SUBMIT_EXCLUDE_NON_EN = [
     // KO
     '저장','북마크','공유','모델','설정','복사','다운로드','좋아요','편집','삭제','닫기','취소',
     '메뉴','더보기','업스케일','프로필','계정','뒤로','재생','일시정지','음소거','볼륨','전체화면','해제',
-    // EN
-    'saved','save','bookmark','share','model','setting','copy','download','like','edit','delete','close',
-    'cancel','menu','more','upscale','profile','account','back','play','pause','mute','unmute','volume','sound','fullscreen','full screen',
-    // TH (태국어)
+    // TH
     'บันทึก','แชร์','ใช้ร่วมกัน','โมเดล','การตั้งค่า','คัดลอก','ดาวน์โหลด','ถูกใจ','แก้ไข','ลบ','ปิด',
     'ยกเลิก','เมนู','เพิ่มเติม','โปรไฟล์','บัญชี','ย้อนกลับ','กลับ','เล่น','หยุดชั่วคราว','ปิดเสียง','ระดับเสียง','เต็มจอ',
-    // VI (베트남어)
+    // VI
     'lưu','đã lưu','chia sẻ','mô hình','cài đặt','sao chép','tải xuống','tải về','thích','chỉnh sửa','xoá','xóa','đóng',
-    'hủy','huỷ','thêm','xem thêm','hồ sơ','tài khoản','quay lại','phát','tạm dừng','tắt tiếng','âm lượng','toàn màn hình'
-  ].map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
+    'hủy','huỷ','xem thêm','hồ sơ','tài khoản','quay lại','phát','tạm dừng','tắt tiếng','âm lượng','toàn màn hình',
+  ];
+  const _SUBMIT_EXCLUDE_EN_WORDS = [
+    'saved','save','bookmark','share','shared','model','setting','settings','copy','download','like','liked',
+    'edit','delete','close','cancel','menu','options','upscale','profile','account','back','play','pause',
+    'mute','unmute','volume','sound','fullscreen','full screen',
+  ];
+  const _SUBMIT_EXCLUDE_NON_EN_RE = new RegExp(
+    _SUBMIT_EXCLUDE_NON_EN.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+    'i'
+  );
+  const _SUBMIT_EXCLUDE_EN_RE = new RegExp(
+    '\\b(' + _SUBMIT_EXCLUDE_EN_WORDS.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b',
+    'i'
+  );
 
   function _isExcludedSubmitBtn(btn) {
-    const al = (btn.getAttribute('aria-label') || '');
+    const al = (btn.getAttribute('aria-label') || '').trim();
     const txt = (btn.textContent || '').trim();
-    return _SUBMIT_EXCLUDE_RE.test(al) || _SUBMIT_EXCLUDE_RE.test(txt);
+    const alL = al.toLowerCase();
+    const txtL = txt.toLowerCase();
+    // 1) INCLUDE 우선 — 명확한 전송 라벨이면 절대 제외 안 함
+    for (const k of _SUBMIT_INCLUDE_KEYWORDS) {
+      const kl = k.toLowerCase();
+      if (alL === kl || alL.startsWith(kl) || txtL === kl || txtL.startsWith(kl)) return false;
+    }
+    // 2) EXCLUDE — 비영어는 substring, 영어는 word boundary
+    if (_SUBMIT_EXCLUDE_NON_EN_RE.test(al) || _SUBMIT_EXCLUDE_NON_EN_RE.test(txt)) return true;
+    if (_SUBMIT_EXCLUDE_EN_RE.test(al) || _SUBMIT_EXCLUDE_EN_RE.test(txt)) return true;
+    return false;
   }
 
   // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05). 다국어(KO/EN/TH/VI) 지원.
