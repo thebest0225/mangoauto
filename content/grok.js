@@ -2353,22 +2353,18 @@
     }
     console.log(LOG_PREFIX, `업스케일 대상 비디오: ${video.src?.substring(0, 60)}, 총 ${allVideos.length}개`);
 
-    // 🔑 비디오 위로 호버 트리거 — 새 UI 는 호버해야 액션 버튼(...)이 나타나는 경우 있음
+    // 🔑 비디오 위로 호버 트리거 — video 태그 자체에만 (부모 dispatch 제거: 페이지 이동 위험)
     try {
       video.scrollIntoView({ behavior: 'instant', block: 'center' });
       await delay(150);
       const vRect = video.getBoundingClientRect();
       const cx = vRect.left + vRect.width / 2;
       const cy = vRect.top + vRect.height / 2;
-      // 비디오 컨테이너 (부모 1~3 depth) 에 mouseover/mouseenter/mousemove 발생
-      let hoverTarget = video;
-      for (let i = 0; i < 4 && hoverTarget; i++) {
-        hoverTarget.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: cx, clientY: cy }));
-        hoverTarget.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: cx, clientY: cy }));
-        hoverTarget.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: cx, clientY: cy }));
-        hoverTarget = hoverTarget.parentElement;
-      }
-      await delay(500);
+      // video 태그에만 호버 (부모 chain 까지 dispatch 하면 잘못된 핸들러 트리거 가능)
+      video.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: cx, clientY: cy }));
+      video.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: cx, clientY: cy }));
+      video.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: cx, clientY: cy }));
+      await delay(300);
     } catch (_) {}
 
     // 비디오 부모를 올라가며 "..." 버튼 찾기
@@ -2499,10 +2495,11 @@
     }
 
     // 못 찾으면 디버그
-    // 🔑 3차 폴백: 영상 근처 아이콘 후보를 차례로 클릭해 "업스케일" 항목 뜨는 게 정답.
-    //    SVG 패턴이 매치 안 되는 신형 점세개 아이콘 대응 — trial & verify 방식.
-    //    안전망: URL 변경 감지 → 즉시 history.back() 으로 복귀 (다른 페이지로 이동 방지).
-    if (!moreBtn) {
+    // ⚠️ trial&verify 자동 폴백 비활성화 (2026-05-27 — 페이지 이동 위험).
+    //   그록 UI 의 정확한 점세개 aria-label / SVG 패턴 파악 전까지 보수적 운영.
+    //   업스케일 못 찾으면 480p 로 진행 (안전).
+    const TRIAL_VERIFY_ENABLED = false;
+    if (!moreBtn && TRIAL_VERIFY_ENABLED) {
       console.log(LOG_PREFIX, '점세개 패턴 매치 실패 — trial&verify: 영상 근처 아이콘 차례 클릭');
       const candidates = [];
       let cc = video.parentElement;
