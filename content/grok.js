@@ -210,9 +210,20 @@
       if (mode === 'image-video' && sourceImageDataUrl) {
         showToast('=== 프레임→영상 모드 시작 ===', 'info');
 
-        // Step 1: 메인 페이지 확인
+        // Step 1: 메인 페이지 확인 + 도달 검증 (결과 페이지 잔여 상태로 새 영상 2개 생성 방지)
         showToast('Step 1: 메인 페이지 확인...', 'info');
         await ensureMainPage();
+        // 메인 페이지 도달 확실히 검증 — 안 됐으면 1회 더 시도
+        if (!isOnMainPage()) {
+          console.warn(LOG_PREFIX, 'Step 1 후에도 메인 페이지 아님 — 1회 재시도');
+          await delay(1500);
+          await ensureMainPage();
+          if (!isOnMainPage()) {
+            throw new Error('메인 페이지 이동 실패 — 다음 큐 진행');
+          }
+        }
+        // 메인 페이지 UI 안정화 대기 (editor + file input 로드 시간)
+        await delay(1200);
         checkStopped();
 
         // Step 2: 비디오 모드 전환 + 설정 (새 UI: 하단 바에서 직접, 구 UI: 패널)
@@ -980,11 +991,45 @@
       return;
     }
 
-    // /imagine이 아닌 경우 직접 이동
-    console.log(LOG_PREFIX, 'Not on /imagine page, navigating directly...');
+    // 1) SPA 라우팅 우선 시도 — 사이드바의 "Imagine" 링크 클릭 (페이지 리로드 X, 빠름)
+    const sidebarLinks = document.querySelectorAll('a[href="/imagine"], a[href="https://grok.com/imagine"]');
+    for (const a of sidebarLinks) {
+      const rect = a.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        console.log(LOG_PREFIX, 'SPA 라우팅: Imagine 사이드바 링크 클릭');
+        a.click();
+        // SPA 라우팅 후 URL 변경 대기 (최대 3초)
+        for (let i = 0; i < 30; i++) {
+          await delay(100);
+          if (isOnMainPage()) {
+            console.log(LOG_PREFIX, 'SPA 라우팅 성공 — 메인 페이지 도달');
+            await delay(800);  // 메인 페이지 UI 안정화
+            return;
+          }
+        }
+        break;
+      }
+    }
+
+    // 2) SPA 실패 → 헤더 ← 뒤로가기 버튼 시도
+    const backBtn = document.querySelector('button[aria-label*="back" i], button[aria-label*="뒤로" i]');
+    if (backBtn && isOnResultPage()) {
+      console.log(LOG_PREFIX, '← 뒤로가기 버튼 클릭');
+      backBtn.click();
+      for (let i = 0; i < 20; i++) {
+        await delay(150);
+        if (isOnMainPage()) {
+          console.log(LOG_PREFIX, '뒤로가기 성공');
+          await delay(800);
+          return;
+        }
+      }
+    }
+
+    // 3) 최후의 수단 — window.location.href (페이지 리로드, content script 중단됨)
+    console.warn(LOG_PREFIX, 'SPA / back 모두 실패 — location.href 직접 이동 (스크립트 재로드 필요)');
     window.location.href = 'https://grok.com/imagine';
-    // 페이지 리로드 → 현재 스크립트 중단됨. 배경에서 재시도 필요.
-    await delay(10000); // 리로드 전까지 대기
+    await delay(10000);
     throw new Error('/imagine으로 이동 중...');
   }
 
@@ -2284,6 +2329,7 @@
     const start = Date.now();
     const checkInterval = 3000;
 
+    let idleSinceMs = null;  // 진행 중 신호 없이 + result 페이지도 아닌 idle 시작 시점
     while (Date.now() - start < timeout) {
       if (shouldStop) throw new Error('사용자에 의해 중지됨');
       if (isModerated()) return 'moderated';
@@ -2291,8 +2337,33 @@
       const elapsed = Date.now() - start;
       const elapsedSec = Math.round(elapsed / 1000);
 
+      // 🔑 검열/실패 자동 감지: 영상 생성 시작 후 메인 페이지로 강제 이동되면 검열 또는 실패
+      //   (그록은 검열 시 result 페이지 안 만들고 main 으로 되돌림)
+      if (elapsed > 15000 && isOnMainPage()) {
+        // 15초 이상 지났는데 result 페이지 아닌 main 페이지 = 검열/실패 가능성
+        console.warn(LOG_PREFIX, `메인 페이지로 강제 이동됨 (${elapsedSec}초 경과) — 검열/실패 추정`);
+        showToast('영상 생성 실패 (메인 페이지 복귀) — 검열/오류 추정', 'warn');
+        return 'moderated';  // 다음 큐로 빠르게 진행
+      }
+
       // 진행 중 명확 신호가 있으면 무조건 계속 대기
       const stillGenerating = isVideoStillGenerating();
+
+      // 🔑 idle timeout — result 페이지인데 진행 신호 없는 상태가 90초 이상이면 실패로 판단
+      if (!stillGenerating && isOnResultPage()) {
+        if (idleSinceMs === null) idleSinceMs = Date.now();
+        else if (Date.now() - idleSinceMs > 90000 && elapsed > 60000) {
+          // 90초 idle + 최소 1분 경과 → video 도 없으면 실패
+          const vurl = getVideoUrl();
+          if (!vurl) {
+            console.warn(LOG_PREFIX, `idle 90초 + video 없음 (${elapsedSec}초) — 실패로 판단`);
+            showToast('영상 생성 idle 90초 — 실패 판단', 'warn');
+            return 'timeout';
+          }
+        }
+      } else {
+        idleSinceMs = null;  // 진행 중이면 idle 카운터 리셋
+      }
 
       if (!stillGenerating && elapsed >= MIN_WAIT_MS) {
         // 진행 중 신호 없음 + 최소 1분 경과 → 진짜 video[src] 검사
