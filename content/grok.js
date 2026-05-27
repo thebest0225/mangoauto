@@ -2274,15 +2274,21 @@
         // 진행 중 신호 없음 + 최소 1분 경과 → 진짜 video[src] 검사
         const videoUrl = getVideoUrl();
         if (videoUrl) {
-          // 추가로 진짜 video 태그가 보이는지도 확인 (placeholder 와 구별)
+          // 추가 검증: 진짜 완성된 video 인지 (duration > 0 + readyState >= 2 + visible)
           const allVideos = document.querySelectorAll('video');
-          let realVideo = null;
+          let completedVideo = null;
           for (const v of allVideos) {
             const rect = v.getBoundingClientRect();
-            if (rect.width > 100 && rect.height > 60) { realVideo = v; break; }
+            if (rect.width < 100 || rect.height < 60) continue;
+            // duration 0 / NaN → 아직 로딩 중. duration > 0 = 메타데이터 로드됨 = 완성.
+            if (!v.duration || v.duration <= 0 || isNaN(v.duration)) continue;
+            // readyState 0=Empty, 1=Metadata, 2=Current, 3=Future, 4=Enough. 2 이상이면 재생 가능.
+            if (v.readyState < 2) continue;
+            completedVideo = v;
+            break;
           }
-          if (realVideo) {
-            showToast(`영상 완성! (${elapsedSec}초)`, 'success');
+          if (completedVideo) {
+            showToast(`영상 완성! (${elapsedSec}초, dur=${completedVideo.duration.toFixed(1)}s)`, 'success');
             await delay(2000);  // 로딩 안정화
             return 'ready';
           }
@@ -2493,8 +2499,9 @@
     }
 
     // 못 찾으면 디버그
-    // 🔑 3차 폴백: 영상 근처 모든 아이콘 버튼 차례로 클릭해서 "업스케일" 항목 뜨는 게 정답
+    // 🔑 3차 폴백: 영상 근처 아이콘 후보를 차례로 클릭해 "업스케일" 항목 뜨는 게 정답.
     //    SVG 패턴이 매치 안 되는 신형 점세개 아이콘 대응 — trial & verify 방식.
+    //    안전망: URL 변경 감지 → 즉시 history.back() 으로 복귀 (다른 페이지로 이동 방지).
     if (!moreBtn) {
       console.log(LOG_PREFIX, '점세개 패턴 매치 실패 — trial&verify: 영상 근처 아이콘 차례 클릭');
       const candidates = [];
@@ -2507,25 +2514,48 @@
           const t = (b.textContent || '').trim();
           if (t.length > 6) continue;
           if (b.querySelector('textarea, input, video')) continue;
-          // 다운로드 화살표 아이콘은 제외 (download / share / like / arrow 명백한 라벨)
+          // 명백한 다른 액션(다운로드/공유/좋아요/X공유) 사전 제외
           const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-          if (/download|share|like|favorite|좋아요|공유|다운로드|x.com|twitter/i.test(aria)) continue;
+          if (/download|share|like|favorite|좋아요|공유|다운로드|x\.com|twitter|post on x|favorite|back|navigate|home|profile/i.test(aria)) continue;
+          // <a> 태그를 감싸는 버튼은 페이지 이동 가능성 — 제외
+          if (b.closest('a[href]')) continue;
           candidates.push(b);
         }
         cc = cc.parentElement;
       }
-      // y 좌표 정렬 (사이드 패널 위→아래)
       candidates.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-      console.log(LOG_PREFIX, `trial 후보 ${candidates.length}개 — 차례로 클릭해 업스케일 메뉴 검증`);
+      console.log(LOG_PREFIX, `trial 후보 ${candidates.length}개 — URL 변경 안전망 + 차례 클릭`);
+
+      const urlBeforeAll = window.location.href;
       for (const cand of candidates) {
-        // 이 후보 클릭 → 메뉴 뜨는지 + "업스케일" 항목 있는지 검사
+        const urlBefore = window.location.href;
         cand.scrollIntoView({ behavior: 'instant', block: 'center' });
         await delay(100);
         cand.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
         cand.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
         cand.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        await delay(700);
-        // 메뉴 안에 "업스케일" 텍스트 있나
+        // URL 변경 빠른 감지 (50ms·150ms·400ms 체크)
+        let urlChanged = false;
+        for (const wait of [50, 100, 250]) {
+          await delay(wait);
+          if (window.location.href !== urlBefore) {
+            urlChanged = true;
+            break;
+          }
+        }
+        if (urlChanged) {
+          console.warn(LOG_PREFIX, `⚠️ trial click → URL 변경 (${window.location.href.substring(0, 80)}) — history.back() 으로 복귀`);
+          try { window.history.back(); } catch (_) {}
+          await delay(800);
+          // 원래 URL 복귀 확인
+          if (window.location.href !== urlBeforeAll) {
+            console.warn(LOG_PREFIX, '복귀 실패 — trial 중단');
+            break;
+          }
+          continue;  // 다음 후보 시도
+        }
+        // URL 안 바뀜 — 메뉴 검사
+        await delay(450);
         const menuItems = document.querySelectorAll('[role="menuitem"], [role="menu"] button, [data-radix-popper-content-wrapper] button, [data-radix-popper-content-wrapper] [role="menuitem"]');
         let foundUpscale = false;
         for (const mi of menuItems) {
@@ -2538,14 +2568,14 @@
         if (foundUpscale) {
           moreBtn = cand;
           console.log(LOG_PREFIX, `✓ trial&verify 성공 — 점세개 발견: aria="${cand.getAttribute('aria-label') || ''}"`);
-          // 메뉴 닫고 다음 단계 (menuAttempt 루프) 가 정상적으로 메뉴 열고 업스케일 클릭
+          // 메뉴 닫고 정상 menuAttempt 루프로
           document.body.click();
           await delay(400);
           break;
         } else {
-          // 다른 메뉴면 닫기
+          // 메뉴 닫기
           document.body.click();
-          await delay(300);
+          await delay(250);
         }
       }
     }
