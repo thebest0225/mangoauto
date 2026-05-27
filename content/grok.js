@@ -1309,13 +1309,9 @@
     // ⚠️ singleClick — 제출 버튼은 클릭 1번만. (합성+native 이중 클릭 시 create 2번 발사 → 409 + 영상 중복)
     MangoDom.simulateClick(btn, { singleClick: true });
     console.log(LOG_PREFIX, `Submit clicked: aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
-    await delay(1000);
-    // 클릭했는데 여전히 메인 페이지 + 생성 안 시작이면 Enter fallback 추가 시도
-    if (isOnMainPage() && !isAutoGenerating()) {
-      console.warn(LOG_PREFIX, '버튼 클릭 후에도 전송 미확인 — Enter fallback 보강');
-      await trySubmitByEnter();
-      await delay(1000);
-    }
+    // ❌ Enter fallback 보강 제거 — 버튼 클릭 후 Enter 추가 발사하면 영상 2번 생성 (409 Conflict).
+    //    URL 변경 / isAutoGenerating 감지는 비동기라 1초 후 false negative 가능.
+    //    버튼 클릭 성공 = success. 실제 결과는 waitForResultPage 에서 검증.
     return true;
   }
 
@@ -2264,23 +2260,35 @@
   async function tryUpscaleVideo(timeout = 300000) {
     const upscaleKeywords = ['업스케일', 'upscale'];
 
-    // Step 1: 비디오 요소 기준으로 "..." 버튼 찾기
-    // 2개 영상 생성 시 보이는(visible) 비디오를 우선 선택
-    let moreBtn = null;
-    const allVideos = document.querySelectorAll('video');
+    // Step 1: 비디오 요소 등장 대기 (페이지 전환 후 DOM에 video 태그 로드 시간 필요)
+    // 새 UI 는 결과 페이지 라우팅 후 video 태그 마운트까지 2~10초 걸림.
     let video = null;
-    for (const v of allVideos) {
-      const rect = v.getBoundingClientRect();
-      if (rect.width > 50 && rect.height > 30) {
-        video = v;
-        break;
+    const _videoWaitStart = Date.now();
+    const _videoWaitMax = 20000;  // 최대 20초 대기
+    while (Date.now() - _videoWaitStart < _videoWaitMax && !video) {
+      const allVids = document.querySelectorAll('video');
+      for (const v of allVids) {
+        const rect = v.getBoundingClientRect();
+        if (rect.width > 50 && rect.height > 30) {
+          video = v;
+          break;
+        }
+      }
+      if (!video) {
+        // 보이는 거 없으면 일단 첫 video 태그라도
+        if (allVids.length > 0 && Date.now() - _videoWaitStart > 5000) {
+          video = allVids[0];
+          break;
+        }
+        await delay(800);
       }
     }
-    // 보이는 비디오 없으면 아무거나
-    if (!video) video = allVideos[0] || null;
+
+    const allVideos = document.querySelectorAll('video');
+    let moreBtn = null;
 
     if (!video) {
-      console.warn(LOG_PREFIX, '업스케일: 비디오 요소 없음');
+      console.warn(LOG_PREFIX, `업스케일: 비디오 요소 없음 (${Math.round((Date.now()-_videoWaitStart)/1000)}초 대기 후)`);
       showToast('업스케일 실패: 비디오 요소 없음', 'warn');
       return false;
     }
