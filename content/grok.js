@@ -198,6 +198,7 @@
       const { prompt, mediaType, sourceImageDataUrl, settings } = msg;
       const mode = settings?._mode || 'text-image';
       const timeoutMs = (settings?.grok?.timeout || 5) * 60000;
+      window.__mangoauto_currentSettings = settings;  // 다른 함수에서 해상도 등 참조용
 
       showToast(`Mode: ${mode} | HasImage: ${!!sourceImageDataUrl} | Prompt: ${(prompt || '').substring(0, 30)}`, 'info');
 
@@ -263,6 +264,12 @@
         // Step 5: 전송 (이미지 첨부로 자동 전송됐으면 건너뛰기)
         if (!isOnMainPage()) {
           showToast('Step 5: 이미지 첨부로 자동 전송됨', 'info');
+          window.__mangoauto_lastGrokSubmitMs = Date.now();  // 자동 전송도 lockout 마킹
+        } else if (isVideoStillGenerating()) {
+          // 이전 영상 진행 중이면 절대 전송 X — 그록이 '기존+새' 2개 모드로 인식
+          console.warn(LOG_PREFIX, '⚠️ 메인 페이지지만 이전 영상 진행 중 감지 — 전송 skip, 결과 대기로 진행');
+          showToast('이전 영상 진행 중 — 전송 skip', 'warn');
+          window.__mangoauto_lastGrokSubmitMs = Date.now();
         } else {
           showToast('Step 5: 전송...', 'info');
           const submitted = await tryClickSubmit();
@@ -1313,10 +1320,20 @@
 
   // ─── Submit ───
   async function tryClickSubmit() {
-    // 이미 생성 진행 중이면 (다른 곳에서 시작됐거나 이미지 첨부로 자동 시작) skip + 성공으로 처리.
-    // 이전: return false 라 caller가 throw '전송 실패' → 진행 중인데도 에러로 잘못 판단됨.
-    if (isAutoGenerating()) {
+    // 🔒 LOCKOUT: 최근 30초 안에 이미 submit 한 적 있으면 절대 다시 안 누름 (중복 영상 생성 차단).
+    //    이전 영상 생성 중인데 또 누르면 그록이 '기존+새' 모드로 인식 → 2개 동시 생성.
+    const _LOCKOUT_MS = 30000;
+    if (window.__mangoauto_lastGrokSubmitMs && Date.now() - window.__mangoauto_lastGrokSubmitMs < _LOCKOUT_MS) {
+      const left = Math.round((_LOCKOUT_MS - (Date.now() - window.__mangoauto_lastGrokSubmitMs)) / 1000);
+      console.warn(LOG_PREFIX, `🔒 Submit lockout — 최근 ${Math.round((Date.now()-window.__mangoauto_lastGrokSubmitMs)/1000)}초 전 submit 있음, ${left}초 더 대기 (중복 차단)`);
+      showToast(`전송 잠금: ${left}초 대기 (이전 전송 진행 중)`, 'warn');
+      return true;  // 이미 진행 중이라는 의미로 success
+    }
+
+    // 이미 생성 진행 중이면 skip + 성공으로 처리
+    if (isAutoGenerating() || isVideoStillGenerating()) {
       console.log(LOG_PREFIX, 'Auto-generating already in progress — skip submit, treat as success');
+      window.__mangoauto_lastGrokSubmitMs = Date.now();  // 진행 중 표시 (lockout 갱신)
       return true;
     }
 
@@ -1353,6 +1370,7 @@
 
     // ⚠️ singleClick — 제출 버튼은 클릭 1번만. (합성+native 이중 클릭 시 create 2번 발사 → 409 + 영상 중복)
     MangoDom.simulateClick(btn, { singleClick: true });
+    window.__mangoauto_lastGrokSubmitMs = Date.now();  // 🔒 lockout 마킹
     console.log(LOG_PREFIX, `Submit clicked: aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
     // ❌ Enter fallback 보강 제거 — 버튼 클릭 후 Enter 추가 발사하면 영상 2번 생성 (409 Conflict).
     //    URL 변경 / isAutoGenerating 감지는 비동기라 1초 후 false negative 가능.
@@ -2321,9 +2339,16 @@
   }
 
   async function waitForVideoReady(timeout = 300000) {
-    showToast('영상 생성 대기 중... (최소 1분)', 'info');
-    // 최소 대기 — 영상 생성은 1~1.5분 이상 걸림. 너무 일찍 ready 판단하지 마라.
-    const MIN_WAIT_MS = 60000;  // 1분 강제 대기
+    // 해상도에 따른 최소 대기 — 사용자 보고: 480p 1분 내, 720p 1~1.5분, 1080p 1.5~2분.
+    //   설정에서 해상도 읽어 적절히. 못 읽으면 60초 안전 디폴트.
+    let MIN_WAIT_MS = 60000;
+    try {
+      const _res = (window.__mangoauto_currentSettings?.grok?.videoResolution || '720p').toLowerCase();
+      if (_res.includes('480')) MIN_WAIT_MS = 35000;        // 480p: 35초
+      else if (_res.includes('720')) MIN_WAIT_MS = 60000;   // 720p: 60초
+      else if (_res.includes('1080')) MIN_WAIT_MS = 90000;  // 1080p: 90초
+    } catch (_) {}
+    showToast(`영상 생성 대기 중... (최소 ${Math.round(MIN_WAIT_MS/1000)}초)`, 'info');
     await delay(5000);  // 초기 5초
 
     const start = Date.now();
