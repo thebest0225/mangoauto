@@ -2215,39 +2215,63 @@
   // ─── Wait for Video Ready ───
   // 참고자료 방식: video[src]에 UUID가 포함된 URL이 나타날 때까지 대기
   // 3초 간격 폴링, 5분 타임아웃
-  // 영상이 아직 생성 중인지 감지 — "생성 중 N% | 취소" 또는 진행률 표시 / "취소" 버튼
-  // 새 UI 패턴: "생성 중 29% | 취소", "Generating 50%", "29%", 진행 바 등
+  // 영상이 아직 생성 중인지 감지 — visible 진행률 % element 직접 검사 (가장 정확).
+  // 2개 영상 동시 생성 패턴 (43%, 52% 썸네일 + "생성 중 52% | 취소") 모두 감지.
   function isVideoStillGenerating() {
-    // 1) "생성 중" / "Generating" / "Creating" 텍스트 (어디든)
-    const bodyText = (document.body.textContent || '');
+    // 1) visible 진행률 % 텍스트 element 검사 (가장 강한 신호)
+    //    "43%", "52%", "29 %" 같은 짧은 텍스트가 visible 이면 진행 중.
+    //    영상 컨트롤의 재생률 (79%) 과 구별 — 시간 패턴 (NN:NN) 옆에 있으면 영상 컨트롤로 간주 제외.
+    const percentEls = document.querySelectorAll('span, div, p, button, b, strong');
+    for (const el of percentEls) {
+      const text = (el.textContent || '').trim();
+      if (text.length === 0 || text.length > 30) continue;
+      // % 패턴 매치 (단독 "43%" 또는 "생성 중 52%" 또는 "Generating 60%")
+      if (!/\b\d{1,3}\s*%/.test(text)) continue;
+      // 시간 컨트롤 제외 (예: "0:02 / 0:10")
+      if (/\d+:\d+/.test(text)) continue;
+      // 비디오 컨트롤 안인지 — closest video 또는 video-control 클래스
+      if (el.closest('video, [class*="player-control" i], [class*="video-control" i], [class*="volume" i]')) continue;
+      // visible 검사 (display:none, hidden 제외)
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+      // OK — 진행률 표시 element 확정
+      return true;
+    }
+
+    // 2) "생성 중" / "Generating" / "Creating" 텍스트 (visible element 안에서)
     const inProgressKeywords = [
       '생성 중', '생성중', 'Generating', 'Creating video', 'Creating',
       '동영상 생성', '비디오 생성',
     ];
-    for (const kw of inProgressKeywords) {
-      if (bodyText.includes(kw)) {
-        // 진행률 패턴 (예: "생성 중 29%") 함께 있으면 확실
-        if (/\b\d{1,3}\s*%/.test(bodyText)) return true;
-        // 진행률 없어도 진행 중 키워드 자체로 일단 인정
-        return true;
-      }
+    for (const el of percentEls) {
+      const text = (el.textContent || '').trim();
+      if (text.length === 0 || text.length > 60) continue;
+      if (!inProgressKeywords.some(kw => text.includes(kw))) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue;
+      return true;
     }
-    // 2) "취소" / "Cancel" 버튼이 진행률(%) 옆에 있는 패턴
+
+    // 3) "취소" 버튼이 visible 이면서 영상 만들 때 흔히 같이 뜨는 패턴
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
       const text = (btn.textContent || '').trim().toLowerCase();
-      if (text === '취소' || text === 'cancel' || text === 'huỷ' || text === 'hủy' || text === 'ยกเลิก') {
-        // 이 취소 버튼이 visible 인지 확인
+      if (text === '취소' || text === 'cancel') {
         const rect = btn.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
-          // 페이지에 % 진행률도 같이 있으면 영상 생성 중일 가능성 매우 높음
+          // body 어디든 % 진행률 함께 있으면 진행 중 확정
+          const bodyText = (document.body.textContent || '');
           if (/\b\d{1,3}\s*%/.test(bodyText)) return true;
         }
       }
     }
-    // 3) progress bar 요소 (role="progressbar" 또는 progress 태그)
-    if (document.querySelector('[role="progressbar"]')) return true;
-    if (document.querySelector('progress[value]')) return true;
+
+    // 4) progressbar / progress 태그
+    const progressEl = document.querySelector('[role="progressbar"], progress[value]');
+    if (progressEl) {
+      const rect = progressEl.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return true;
+    }
     return false;
   }
 
