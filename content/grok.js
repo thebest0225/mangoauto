@@ -1268,10 +1268,11 @@
 
   // ─── Submit ───
   async function tryClickSubmit() {
-    // Don't submit if auto-generating already
+    // 이미 생성 진행 중이면 (다른 곳에서 시작됐거나 이미지 첨부로 자동 시작) skip + 성공으로 처리.
+    // 이전: return false 라 caller가 throw '전송 실패' → 진행 중인데도 에러로 잘못 판단됨.
     if (isAutoGenerating()) {
-      console.log(LOG_PREFIX, 'Auto-generating in progress, skipping submit');
-      return false;
+      console.log(LOG_PREFIX, 'Auto-generating already in progress — skip submit, treat as success');
+      return true;
     }
 
     // Wait for submit button to be enabled (이미지 업로드 중 disabled일 수 있으므로 30초 대기)
@@ -1319,16 +1320,19 @@
   }
 
   function isAutoGenerating() {
-    // 다국어 "비디오/생성 취소" 버튼 — 영상 생성 중 표시.
+    // 영상 생성 중 표시 버튼 — 명확한 라벨만 (단독 '취소'/'Cancel' 제외, 모달/사이드바 false positive 방지).
+    // 다국어로도 'video'/'동영상'/'비디오'/'generation'/'생성' 같은 구체적 키워드 필수.
     const cancelLabels = [
-      '동영상 취소', '생성 취소', '취소',
-      'Cancel video', 'Cancel generation', 'Cancel',
-      'ยกเลิกวิดีโอ', 'ยกเลิกการสร้าง', 'ยกเลิก',
-      'Hủy video', 'Huỷ video', 'Hủy tạo', 'Hủy', 'Huỷ',
+      '동영상 취소', '비디오 취소', '생성 취소',
+      'Cancel video', 'Cancel generation', 'Cancel creation',
+      'ยกเลิกวิดีโอ', 'ยกเลิกการสร้าง',
+      'Hủy video', 'Huỷ video', 'Hủy tạo', 'Huỷ tạo',
     ];
     const lowerSet = new Set(cancelLabels.map(s => s.toLowerCase()));
     const buttons = document.querySelectorAll('button');
     for (const btn of buttons) {
+      // visible 버튼만 (display:none, hidden DOM 제외)
+      if (!btn.offsetParent && btn.offsetWidth === 0 && btn.offsetHeight === 0) continue;
       const text = (btn.textContent || '').trim().toLowerCase();
       if (lowerSet.has(text)) return true;
     }
