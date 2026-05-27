@@ -2215,42 +2215,95 @@
   // ─── Wait for Video Ready ───
   // 참고자료 방식: video[src]에 UUID가 포함된 URL이 나타날 때까지 대기
   // 3초 간격 폴링, 5분 타임아웃
+  // 영상이 아직 생성 중인지 감지 — "생성 중 N% | 취소" 또는 진행률 표시 / "취소" 버튼
+  // 새 UI 패턴: "생성 중 29% | 취소", "Generating 50%", "29%", 진행 바 등
+  function isVideoStillGenerating() {
+    // 1) "생성 중" / "Generating" / "Creating" 텍스트 (어디든)
+    const bodyText = (document.body.textContent || '');
+    const inProgressKeywords = [
+      '생성 중', '생성중', 'Generating', 'Creating video', 'Creating',
+      '동영상 생성', '비디오 생성',
+    ];
+    for (const kw of inProgressKeywords) {
+      if (bodyText.includes(kw)) {
+        // 진행률 패턴 (예: "생성 중 29%") 함께 있으면 확실
+        if (/\b\d{1,3}\s*%/.test(bodyText)) return true;
+        // 진행률 없어도 진행 중 키워드 자체로 일단 인정
+        return true;
+      }
+    }
+    // 2) "취소" / "Cancel" 버튼이 진행률(%) 옆에 있는 패턴
+    const buttons = document.querySelectorAll('button');
+    for (const btn of buttons) {
+      const text = (btn.textContent || '').trim().toLowerCase();
+      if (text === '취소' || text === 'cancel' || text === 'huỷ' || text === 'hủy' || text === 'ยกเลิก') {
+        // 이 취소 버튼이 visible 인지 확인
+        const rect = btn.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          // 페이지에 % 진행률도 같이 있으면 영상 생성 중일 가능성 매우 높음
+          if (/\b\d{1,3}\s*%/.test(bodyText)) return true;
+        }
+      }
+    }
+    // 3) progress bar 요소 (role="progressbar" 또는 progress 태그)
+    if (document.querySelector('[role="progressbar"]')) return true;
+    if (document.querySelector('progress[value]')) return true;
+    return false;
+  }
+
   async function waitForVideoReady(timeout = 300000) {
-    showToast('영상 생성 대기 중...', 'info');
-    await delay(5000); // Initial 5 second wait
+    showToast('영상 생성 대기 중... (최소 1분)', 'info');
+    // 최소 대기 — 영상 생성은 1~1.5분 이상 걸림. 너무 일찍 ready 판단하지 마라.
+    const MIN_WAIT_MS = 60000;  // 1분 강제 대기
+    await delay(5000);  // 초기 5초
 
     const start = Date.now();
-    const checkInterval = 3000; // 참고자료: 3초 간격
+    const checkInterval = 3000;
 
     while (Date.now() - start < timeout) {
-      if (shouldStop) throw new Error('사용자에 의해 중지됨');  // 새 작업 오면 zombie 즉시 종료
+      if (shouldStop) throw new Error('사용자에 의해 중지됨');
       if (isModerated()) return 'moderated';
 
-      // 참고자료 방식: video[src]에서 실제 URL 감지
-      const videoUrl = getVideoUrl();
-      if (videoUrl) {
-        // 비디오 URL이 있으면 추가로 2초 대기 (로딩 완료 보장)
-        showToast(`영상 감지! 로딩 대기 2초...`, 'success');
-        await delay(2000);
-        return 'ready';
+      const elapsed = Date.now() - start;
+      const elapsedSec = Math.round(elapsed / 1000);
+
+      // 진행 중 명확 신호가 있으면 무조건 계속 대기
+      const stillGenerating = isVideoStillGenerating();
+
+      if (!stillGenerating && elapsed >= MIN_WAIT_MS) {
+        // 진행 중 신호 없음 + 최소 1분 경과 → 진짜 video[src] 검사
+        const videoUrl = getVideoUrl();
+        if (videoUrl) {
+          // 추가로 진짜 video 태그가 보이는지도 확인 (placeholder 와 구별)
+          const allVideos = document.querySelectorAll('video');
+          let realVideo = null;
+          for (const v of allVideos) {
+            const rect = v.getBoundingClientRect();
+            if (rect.width > 100 && rect.height > 60) { realVideo = v; break; }
+          }
+          if (realVideo) {
+            showToast(`영상 완성! (${elapsedSec}초)`, 'success');
+            await delay(2000);  // 로딩 안정화
+            return 'ready';
+          }
+        }
       }
 
       // 진행 상태 로그 (15초마다)
-      const elapsed = Math.round((Date.now() - start) / 1000);
-      if (elapsed % 15 === 0 && elapsed > 0) {
-        showToast(`영상 생성 대기 중... (${elapsed}초 경과)`, 'info');
+      if (elapsedSec > 0 && elapsedSec % 15 === 0) {
+        const stat = stillGenerating ? '생성 중' : '대기';
+        showToast(`영상 ${stat} (${elapsedSec}초 경과 / 최소 60초)`, 'info');
       }
 
       await delay(checkInterval);
     }
 
-    // 타임아웃: 마지막으로 video 요소 확인
+    // 타임아웃: 마지막으로 확인
     const lastChance = getVideoUrl();
-    if (lastChance) {
+    if (lastChance && !isVideoStillGenerating()) {
       showToast('타임아웃 직전 영상 발견!', 'warn');
       return 'ready';
     }
-
     return 'timeout';
   }
 
@@ -2375,37 +2428,64 @@
       return false;
     }
 
-    // 1차: 전체 depth에서 isThreeDotsBtn 우선 검색 (가장 정확)
+    // 🔑 위치 기반 필터 — 영상 근처 (오른쪽 사이드 / 위 오버레이) 버튼만 후보로.
+    //    페이지 전체의 다른 점세개 (사이드바·헤더·프로젝트 메뉴) 매치 방지.
+    const vRect = video.getBoundingClientRect();
+    function isNearVideo(btn) {
+      const r = btn.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      // 영상 오른쪽 사이드 (right edge ~ +200px, 수직으로 영상과 겹침)
+      const nearRightSide = r.left >= vRect.right - 10 && r.left <= vRect.right + 200
+                          && r.top < vRect.bottom + 40 && r.bottom > vRect.top - 40;
+      // 영상 위 오버레이 (영상 bbox 안)
+      const insideVideo = r.left >= vRect.left - 10 && r.right <= vRect.right + 10
+                       && r.top >= vRect.top - 10 && r.bottom <= vRect.bottom + 10;
+      // 영상 바로 아래 (좁은 화면) — 영상 하단 ~ +120px, 수평으로 영상과 겹침
+      const justBelow = r.top >= vRect.bottom - 10 && r.top <= vRect.bottom + 120
+                     && r.left < vRect.right + 40 && r.right > vRect.left - 40;
+      return nearRightSide || insideVideo || justBelow;
+    }
+
+    // 1차: depth 0~6 까지만 (페이지 전역 X) — isThreeDotsBtn + 위치 가까운 것
     let container = video.parentElement;
-    for (let depth = 0; depth < 15 && container; depth++) {
+    for (let depth = 0; depth < 6 && container; depth++) {
       const btns = Array.from(container.querySelectorAll('button'));
-      const dotBtn = btns.find(b => isThreeDotsBtn(b));
+      // isThreeDotsBtn + 위치 필터 둘 다 통과
+      const dotBtn = btns.find(b => isThreeDotsBtn(b) && isNearVideo(b) && !isVideoControlBtn(b));
       if (dotBtn) {
         moreBtn = dotBtn;
-        console.log(LOG_PREFIX, `"..." 버튼 발견 (depth=${depth}): aria-label="${moreBtn.getAttribute('aria-label') || 'N/A'}"`);
+        const r = dotBtn.getBoundingClientRect();
+        console.log(LOG_PREFIX, `"..." 버튼 발견 (depth=${depth}, x=${Math.round(r.left)}, y=${Math.round(r.top)}): aria="${moreBtn.getAttribute('aria-label') || 'N/A'}"`);
         break;
       }
       container = container.parentElement;
     }
 
-    // 2차 폴백: 1차에서 못 찾으면, 전체 depth에서 비디오 컨트롤 제외 마지막 버튼
+    // 2차 폴백: depth 0~6, 위치 가까운 버튼 중 마지막 (영상 사이드 액션 패널의 맨 아래 = 보통 ...)
     if (!moreBtn) {
-      console.log(LOG_PREFIX, 'isThreeDotsBtn 매칭 실패 — 폴백 검색...');
+      console.log(LOG_PREFIX, 'isThreeDotsBtn 매칭 실패 — 위치기반 폴백 검색...');
       container = video.parentElement;
-      for (let depth = 0; depth < 15 && container; depth++) {
+      for (let depth = 0; depth < 6 && container; depth++) {
         const btns = Array.from(container.querySelectorAll('button'));
-        const iconBtns = btns.filter(b => {
+        // 영상 근처 + 비디오 컨트롤 아님 + 아이콘 버튼 (텍스트 짧음)
+        const nearIconBtns = btns.filter(b => {
+          if (!isNearVideo(b)) return false;
+          if (isVideoControlBtn(b)) return false;
           const t = (b.textContent || '').trim();
-          return t.length <= 20 && !b.querySelector('textarea, input');
+          if (t.length > 6) return false;  // 짧은 라벨/빈 아이콘만
+          if (b.querySelector('textarea, input')) return false;
+          return true;
         });
-        const nonControlBtns = iconBtns.filter(b => !isVideoControlBtn(b));
-        if (nonControlBtns.length >= 5) {
-          moreBtn = nonControlBtns[nonControlBtns.length - 1];
-          const btnTexts = nonControlBtns.map(b => {
-            const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 15);
+        if (nearIconBtns.length >= 3) {
+          // 사이드 액션 패널: ♥ X ↓ ⋯ ↑ — y좌표 기준 정렬 후, 다운로드 다음 (4번째 or 마지막에서 1~2번째)
+          nearIconBtns.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+          // 가장 아래에서 2번째 (보통 ⋯ 위치) 또는 마지막
+          moreBtn = nearIconBtns[nearIconBtns.length - 2] || nearIconBtns[nearIconBtns.length - 1];
+          const btnTexts = nearIconBtns.map(b => {
+            const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 10);
             return `"${label}"`;
           }).join(', ');
-          console.log(LOG_PREFIX, `폴백: 버튼 그룹 발견 (depth=${depth}, ${nonControlBtns.length}개): [${btnTexts}]`);
+          console.log(LOG_PREFIX, `폴백: 영상 근처 아이콘 버튼 ${nearIconBtns.length}개 발견 (depth=${depth}): [${btnTexts}]`);
           break;
         }
         container = container.parentElement;
@@ -2702,13 +2782,8 @@
       }
     }
 
-    // 그래도 못 찾으면 — UUID + 표준 도메인 패턴으로 fallback URL 즉시 생성 (extractVideoUrl 의 fallback 과 동일)
-    if (!hdUrl && !normalUrl && uuid) {
-      const guessUrl = `https://imagine-public.x.ai/imagine-public/share-videos/${uuid}.mp4`;
-      console.log(LOG_PREFIX, 'Video URL fallback (UUID-based):', guessUrl);
-      return guessUrl;
-    }
-
+    // ⚠️ UUID fallback 은 여기서 X — waitForVideoReady 가 가짜 URL 을 ready 로 오판함.
+    //    extractVideoUrl (단계 9, 진짜 URL 못 찾은 마지막 안전망) 에만 fallback 유지.
     if (hdUrl || normalUrl) {
       console.log(LOG_PREFIX, 'Video URL found:', (hdUrl || normalUrl).substring(0, 80));
     }
