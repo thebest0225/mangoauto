@@ -166,7 +166,7 @@
       // 일치하지 않으면 background 가 content_script 를 강제 재주입하여
       // 같은 탭에 두 인스턴스가 동시에 EXECUTE_PROMPT 를 처리해서
       // "409 Conflict" + "전송 실패" 연쇄 버그가 재발함.
-      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-04-19' });
+      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-05-28' });
       return false;
     }
   });
@@ -1368,10 +1368,19 @@
       return false;
     }
 
-    // ⚠️ singleClick — 제출 버튼은 클릭 1번만. (합성+native 이중 클릭 시 create 2번 발사 → 409 + 영상 중복)
-    MangoDom.simulateClick(btn, { singleClick: true });
+    // ⚠️ 제출 버튼은 **native click() 만 단독 발사**.
+    // 근본 원인: simulateClick({singleClick}) 도 사전에 mousedown/mouseup/pointerup 발사.
+    // 그록 React 가 onClick + onPointerUp(또는 form onSubmit) 양쪽 핸들러를 걸어두면
+    //   mouseup/pointerup → POST 1 + click → POST 2 → 영상 2개 생성 (두번째 task부터 빈발).
+    // → focus + scrollIntoView 만 수동으로 하고 el.click() 만 호출 → 합성 이벤트 0개.
+    try { btn.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (_) {}
+    try { btn.focus({ preventScroll: true }); } catch (_) {}
+    try { btn.click(); } catch (clickErr) {
+      // 만약 native click() 가 throw 하면 (extremely rare) 합성 click 1개로 폴백
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window, button: 0, detail: 1 }));
+    }
     window.__mangoauto_lastGrokSubmitMs = Date.now();  // 🔒 lockout 마킹
-    console.log(LOG_PREFIX, `Submit clicked: aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
+    console.log(LOG_PREFIX, `Submit clicked (native only): aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
     // ❌ Enter fallback 보강 제거 — 버튼 클릭 후 Enter 추가 발사하면 영상 2번 생성 (409 Conflict).
     //    URL 변경 / isAutoGenerating 감지는 비동기라 1초 후 false negative 가능.
     //    버튼 클릭 성공 = success. 실제 결과는 waitForResultPage 에서 검증.

@@ -1299,7 +1299,7 @@ async function ensureContentScript(tabId, platform) {
     return;
   }
 
-  const EXPECTED_VERSION = 'dbg-2026-04-19';
+  const EXPECTED_VERSION = 'dbg-2026-05-28';
   try {
     // Try pinging the content script first
     broadcastLog(`Content script PING 전송 (tab ${tabId})...`, 'info');
