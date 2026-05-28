@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "1.7.22",
+  "version": "1.7.23",
   "description": "Automate image/video generation on Grok and Flow with MangoHub integration",
   "permissions": [
     "cookies",
@@ -40,6 +40,13 @@
     }
   },
   "content_scripts": [
+    {
+      "matches": ["https://grok.com/*"],
+      "js": ["content/grok_dedupe.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
     {
       "matches": ["https://grok.com/*"],
       "js": ["lib/utils.js", "content/shared-dom.js", "content/grok.js"],

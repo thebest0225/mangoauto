@@ -166,7 +166,7 @@
       // 일치하지 않으면 background 가 content_script 를 강제 재주입하여
       // 같은 탭에 두 인스턴스가 동시에 EXECUTE_PROMPT 를 처리해서
       // "409 Conflict" + "전송 실패" 연쇄 버그가 재발함.
-      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-05-28' });
+      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-05-28b' });
       return false;
     }
   });
