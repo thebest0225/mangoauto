@@ -1299,7 +1299,23 @@ async function ensureContentScript(tabId, platform) {
     return;
   }
 
-  const EXPECTED_VERSION = 'dbg-2026-05-28b';
+  const EXPECTED_VERSION = 'dbg-2026-05-28c';
+
+  // ─── Grok: MAIN world dedupe (fetch/XHR 중복 POST 차단) — 기존 탭 reload 없이도 적용되도록 항상 주입 ───
+  // dedupe 스크립트는 자체 중복 가드 (window.__MANGOAUTO_GROK_DEDUPE_LOADED__) 있어 다회 주입 안전.
+  if (platform === 'grok') {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content/grok_dedupe.js'],
+        world: 'MAIN',
+      });
+      broadcastLog(`Grok dedupe (MAIN world) 주입 완료 (tab ${tabId})`, 'info');
+    } catch (dedupErr) {
+      broadcastLog(`Grok dedupe 주입 실패: ${dedupErr.message}`, 'warn');
+    }
+  }
+
   try {
     // Try pinging the content script first
     broadcastLog(`Content script PING 전송 (tab ${tabId})...`, 'info');

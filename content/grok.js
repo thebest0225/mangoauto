@@ -17,14 +17,22 @@
  */
 
 (() => {
-  // 🔒 중복 주입 가드 — background 의 ensureContentScript 가 버전 체크 실패로
-  // 이 스크립트를 두 번 executeScript 해도 두 번째 실행은 여기서 바로 종료.
-  // 두 인스턴스가 동시에 EXECUTE_PROMPT 를 받아 파일첨부·전송을 중복 수행하던 버그 방지.
-  if (window.__MANGOAUTO_GROK_LOADED__) {
-    console.log('[MangoAuto:Grok] 이미 로드됨 — 중복 주입 차단');
-    return;
-  }
-  window.__MANGOAUTO_GROK_LOADED__ = true;
+  // 🔒 인스턴스 토큰 시스템 — 항상 "최신 로드된 인스턴스만 활성".
+  // 이전 시스템 (__MANGOAUTO_GROK_LOADED__ 가드) 의 한계:
+  //   - 익스텐션 reload 시 isolated world 가 일시 초기화되거나
+  //   - executeScript 가 다른 컨텍스트로 주입될 때 가드가 무력화
+  //   → 결과: 여러 인스턴스가 동시 활성 → EXECUTE_PROMPT 를 모두 받아
+  //     attach/submit 중복 실행 → 영상 2~3개 생성, 생성중 재전송 시도.
+  // 새 시스템:
+  //   - 인스턴스마다 고유 토큰 생성, window 에 항상 덮어쓰기 (newest wins)
+  //   - 모든 message/timer/handler 가 isActive() 체크 — 본인 아니면 즉시 return
+  //   - 이전 인스턴스는 자연스럽게 silent 화됨 (변수/closure 살아있어도 작업 X)
+  const INSTANCE_KEY = '__MANGOAUTO_GROK_ACTIVE_INSTANCE_ID__';
+  const INSTANCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  window[INSTANCE_KEY] = INSTANCE_ID;  // 항상 덮어쓰기 — 가장 최근이 활성
+  function isActiveInstance() { return window[INSTANCE_KEY] === INSTANCE_ID; }
+
+  console.log('[MangoAuto:Grok] 인스턴스 토큰:', INSTANCE_ID, '(active=', isActiveInstance(), ')');
 
   const LOG_PREFIX = '[MangoAuto:Grok]';
   let isProcessing = false;
@@ -32,9 +40,10 @@
   let videoSettingsApplied = false; // 비디오 설정 메인 페이지 적용 여부
 
   // ─── Navigation Debug: 근본 원인 추적 ───
-  // URL 변경 감지 (500ms 폴링)
+  // URL 변경 감지 (500ms 폴링) — 비활성 인스턴스는 polling skip
   let _lastUrl = window.location.href;
   setInterval(() => {
+    if (!isActiveInstance()) return;  // 새 인스턴스에 자리 넘김 — silent
     const now = window.location.href;
     if (now !== _lastUrl) {
       console.error(LOG_PREFIX, `🚨 URL CHANGED: ${_lastUrl} → ${now}`);
@@ -44,8 +53,9 @@
     }
   }, 500);
 
-  // 모든 클릭 이벤트 캡처 (작업 중)
+  // 모든 클릭 이벤트 캡처 (작업 중) — 비활성 인스턴스는 logging skip
   document.addEventListener('click', (e) => {
+    if (!isActiveInstance()) return;
     if (!isProcessing) return;
     const el = e.target;
     const tag = el.tagName;
@@ -120,6 +130,13 @@
 
   // ─── Message Handler ───
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // 🔒 비활성 인스턴스는 어떤 메시지도 처리하지 않음. 새 인스턴스가 모두 받음.
+    //    (Chrome 은 모든 등록된 listener 에게 메시지를 broadcast — 따라서 우리가
+    //     listener 단위로 활성 체크 안 하면 여러 인스턴스가 동시 실행됨.)
+    if (!isActiveInstance()) {
+      console.log(LOG_PREFIX, `[inactive ${INSTANCE_ID.slice(-6)}] 메시지 무시: ${msg.type}`);
+      return false;
+    }
     if (msg.type === 'EXECUTE_PROMPT') {
       showToast(`EXECUTE_PROMPT 수신! mode=${msg.settings?._mode}, hasImage=${!!msg.sourceImageDataUrl}`, 'info');
 
@@ -166,7 +183,7 @@
       // 일치하지 않으면 background 가 content_script 를 강제 재주입하여
       // 같은 탭에 두 인스턴스가 동시에 EXECUTE_PROMPT 를 처리해서
       // "409 Conflict" + "전송 실패" 연쇄 버그가 재발함.
-      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-05-28b' });
+      sendResponse({ ok: true, site: 'grok', version: 'dbg-2026-05-28c' });
       return false;
     }
   });
@@ -3042,6 +3059,7 @@
   // ─── Popup Dismissal ───
   // 작업 중에는 비활성화 (결과 페이지의 "Close" 등을 잘못 클릭하여 페이지 이동 방지)
   setInterval(() => {
+    if (!isActiveInstance()) return;  // 비활성 인스턴스는 dismissal 도 skip (중복 클릭 방지)
     if (isProcessing) return;
     ['Dismiss', 'Close', 'Skip', 'No thanks', 'Maybe later'].forEach(text => {
       const btn = MangoDom.findButtonByText(text);
@@ -3049,6 +3067,8 @@
     });
   }, 8000);
 
-  console.log(LOG_PREFIX, 'Content script loaded (with video settings & improved image attach)');
-  showToast('Content script 로드 완료!', 'success');
+  console.log(LOG_PREFIX, `Content script loaded (instance ${INSTANCE_ID.slice(-6)}, active=${isActiveInstance()})`);
+  if (isActiveInstance()) {
+    showToast(`Content script 로드 완료 (instance ${INSTANCE_ID.slice(-6)})`, 'success');
+  }
 })();
