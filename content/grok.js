@@ -2542,6 +2542,21 @@
       // aria-label / title 기반 (다국어)
       const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
       const title = (btn.getAttribute('title') || '').toLowerCase();
+      // 🚫 BLACKLIST — 비슷한 SVG 패턴 (작은 사각 + viewBox 24 + 2~4 shapes) 을 가진
+      //    다른 액션 버튼들 (공유/좋아요/다운로드/팔로우/X/북마크 등) 을 명시적 제외.
+      //    이전 버그: "공유 링크 만들기" 가 SVG 휴리스틱 폴백 (lines 2567-2574) 에 걸려 ... 로 잘못 인식.
+      const excludeKeys = [
+        'share', 'copy', 'like', 'download', 'upload', 'follow', 'unfollow',
+        'comment', 'reply', 'retweet', 'repost', 'bookmark', 'pin', 'save',
+        'twitter', 'x ', 'post to x',
+        '공유', '복사', '좋아요', '다운로드', '업로드', '팔로우', '댓글',
+        '북마크', '저장', '게시', '내보내기',
+        '공유 링크', 'share link', '링크 복사',
+        // 태국어/베트남어 같은 액션
+        'แชร์', 'คัดลอก', 'ดาวน์โหลด', 'ถูกใจ',
+        'chia sẻ', 'sao chép', 'tải xuống', 'thích',
+      ];
+      if (excludeKeys.some(k => ariaLabel.includes(k) || title.includes(k))) return false;
       const moreKeys = [
         'more', 'options', 'additional', 'menu',
         '더보기', '옵션', '추가', '메뉴',
@@ -2609,31 +2624,43 @@
       container = container.parentElement;
     }
 
-    // 2차 폴백: depth 0~6, 위치 가까운 버튼 중 마지막 (영상 사이드 액션 패널의 맨 아래 = 보통 ...)
+    // 2차 폴백: depth 0~6, 위치 가까운 버튼 중 BLACKLIST 제외 후 가장 아래 (= ⋯ 위치)
+    // 현재 그록 사이드 패널 (top→bottom): ❤️ Like → 𝕏 X → ⬇️ Download → ⬆️ Share → ⋯ More
+    // ⋯ 가 패널 맨 아래 — 따라서 BLACKLIST 제외 후 마지막 y-좌표 버튼 = ⋯ 확률 가장 높음.
+    function isBlacklistedIcon(b) {
+      const al = (b.getAttribute('aria-label') || '').toLowerCase();
+      const tt = (b.getAttribute('title') || '').toLowerCase();
+      const blackKeys = [
+        'share', 'copy', 'like', 'download', 'upload', 'follow', 'unfollow',
+        'comment', 'reply', 'bookmark', 'pin', 'save', 'twitter', 'post to x',
+        '공유', '복사', '좋아요', '다운로드', '업로드', '팔로우', '북마크', '저장', '링크 복사',
+      ];
+      return blackKeys.some(k => al.includes(k) || tt.includes(k));
+    }
     if (!moreBtn) {
       console.log(LOG_PREFIX, 'isThreeDotsBtn 매칭 실패 — 위치기반 폴백 검색...');
       container = video.parentElement;
       for (let depth = 0; depth < 6 && container; depth++) {
         const btns = Array.from(container.querySelectorAll('button'));
-        // 영상 근처 + 비디오 컨트롤 아님 + 아이콘 버튼 (텍스트 짧음)
+        // 영상 근처 + 비디오 컨트롤 아님 + BLACKLIST 제외 + 아이콘 버튼 (텍스트 짧음)
         const nearIconBtns = btns.filter(b => {
           if (!isNearVideo(b)) return false;
           if (isVideoControlBtn(b)) return false;
+          if (isBlacklistedIcon(b)) return false;  // 공유/좋아요/다운로드 등 제외
           const t = (b.textContent || '').trim();
-          if (t.length > 6) return false;  // 짧은 라벨/빈 아이콘만
+          if (t.length > 6) return false;
           if (b.querySelector('textarea, input')) return false;
           return true;
         });
-        if (nearIconBtns.length >= 3) {
-          // 사이드 액션 패널: ♥ X ↓ ⋯ ↑ — y좌표 기준 정렬 후, 다운로드 다음 (4번째 or 마지막에서 1~2번째)
+        if (nearIconBtns.length >= 1) {
+          // BLACKLIST 제외 후 마지막 y-좌표 = ⋯ (사이드 패널 최하단)
           nearIconBtns.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-          // 가장 아래에서 2번째 (보통 ⋯ 위치) 또는 마지막
-          moreBtn = nearIconBtns[nearIconBtns.length - 2] || nearIconBtns[nearIconBtns.length - 1];
+          moreBtn = nearIconBtns[nearIconBtns.length - 1];
           const btnTexts = nearIconBtns.map(b => {
             const label = b.getAttribute('aria-label') || (b.textContent || '').trim().substring(0, 10);
             return `"${label}"`;
           }).join(', ');
-          console.log(LOG_PREFIX, `폴백: 영상 근처 아이콘 버튼 ${nearIconBtns.length}개 발견 (depth=${depth}): [${btnTexts}]`);
+          console.log(LOG_PREFIX, `폴백: 영상 근처 BLACKLIST 제외 ${nearIconBtns.length}개 후보 (depth=${depth}): [${btnTexts}] → 최하단 선택`);
           break;
         }
         container = container.parentElement;
