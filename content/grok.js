@@ -2823,8 +2823,16 @@
         if (upscaleItem) break;
         const menus = document.querySelectorAll(sel);
         for (const menu of menus) {
-          if (menu.closest('[data-variant="sidebar"]') || menu.closest('[data-side]')) continue;
-          const items = menu.querySelectorAll('button, [role="menuitem"], [role="option"], div[role="button"], span');
+          // 🚫 사이드바만 제외 — 이전엔 data-side 도 필터했으나 그게 모든 Radix popper (정상 dropdown 포함) 를
+          //   잡아 메뉴 항목을 못 찾았음. 이제 data-variant=sidebar 또는 data-side=left/right 만 제외.
+          if (menu.closest('[data-variant="sidebar"]')) continue;
+          const ds = menu.closest('[data-side]');
+          if (ds) {
+            const side = (ds.getAttribute('data-side') || '').toLowerCase();
+            if (side === 'left' || side === 'right') continue;  // 사이드바 추정
+            // top/bottom 은 dropdown — 통과
+          }
+          const items = menu.querySelectorAll('button, [role="menuitem"], [role="option"], div[role="button"], span, div');
           for (const el of items) {
             const text = (el.textContent || '').trim().toLowerCase();
             if (text.length > 30) continue;
@@ -2854,6 +2862,34 @@
             }
           }
           if (upscaleItem) break;
+        }
+      }
+
+      // 방법 3 (최후 폴백): 화면 어디든 "업스케일" / "upscale" 텍스트 찾기.
+      //   메뉴 구조 어떻든, 화면에 보이는 짧은 텍스트(<30 chars) 중 키워드 포함하는 클릭 가능 요소.
+      //   다른 페이지에 'upscale' 이 있을 가능성 낮음 (그록의 메뉴에서만 등장).
+      if (!upscaleItem) {
+        const allEls = document.querySelectorAll('button, [role="menuitem"], [role="option"], div[role="button"], div, span, li, a');
+        for (const el of allEls) {
+          // 자식이 있으면 자식 텍스트는 자식에서 잡힘 — 잎(leaf) 또는 짧은 텍스트만 매치
+          const own = (el.textContent || '').trim();
+          if (own.length === 0 || own.length > 30) continue;
+          const text = own.toLowerCase();
+          let matched = false;
+          for (const kw of upscaleKeywords) {
+            if (text.includes(kw)) { matched = true; break; }
+          }
+          if (!matched) continue;
+          // 보이는 요소만 (visibility + size 체크)
+          const r = el.getBoundingClientRect();
+          if (r.width < 4 || r.height < 4) continue;
+          const cs = window.getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+          // 사이드바 안이면 건너뜀
+          if (el.closest('[data-variant="sidebar"], aside')) continue;
+          upscaleItem = el;
+          console.log(LOG_PREFIX, `업스케일 항목 발견 (전체 검색 폴백): "${own}" (${el.tagName})`);
+          break;
         }
       }
 
