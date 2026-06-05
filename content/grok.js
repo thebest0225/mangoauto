@@ -2923,10 +2923,56 @@
     }
 
     // Step 4: 업스케일 클릭
+    // 🔑 found 요소가 span/icon 일 수 있어 — 실제 onClick 등록된 clickable 부모로 escalate.
+    //    "📐 업스케일" 같은 구조에서 안쪽 span 만 클릭하면 React handler 안 터짐.
+    function resolveClickable(el) {
+      if (!el) return null;
+      let cur = el;
+      // 최대 5단계 위로 — clickable container 후보 찾기
+      for (let i = 0; i < 5 && cur; i++) {
+        const tag = cur.tagName;
+        if (tag === 'BUTTON' || tag === 'A') return cur;
+        const role = cur.getAttribute && cur.getAttribute('role');
+        if (role === 'menuitem' || role === 'button' || role === 'option') return cur;
+        // onclick 핸들러 있으면 (정적 속성만 — React listener 는 못 봄)
+        if (cur.onclick) return cur;
+        // cursor: pointer 면 클릭 가능 추정
+        try {
+          const cs = window.getComputedStyle(cur);
+          if (cs.cursor === 'pointer') return cur;
+        } catch (_) {}
+        cur = cur.parentElement;
+      }
+      return el;  // 못 찾으면 원본
+    }
+    const clickTarget = resolveClickable(upscaleItem);
+    if (clickTarget !== upscaleItem) {
+      console.log(LOG_PREFIX, `업스케일 클릭 대상 변경: ${upscaleItem.tagName} → ${clickTarget.tagName} (role=${clickTarget.getAttribute('role') || '-'})`);
+    }
     console.log(LOG_PREFIX, 'Clicking upscale menu item...');
     showToast('업스케일 시작...', 'info');
-    MangoDom.simulateClick(upscaleItem);
-    await delay(3000);
+    // 🛡️ React menuitem 은 isTrusted 이벤트만 받기도 함 — native .click() 우선 시도.
+    //    .click() 실패 시 simulateClick 풀 시퀀스 폴백.
+    try {
+      clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (_) {}
+    try { clickTarget.focus({ preventScroll: true }); } catch (_) {}
+    let nativeClickWorked = false;
+    try {
+      clickTarget.click();
+      nativeClickWorked = true;
+      console.log(LOG_PREFIX, 'Native .click() 호출 완료');
+    } catch (e) {
+      console.warn(LOG_PREFIX, 'Native .click() 실패:', e && e.message);
+    }
+    // 메뉴가 닫혔는지 짧게 체크 (메뉴 닫힘 = 클릭 먹힘 신호)
+    await delay(400);
+    const menuStillOpen = document.querySelector('[role="menu"], [data-radix-popper-content-wrapper]');
+    if (menuStillOpen) {
+      console.log(LOG_PREFIX, '메뉴 아직 열려있음 — simulateClick 폴백 시도');
+      MangoDom.simulateClick(clickTarget);
+    }
+    await delay(2600);
 
     // Step 5: HD 비디오 대기 (_hd.mp4 또는 새 비디오 URL)
     const start = Date.now();
