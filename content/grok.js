@@ -2886,10 +2886,18 @@
           .replace(/[​-\u200F\u202A-\u202E⁠-⁯]/g, '')  // zero-width / bidi 제어
           .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')  // 이모지
           .replace(/[•·▶◆◇■□●○★☆▲▽→←↑↓⌘⌥⌃≡⋯…]/g, '');  // 흔한 메뉴 deco
-        // 남은 문자가 8자 이상이면 다른 메뉴 항목이 섞인 것 — REJECT.
-        // (단, "동영상" 같은 자연스러운 prefix 는 < 8자라 통과)
-        if (meaningful.length > 8) return null;
-        return kwMatched;
+        // 🔑 LEAF 여부 + meaningful 길이 조합:
+        //   A. children 없음 → leaf (text 노드만) — 통과
+        //   B. meaningful 길이 0 → icon+키워드만 — 통과
+        //   C. children 있고 meaningful > 0 → container (다른 항목 포함) — REJECT
+        // 예) 업스케일 (children=0) → A ✅
+        //     📐 업스케일 (children=1, mean=0) → B ✅
+        //     동영상 업스케일 (children=0) → A ✅
+        //     기능연장업스케일 (children=3+, mean="기능연장" 4자) → C ❌
+        const childCount = el.children ? el.children.length : 0;
+        if (childCount === 0) return kwMatched;        // A: leaf
+        if (meaningful.length === 0) return kwMatched; // B: 키워드+icon만
+        return null;                                    // C: container REJECT
       }
 
       const menuSelectors = [
