@@ -2364,21 +2364,36 @@
     return false;
   }
 
+  // 그록이 720p 한도 도달 시 자동으로 480p 로 전환했는지 감지.
+  function detectAutoSwitchTo480p() {
+    // 화면 상단/하단 toast 형태로 "480p로 전환했습니다" / "switched to 480p" 메시지 등장.
+    try {
+      const all = document.body.innerText || '';
+      if (/480p\s*로?\s*전환|switched to 480p|480p 로 변경/i.test(all)) return true;
+    } catch (_) {}
+    return false;
+  }
+
   async function waitForVideoReady(timeout = 300000) {
-    // 해상도에 따른 최소 대기 — 사용자 보고: 480p 1분 내, 720p 1~1.5분, 1080p 1.5~2분.
-    //   설정에서 해상도 읽어 적절히. 못 읽으면 60초 안전 디폴트.
-    let MIN_WAIT_MS = 60000;
+    // 해상도별 최소 대기 (사용자 실측 2026-06-05):
+    //   480p: ~30-35초 → 20초 후부터 완성 감지 시작
+    //   720p: ~50-60초 → 40초 후
+    //   1080p: ~80-90초 → 60초 후
+    // 그록이 720p 한도 도달 → 480p 자동 전환한 경우엔 480p 기준으로 동작.
+    let MIN_WAIT_MS = 40000;
+    let resTier = '720p';
     try {
       const _res = (window.__mangoauto_currentSettings?.grok?.videoResolution || '720p').toLowerCase();
-      if (_res.includes('480')) MIN_WAIT_MS = 35000;        // 480p: 35초
-      else if (_res.includes('720')) MIN_WAIT_MS = 60000;   // 720p: 60초
-      else if (_res.includes('1080')) MIN_WAIT_MS = 90000;  // 1080p: 90초
+      if (_res.includes('480'))      { MIN_WAIT_MS = 20000; resTier = '480p'; }
+      else if (_res.includes('720')) { MIN_WAIT_MS = 40000; resTier = '720p'; }
+      else if (_res.includes('1080')){ MIN_WAIT_MS = 60000; resTier = '1080p'; }
     } catch (_) {}
-    showToast(`영상 생성 대기 중... (최소 ${Math.round(MIN_WAIT_MS/1000)}초)`, 'info');
+    showToast(`영상 생성 대기 중... (최소 ${Math.round(MIN_WAIT_MS/1000)}초, ${resTier})`, 'info');
     await delay(5000);  // 초기 5초
 
     const start = Date.now();
     const checkInterval = 3000;
+    let autoSwitched480 = false;  // 그록이 480p 로 강제 전환했는지
 
     let idleSinceMs = null;  // 진행 중 신호 없이 + result 페이지도 아닌 idle 시작 시점
     while (Date.now() - start < timeout) {
@@ -2388,13 +2403,19 @@
       const elapsed = Date.now() - start;
       const elapsedSec = Math.round(elapsed / 1000);
 
+      // 🔑 그록 자동 480p 전환 감지 — 한 번만 적용
+      if (!autoSwitched480 && resTier !== '480p' && detectAutoSwitchTo480p()) {
+        autoSwitched480 = true;
+        MIN_WAIT_MS = 20000;
+        console.log(LOG_PREFIX, `그록이 ${resTier} → 480p 자동 전환 감지 — MIN_WAIT 20초로 단축`);
+        showToast(`그록 자동 480p 전환 감지 → 최소 20초로 단축`, 'info');
+      }
+
       // 🔑 검열/실패 자동 감지: 영상 생성 시작 후 메인 페이지로 강제 이동되면 검열 또는 실패
-      //   (그록은 검열 시 result 페이지 안 만들고 main 으로 되돌림)
       if (elapsed > 15000 && isOnMainPage()) {
-        // 15초 이상 지났는데 result 페이지 아닌 main 페이지 = 검열/실패 가능성
         console.warn(LOG_PREFIX, `메인 페이지로 강제 이동됨 (${elapsedSec}초 경과) — 검열/실패 추정`);
         showToast('영상 생성 실패 (메인 페이지 복귀) — 검열/오류 추정', 'warn');
-        return 'moderated';  // 다음 큐로 빠르게 진행
+        return 'moderated';
       }
 
       // 진행 중 명확 신호가 있으면 무조건 계속 대기
@@ -2404,7 +2425,6 @@
       if (!stillGenerating && isOnResultPage()) {
         if (idleSinceMs === null) idleSinceMs = Date.now();
         else if (Date.now() - idleSinceMs > 90000 && elapsed > 60000) {
-          // 90초 idle + 최소 1분 경과 → video 도 없으면 실패
           const vurl = getVideoUrl();
           if (!vurl) {
             console.warn(LOG_PREFIX, `idle 90초 + video 없음 (${elapsedSec}초) — 실패로 판단`);
@@ -2413,29 +2433,46 @@
           }
         }
       } else {
-        idleSinceMs = null;  // 진행 중이면 idle 카운터 리셋
+        idleSinceMs = null;
       }
 
+      // 🔑 EARLY EXIT — 모든 강한 완성 신호가 있으면 MIN_WAIT 무시하고 즉시 반환:
+      //    - 진행 신호 없음 + 비-blob assets.grok.com URL + duration > 0 + readyState >= 3 (Future)
+      //    이 조건은 "비디오가 실제로 재생 준비 완료" 를 의미 → 더 기다릴 필요 없음.
+      if (!stillGenerating) {
+        const allVideos = document.querySelectorAll('video');
+        for (const v of allVideos) {
+          const rect = v.getBoundingClientRect();
+          if (rect.width < 100 || rect.height < 60) continue;
+          const src = v.src || v.currentSrc || '';
+          // assets.grok.com 같은 영구 URL (blob: 제외) — 진짜 완성된 파일
+          if (!src || src.startsWith('blob:')) continue;
+          if (!/^https?:\/\//.test(src)) continue;
+          if (!v.duration || v.duration <= 0 || isNaN(v.duration)) continue;
+          if (v.readyState < 3) continue;  // FUTURE 이상 — 충분히 로드됨
+          showToast(`영상 완성! (${elapsedSec}초, dur=${v.duration.toFixed(1)}s, 강한 신호)`, 'success');
+          await delay(1500);
+          return 'ready';
+        }
+      }
+
+      // 일반 완성 판정 — 최소 대기 경과 후
       if (!stillGenerating && elapsed >= MIN_WAIT_MS) {
-        // 진행 중 신호 없음 + 최소 1분 경과 → 진짜 video[src] 검사
         const videoUrl = getVideoUrl();
         if (videoUrl) {
-          // 추가 검증: 진짜 완성된 video 인지 (duration > 0 + readyState >= 2 + visible)
           const allVideos = document.querySelectorAll('video');
           let completedVideo = null;
           for (const v of allVideos) {
             const rect = v.getBoundingClientRect();
             if (rect.width < 100 || rect.height < 60) continue;
-            // duration 0 / NaN → 아직 로딩 중. duration > 0 = 메타데이터 로드됨 = 완성.
             if (!v.duration || v.duration <= 0 || isNaN(v.duration)) continue;
-            // readyState 0=Empty, 1=Metadata, 2=Current, 3=Future, 4=Enough. 2 이상이면 재생 가능.
             if (v.readyState < 2) continue;
             completedVideo = v;
             break;
           }
           if (completedVideo) {
             showToast(`영상 완성! (${elapsedSec}초, dur=${completedVideo.duration.toFixed(1)}s)`, 'success');
-            await delay(2000);  // 로딩 안정화
+            await delay(2000);
             return 'ready';
           }
         }
@@ -2444,7 +2481,7 @@
       // 진행 상태 로그 (15초마다)
       if (elapsedSec > 0 && elapsedSec % 15 === 0) {
         const stat = stillGenerating ? '생성 중' : '대기';
-        showToast(`영상 ${stat} (${elapsedSec}초 경과 / 최소 60초)`, 'info');
+        showToast(`영상 ${stat} (${elapsedSec}초 경과 / 최소 ${Math.round(MIN_WAIT_MS/1000)}초)`, 'info');
       }
 
       await delay(checkInterval);
