@@ -2849,6 +2849,49 @@
       await delay(1200);
 
       // Step 3: "동영상 업스케일" 메뉴 항목 찾기
+      //
+      // 🔑 STRATEGY: 정확한 LEAF 매치 우선.
+      //    이전 버그: "기능연장업스케일" (메뉴 container 의 합쳐진 textContent) 가
+      //    text.includes('업스케일') 에 걸려 잘못된 부모 div 를 잡음.
+      //
+      //    fix: textContent 가 "키워드만 (icon/공백 정도 허용) 들어있는" 짧은 요소만 인정.
+      //    예: "업스케일" (4자), "📐 업스케일" (6자), "동영상 업스케일" (8자) ← OK
+      //         "기능연장업스케일" (9자) ← 다른 항목 텍스트 섞임 → REJECT.
+
+      function isCleanLeafMatch(el, keywords) {
+        const own = (el.textContent || '').trim();
+        if (own.length === 0) return null;
+        const lower = own.toLowerCase();
+        // 키워드 매치 확인
+        let kwMatched = null;
+        for (const kw of keywords) {
+          if (lower.includes(kw)) { kwMatched = kw; break; }
+        }
+        if (!kwMatched) return null;
+        // 🚫 다른 메뉴 항목 텍스트와 합쳐진 컨테이너 거부:
+        //    own 에서 키워드 제거 + 공백/특수문자 제거 → 남는 의미있는 문자열 (한글/영문) 길이 체크.
+        //    "기능연장업스케일" - "업스케일" = "기능연장" (4자 한글) → REJECT.
+        //    "📐 업스케일"    - "업스케일" = "📐 " → 정리 후 빈 문자열 → OK.
+        //    "동영상 업스케일" - "업스케일" = "동영상 " → "동영상" 3자 → OK (앞 prefix 허용).
+        let remaining = own;
+        // case-sensitive replace (한글) 와 case-insensitive replace (영문) 둘 다 처리
+        if (/[a-z]/i.test(kwMatched)) {
+          remaining = remaining.replace(new RegExp(kwMatched, 'gi'), '');
+        } else {
+          remaining = remaining.split(kwMatched).join('');
+        }
+        // 이모지 / 특수문자 / 공백 제거 후 의미있는 문자만 남기기
+        const meaningful = remaining
+          .replace(/\s+/g, '')  // 공백류 (모든 unicode whitespace)
+          .replace(/[​-\u200F\u202A-\u202E⁠-⁯]/g, '')  // zero-width / bidi 제어
+          .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')  // 이모지
+          .replace(/[•·▶◆◇■□●○★☆▲▽→←↑↓⌘⌥⌃≡⋯…]/g, '');  // 흔한 메뉴 deco
+        // 남은 문자가 8자 이상이면 다른 메뉴 항목이 섞인 것 — REJECT.
+        // (단, "동영상" 같은 자연스러운 prefix 는 < 8자라 통과)
+        if (meaningful.length > 8) return null;
+        return kwMatched;
+      }
+
       const menuSelectors = [
         '[role="menu"]',
         '[role="listbox"]',
@@ -2860,72 +2903,69 @@
         if (upscaleItem) break;
         const menus = document.querySelectorAll(sel);
         for (const menu of menus) {
-          // 🚫 사이드바만 제외 — 이전엔 data-side 도 필터했으나 그게 모든 Radix popper (정상 dropdown 포함) 를
-          //   잡아 메뉴 항목을 못 찾았음. 이제 data-variant=sidebar 또는 data-side=left/right 만 제외.
           if (menu.closest('[data-variant="sidebar"]')) continue;
           const ds = menu.closest('[data-side]');
           if (ds) {
             const side = (ds.getAttribute('data-side') || '').toLowerCase();
-            if (side === 'left' || side === 'right') continue;  // 사이드바 추정
-            // top/bottom 은 dropdown — 통과
+            if (side === 'left' || side === 'right') continue;
           }
-          const items = menu.querySelectorAll('button, [role="menuitem"], [role="option"], div[role="button"], span, div');
-          for (const el of items) {
-            const text = (el.textContent || '').trim().toLowerCase();
-            if (text.length > 30) continue;
-            for (const kw of upscaleKeywords) {
-              if (text.includes(kw)) {
+          // 🔑 menuitem 우선, 그 다음 button/option/role=button. 일반 div/span 은 안 씀
+          //    (일반 div 는 container 잡아 textContent 가 합쳐짐).
+          const itemSelectors = [
+            '[role="menuitem"]',
+            'button',
+            '[role="option"]',
+            'div[role="button"]',
+            'li',
+            'a',
+          ];
+          for (const itemSel of itemSelectors) {
+            if (upscaleItem) break;
+            const items = menu.querySelectorAll(itemSel);
+            for (const el of items) {
+              const kw = isCleanLeafMatch(el, upscaleKeywords);
+              if (kw) {
                 upscaleItem = el;
-                console.log(LOG_PREFIX, `업스케일 항목 발견 (메뉴 내): "${text.substring(0, 30)}" (${el.tagName})`);
+                const txt = (el.textContent || '').trim();
+                console.log(LOG_PREFIX, `업스케일 항목 발견 (selector="${itemSel}"): "${txt.substring(0, 30)}" (${el.tagName})`);
                 break;
               }
             }
-            if (upscaleItem) break;
           }
-          if (upscaleItem) break;
         }
       }
 
-      // 방법 2: 전체에서 [role="menuitem"]만
+      // 방법 2 (폴백 1): 전체에서 [role="menuitem"] — 메뉴 selector 가 매치 안 됐을 경우
       if (!upscaleItem) {
         const menuItems = document.querySelectorAll('[role="menuitem"]');
         for (const el of menuItems) {
-          const text = (el.textContent || '').trim().toLowerCase();
-          for (const kw of upscaleKeywords) {
-            if (text.includes(kw)) {
-              upscaleItem = el;
-              console.log(LOG_PREFIX, `업스케일 항목 발견 (menuitem): "${text.substring(0, 30)}"`);
-              break;
-            }
+          const kw = isCleanLeafMatch(el, upscaleKeywords);
+          if (kw) {
+            upscaleItem = el;
+            const txt = (el.textContent || '').trim();
+            console.log(LOG_PREFIX, `업스케일 항목 발견 (menuitem 폴백): "${txt.substring(0, 30)}"`);
+            break;
           }
-          if (upscaleItem) break;
         }
       }
 
-      // 방법 3 (최후 폴백): 화면 어디든 "업스케일" / "upscale" 텍스트 찾기.
-      //   메뉴 구조 어떻든, 화면에 보이는 짧은 텍스트(<30 chars) 중 키워드 포함하는 클릭 가능 요소.
-      //   다른 페이지에 'upscale' 이 있을 가능성 낮음 (그록의 메뉴에서만 등장).
+      // 방법 3 (폴백 2): 화면 어디든 LEAF 매치. 자식 노드 X, 텍스트 깨끗한 요소만.
       if (!upscaleItem) {
-        const allEls = document.querySelectorAll('button, [role="menuitem"], [role="option"], div[role="button"], div, span, li, a');
+        const allEls = document.querySelectorAll('button, [role="menuitem"], [role="option"], [role="button"], li, a, span, div');
         for (const el of allEls) {
-          // 자식이 있으면 자식 텍스트는 자식에서 잡힘 — 잎(leaf) 또는 짧은 텍스트만 매치
-          const own = (el.textContent || '').trim();
-          if (own.length === 0 || own.length > 30) continue;
-          const text = own.toLowerCase();
-          let matched = false;
-          for (const kw of upscaleKeywords) {
-            if (text.includes(kw)) { matched = true; break; }
-          }
-          if (!matched) continue;
-          // 보이는 요소만 (visibility + size 체크)
+          // 자식 element 가 많으면 container 일 가능성 — 건너뜀
+          if (el.children.length > 2) continue;
+          const kw = isCleanLeafMatch(el, upscaleKeywords);
+          if (!kw) continue;
+          // 보이는 요소만
           const r = el.getBoundingClientRect();
           if (r.width < 4 || r.height < 4) continue;
           const cs = window.getComputedStyle(el);
           if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
-          // 사이드바 안이면 건너뜀
           if (el.closest('[data-variant="sidebar"], aside')) continue;
           upscaleItem = el;
-          console.log(LOG_PREFIX, `업스케일 항목 발견 (전체 검색 폴백): "${own}" (${el.tagName})`);
+          const txt = (el.textContent || '').trim();
+          console.log(LOG_PREFIX, `업스케일 항목 발견 (전체 LEAF 폴백): "${txt}" (${el.tagName})`);
           break;
         }
       }
