@@ -315,11 +315,14 @@
         let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
-        // Step 10: 업스케일 시도
+        // Step 10: 업스케일 시도 (timeout 60초 — 사용자 정책 2026-06-07)
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('Step 10: 업스케일 시도...', 'info');
-          const upscaled = await tryUpscaleVideo(timeoutMs);
-          if (upscaled) {
+          const upscaled = await tryUpscaleVideo(60000);
+          if (upscaled === 'already-hd') {
+            console.log(LOG_PREFIX, '이미 720p HD — 업스케일 스킵, 현재 URL 그대로 사용');
+            // videoUrl 그대로 유지 — 추가 URL 추출 불필요
+          } else if (upscaled) {
             const hdUrl = await extractVideoUrl();
             if (hdUrl) videoUrl = hdUrl;
           }
@@ -374,11 +377,13 @@
         let videoUrl = await extractVideoUrl();
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
-        // Step 4: 업스케일
+        // Step 4: 업스케일 (timeout 60초 — 사용자 정책 2026-06-07)
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('480p 감지 - 업스케일 시도...', 'info');
-          const upscaled = await tryUpscaleVideo(timeoutMs);
-          if (upscaled) {
+          const upscaled = await tryUpscaleVideo(60000);
+          if (upscaled === 'already-hd') {
+            console.log(LOG_PREFIX, '이미 720p HD — 업스케일 스킵');
+          } else if (upscaled) {
             const hdUrl = await extractVideoUrl();
             if (hdUrl) videoUrl = hdUrl;
           }
@@ -2497,9 +2502,11 @@
   }
 
   // ─── 480p → 720p Upscale (... 메뉴 → 동영상 업스케일) ───
+  // 사용자 정책 (2026-06-07): 업스케일 자체는 ~30-50초에 끝나므로 timeout 60초로 충분.
+  // 또한 720p 로 만들어진 영상은 메뉴에 "업스케일" 항목 자체가 없으므로 — 그 경우 'already-hd' 반환.
   // 결과 페이지 구조: 비디오 오른쪽에 세로 아이콘 버튼들, 맨 아래가 "..." 버튼
   // "..." 클릭 → 팝업 메뉴: 좋아요 / 싫어요 / 동영상 업스케일
-  async function tryUpscaleVideo(timeout = 300000) {
+  async function tryUpscaleVideo(timeout = 60000) {  // 5분 → 1분 (실제 업스케일 ~30-50초)
     const upscaleKeywords = ['업스케일', 'upscale'];
 
     // Step 1: 비디오 요소 등장 대기 (페이지 전환 후 DOM에 video 태그 로드 시간 필요)
@@ -2988,6 +2995,14 @@
       const popups = document.querySelectorAll(
         '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper], div[class*="popover"], div[class*="dropdown"], div[class*="tooltip"]'
       );
+
+      // 🔑 menu open 여부 + 다른 메뉴 항목 존재 여부로 판단:
+      //   - menu 자체가 안 열린 경우: 팝업/메뉴 요소 0개 → "..." 클릭 실패 → 실패 반환
+      //   - menu 는 열렸는데 "업스케일" 만 없는 경우: 다른 항목 (연장/문제 신고/비디오 삭제 등) 존재
+      //     → 그록이 이미 720p (HD) 로 생성 → 업스케일 불필요 → 'already-hd' 로 성공 처리
+      let menuItemsFound = 0;
+      const knownOtherItems = ['연장', 'extend', '문제 신고', 'report', '비디오 삭제', 'delete', 'normal', 'normal'];
+      let hasKnownItems = false;
       if (popups.length > 0) {
         popups.forEach((popup, pi) => {
           console.log(LOG_PREFIX, `  popup[${pi}]: ${popup.tagName}.${(popup.className || '').substring(0, 30)}`);
@@ -2995,6 +3010,11 @@
             const t = (el.textContent || '').trim();
             if (t && t.length < 40 && el.children.length === 0) {
               console.log(LOG_PREFIX, `    [${ei}] ${el.tagName}: "${t}"`);
+              menuItemsFound++;
+              const tl = t.toLowerCase();
+              for (const k of knownOtherItems) {
+                if (tl.includes(k)) { hasKnownItems = true; break; }
+              }
             }
           });
         });
@@ -3003,6 +3023,14 @@
       }
       document.body.click();
       await delay(300);
+
+      // 메뉴는 열렸는데 업스케일만 없음 → 이미 HD → 'already-hd' 신호 (성공)
+      if (hasKnownItems && menuItemsFound >= 2) {
+        console.log(LOG_PREFIX, `메뉴 열림 + 다른 항목 ${menuItemsFound}개 발견 / "업스케일" 없음 → 이미 720p HD 추정 → 업스케일 스킵`);
+        showToast('업스케일 불필요 — 이미 HD (720p) 완성', 'success');
+        return 'already-hd';  // 호출자가 truthy 로 처리해 성공 분기 탐
+      }
+
       showToast('업스케일 실패: 메뉴 항목 못 찾음', 'warn');
       return false;
     }
