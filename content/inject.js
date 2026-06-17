@@ -32,10 +32,20 @@
       pendingPrompt = event.data.text;
       console.log(LOG_PREFIX, '📝 Prompt received:', pendingPrompt?.substring(0, 60));
 
-      // Slate 에디터에 직접 텍스트 설정 시도
-      const slateOk = trySetSlateText(pendingPrompt);
-      console.log(LOG_PREFIX, slateOk ? '✅ Slate API 성공' : '⚠️ Slate API 실패, fetch 인터셉션으로 대체');
+      // 1차: Slate 에디터에 직접 텍스트 설정 시도
+      let slateOk = trySetSlateText(pendingPrompt);
 
+      // 2차: Slate 못 찾으면 React fiber 통한 generic input 시도 (Slate 아닌 새 UI 대비)
+      if (!slateOk) {
+        try {
+          slateOk = tryReactInputViaFiber(pendingPrompt);
+          if (slateOk) console.log(LOG_PREFIX, '✅ React fiber 일반 input 경로 성공');
+        } catch (e) {
+          console.warn(LOG_PREFIX, 'React fiber input 시도 실패:', e?.message);
+        }
+      }
+
+      console.log(LOG_PREFIX, slateOk ? '✅ Slate/Fiber API 성공' : '⚠️ Slate/Fiber API 실패, fetch 인터셉션으로 대체');
       window.postMessage({ type: 'SET_FLOW_PROMPT_RESULT', ok: true, slateOk }, '*');
     }
     // ─── MAIN world 에서 React onClick 직접 호출 (content script isolated world 우회) ───
@@ -205,6 +215,67 @@
 
     console.warn(LOG_PREFIX, '🚫 [submit] React onClick / stateNode 메서드 모두 못찾음');
     return { ok: false, reason: 'no-handler' };
+  }
+
+  // ─── Slate 가 아닌 새 UI 대비: React fiber 로 textarea/contenteditable 의 onChange 직접 호출 ───
+  //   많은 React 컴포넌트는 native setter 로 value 를 바꾸고 input 이벤트를 dispatch 하면 동작.
+  //   Lit/Slate 가 아니라 일반 React 면 이 경로로 state 까지 업데이트됨.
+  function tryReactInputViaFiber(text) {
+    // 후보 모음
+    const candidates = [];
+    for (const ce of document.querySelectorAll('[contenteditable="true"], [contenteditable=""], [role="textbox"]')) {
+      if (ce.offsetParent && ce.offsetWidth > 100) candidates.push(ce);
+    }
+    for (const ta of document.querySelectorAll('textarea')) {
+      if (ta.offsetParent && ta.offsetWidth > 100) candidates.push(ta);
+    }
+    if (!candidates.length) {
+      console.log(LOG_PREFIX, '🔍 React fiber: 후보 element 없음');
+      return false;
+    }
+
+    // 화면 하단에 가까운 큰 element 우선
+    const vh = window.innerHeight || 800;
+    candidates.sort((a, b) => {
+      const ra = a.getBoundingClientRect();
+      const rb = b.getBoundingClientRect();
+      const sa = (ra.width * ra.height) - Math.abs(ra.bottom - vh) * 10;
+      const sb = (rb.width * rb.height) - Math.abs(rb.bottom - vh) * 10;
+      return sb - sa;
+    });
+
+    for (const el of candidates) {
+      try {
+        el.focus();
+        const tag = el.tagName;
+
+        if (tag === 'TEXTAREA' || tag === 'INPUT') {
+          // React-aware native setter
+          const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) {
+            setter.call(el, text);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            console.log(LOG_PREFIX, `🎯 fiber-input (textarea) ✓ value="${(el.value || '').substring(0, 40)}"`);
+            if ((el.value || '').includes(text.substring(0, 20))) return true;
+          }
+        } else {
+          // contenteditable: execCommand → insertText (Slate 아닌 일반 React 도 onInput 잡음)
+          el.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
+          const ok = document.execCommand('insertText', false, text);
+          // input event 강제 dispatch (일부 framework 는 execCommand 만으로 동기화 안됨)
+          el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+          console.log(LOG_PREFIX, `🎯 fiber-input (contenteditable) execCommand=${ok}, text="${(el.textContent || '').substring(0, 40)}"`);
+          if ((el.textContent || '').includes(text.substring(0, 20))) return true;
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, `fiber-input 후보 시도 실패:`, e?.message);
+      }
+    }
+    return false;
   }
 
   // ─── Find Slate editor element ───

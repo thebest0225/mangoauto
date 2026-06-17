@@ -301,16 +301,39 @@
       lastApiResult = null; // 이전 아이템의 결과 초기화
       snapshotExistingMedia();
 
-      // Step 5: Fill prompt (DOM + MAIN world injection)
-      await typePrompt(prompt);
+      // Step 5: Fill prompt — 2단계 시도
+      //   Method 1: inject.js (MAIN world) Slate API — React fiber 직접 → 가장 신뢰
+      //   Method 2: DOM-based typePrompt — 학습 selector → Slate selector → 일반 검색
+      // Slate API 가 성공해도 submit 버튼이 비활성이면 DOM 경로도 추가 시도.
+      let inputFilled = false;
+      try {
+        const slateOk = await tryInjectSlateFirst(prompt, 2500);
+        if (slateOk) {
+          await delay(400);
+          const sb = findGenerateButton();
+          const submitOk = !!sb && !sb.disabled && sb.getAttribute('aria-disabled') !== 'true';
+          if (submitOk) {
+            console.log(LOG_PREFIX, '[prompt] ✅ Method 1 (inject.js Slate API) 성공 + submit 활성 — DOM typing 스킵');
+            inputFilled = true;
+          } else {
+            console.warn(LOG_PREFIX, '[prompt] ⚠️ Slate API 성공했으나 submit 비활성 — DOM typing 도 시도');
+          }
+        } else {
+          console.log(LOG_PREFIX, '[prompt] Method 1 (inject.js Slate API) 실패 — DOM typing 으로 전환');
+        }
+      } catch (e) {
+        console.warn(LOG_PREFIX, '[prompt] Method 1 throw:', e.message);
+      }
+
+      if (!inputFilled) {
+        await typePrompt(prompt);  // 내부에 학습된 selector 우선 + 실패 시 자동 학습 모드 발동
+      }
       await delay(600 + Math.random() * 400);
       checkStopped();
 
-      // Step 5.5: Send prompt to inject.js (MAIN world) for fetch interception
-      // inject.js will inject this prompt into the outgoing API request body
-      // This bypasses Lit framework internal state desync issue
+      // Step 5.5: inject.js fetch interceptor 에 prompt 등록 (보조 안전망)
       window.postMessage({ type: 'SET_FLOW_PROMPT', text: prompt }, '*');
-      console.log(LOG_PREFIX, 'Prompt sent to inject.js for fetch injection');
+      console.log(LOG_PREFIX, '[prompt] (보조) inject.js fetch interceptor 에 prompt 재등록');
       await delay(200);
 
       // Step 6: Click generate
@@ -1333,6 +1356,205 @@
     return top.el;
   }
 
+  // ─── 학습된 input selector — Flow UI 가 알려진 selector 로 못잡힐 때 사용자 클릭 1회로 영구 학습 ───
+  const LS_FLOW_INPUT_SELECTOR = 'mango_flow_input_selector';
+  function getLearnedInputSelector() {
+    try { return localStorage.getItem(LS_FLOW_INPUT_SELECTOR) || ''; } catch (_) { return ''; }
+  }
+  function setLearnedInputSelector(sel) {
+    try { localStorage.setItem(LS_FLOW_INPUT_SELECTOR, sel); } catch (_) {}
+  }
+  function clearLearnedInputSelector() {
+    try { localStorage.removeItem(LS_FLOW_INPUT_SELECTOR); } catch (_) {}
+  }
+
+  // CSS selector path 빌드 (element → 고유한 selector 문자열)
+  function buildSelectorPath(el) {
+    if (!el || el === document.body || el === document.documentElement) return '';
+    if (el.id) {
+      const s = `#${CSS.escape(el.id)}`;
+      try { if (document.querySelectorAll(s).length === 1) return s; } catch (_) {}
+    }
+    const parts = [];
+    let current = el;
+    let depth = 0;
+    while (current && current !== document.body && depth < 8) {
+      let part = current.tagName.toLowerCase();
+      // 안정적 속성 — 하나만 골라 붙임
+      const stable = ['data-slate-editor', 'data-slate-node', 'data-testid', 'role', 'name', 'placeholder', 'aria-label', 'contenteditable'];
+      for (const attr of stable) {
+        const v = current.getAttribute(attr);
+        if (v !== null && v !== '') {
+          const escaped = v.replace(/"/g, '\\"').replace(/\\/g, '\\\\');
+          part += `[${attr}="${escaped}"]`;
+          break;
+        }
+      }
+      parts.unshift(part);
+      try {
+        if (document.querySelectorAll(parts.join(' > ')).length === 1) break;
+      } catch (_) {}
+      current = current.parentElement;
+      depth++;
+    }
+    return parts.join(' > ');
+  }
+
+  // ─── 입력란 학습 모드 (typePrompt 실패 시 자동 발동) ───
+  let _learnerActive = false;
+  function activateInputLearner(durationMs) {
+    if (_learnerActive) return;
+    _learnerActive = true;
+    durationMs = durationMs || 30000;
+    console.log(LOG_PREFIX, `🎓 [학습] 입력란 학습 모드 ON (${durationMs/1000}초). 프롬프트 입력란을 한 번 클릭하세요.`);
+
+    let banner = document.getElementById('mango-flow-learn-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'mango-flow-learn-banner';
+      banner.style.cssText = 'position:fixed;top:12px;right:12px;background:#f47b16;color:#fff;padding:12px 16px;border-radius:8px;font-family:Pretendard,system-ui,sans-serif;font-size:14px;font-weight:600;z-index:2147483647;box-shadow:0 4px 16px rgba(0,0,0,0.3);max-width:340px;line-height:1.5;pointer-events:none;';
+      document.body.appendChild(banner);
+    }
+    banner.innerHTML = '🎓 MangoAuto 입력란 학습 모드<br><span style="font-weight:400;font-size:12px;">프롬프트 입력란을 한 번만 클릭(또는 한 글자 입력)해 주세요. 30초 안에...</span>';
+
+    let done = false;
+    let timer = null;
+
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('click', clickHandler, true);
+      document.removeEventListener('focusin', focusHandler, true);
+      document.removeEventListener('beforeinput', inputHandler, true);
+      if (timer) clearTimeout(timer);
+    };
+
+    const learn = (raw, source) => {
+      let target = raw;
+      let walks = 0;
+      // 부모로 올라가며 textarea / contenteditable 찾기 (사용자가 자식 span 을 클릭했을 수도)
+      while (target && walks < 6) {
+        const tag = target.tagName;
+        const ce = target.getAttribute && target.getAttribute('contenteditable');
+        if (tag === 'TEXTAREA' || tag === 'INPUT' || ce === 'true' || ce === '' || target.getAttribute?.('role') === 'textbox') break;
+        target = target.parentElement;
+        walks++;
+      }
+      if (!target) target = raw;
+
+      // Slate editable 이 내부에 있으면 그것으로
+      try {
+        const slateInside = target.querySelector?.('[data-slate-node="value"], [data-slate-editor="true"]');
+        if (slateInside) target = slateInside;
+      } catch (_) {}
+
+      const selector = buildSelectorPath(target);
+      if (!selector) {
+        console.warn(LOG_PREFIX, '🎓 [학습] selector 빌드 실패');
+        return;
+      }
+      setLearnedInputSelector(selector);
+
+      const attrs = {};
+      for (const a of target.attributes) attrs[a.name] = a.value;
+      console.log(LOG_PREFIX, `🎓 [학습] ✅ 저장 (source=${source}): ${selector}`);
+      console.log(LOG_PREFIX, `  element:`, { tag: target.tagName, attrs, el: target });
+
+      if (banner) {
+        banner.innerHTML = '🎓 학습 완료!<br><span style="font-weight:400;font-size:12px;">다음 자동화부터 이 위치를 사용합니다.<br>이제 자동화를 다시 실행하세요.</span>';
+        banner.style.background = '#16a34a';
+        setTimeout(() => banner.remove(), 8000);
+      }
+      cleanup();
+    };
+
+    const clickHandler = (e) => learn(e.target, 'click');
+    const focusHandler = (e) => {
+      const t = e.target;
+      if (!t) return;
+      const ce = t.getAttribute?.('contenteditable');
+      if (t.tagName === 'TEXTAREA' || ce === 'true' || ce === '') learn(t, 'focus');
+    };
+    const inputHandler = (e) => {
+      if (e.target) learn(e.target, 'beforeinput');
+    };
+
+    document.addEventListener('click', clickHandler, true);
+    document.addEventListener('focusin', focusHandler, true);
+    document.addEventListener('beforeinput', inputHandler, true);
+    timer = setTimeout(() => {
+      if (done) return;
+      console.log(LOG_PREFIX, '🎓 [학습] 타임아웃 — 학습 안 됨');
+      if (banner) banner.remove();
+      _learnerActive = false;
+      cleanup();
+    }, durationMs);
+  }
+
+  // ─── 입력 후보 진단 dump (실패 시 자동 호출 — 사용자가 콘솔 복사해서 줄 수 있게) ───
+  function dumpFlowInputDiagnostics() {
+    console.group(`${LOG_PREFIX} 🔬 Flow Input 진단 dump`);
+    try {
+      const summarize = (el) => {
+        const attrs = {};
+        for (const a of el.attributes) attrs[a.name] = a.value;
+        const reactKeys = Object.getOwnPropertyNames(el).filter(k => k.startsWith('__react'));
+        return {
+          tag: el.tagName, id: el.id,
+          attrs, classList: Array.from(el.classList),
+          text: (el.textContent || '').substring(0, 100),
+          size: `${el.offsetWidth}x${el.offsetHeight}`,
+          visible: !!el.offsetParent,
+          reactKeys, el,
+        };
+      };
+      console.log('--- textarea 전체 ---');
+      for (const ta of document.querySelectorAll('textarea')) console.log(summarize(ta));
+      console.log('--- [contenteditable=true] 전체 ---');
+      for (const ce of document.querySelectorAll('[contenteditable="true"]')) console.log(summarize(ce));
+      console.log('--- [contenteditable=""] / [role="textbox"] ---');
+      for (const ce of document.querySelectorAll('[contenteditable=""], [role="textbox"]')) console.log(summarize(ce));
+      console.log('--- [data-slate-*] ---');
+      for (const s of document.querySelectorAll('[data-slate-node], [data-slate-editor]')) console.log(summarize(s));
+      console.log('--- activeElement ---', document.activeElement);
+      try {
+        const submitBtn = findGenerateButton();
+        if (submitBtn) {
+          const sum = summarize(submitBtn);
+          sum.disabled = submitBtn.disabled;
+          sum.ariaDisabled = submitBtn.getAttribute('aria-disabled');
+          console.log('--- 추정 submit 버튼 ---', sum);
+        } else {
+          console.log('--- 추정 submit 버튼: 못 찾음 ---');
+        }
+      } catch (e) { console.warn('submit 진단 실패:', e); }
+    } catch (e) { console.warn('dump failed:', e); }
+    console.groupEnd();
+  }
+
+  // ─── inject.js (MAIN world) Slate API 우선 시도 (React fiber 직접 접근) ───
+  async function tryInjectSlateFirst(prompt, timeoutMs) {
+    timeoutMs = timeoutMs || 2500;
+    return new Promise((resolve) => {
+      let done = false;
+      const handler = (event) => {
+        if (event.data?.type === 'SET_FLOW_PROMPT_RESULT' && !done) {
+          done = true;
+          window.removeEventListener('message', handler);
+          resolve(event.data.slateOk === true);
+        }
+      };
+      window.addEventListener('message', handler);
+      window.postMessage({ type: 'SET_FLOW_PROMPT', text: prompt }, '*');
+      setTimeout(() => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('message', handler);
+        resolve(false);
+      }, timeoutMs);
+    });
+  }
+
   // 후보 element 안에 Slate editor 가 있으면 그것으로 내려감.
   // (Flow 새 UI 는 Slate.js — 진짜 editable 은 [data-slate-node="value"] / [data-slate-editor="true"]
   //  바깥 wrapper div 에 typing 하면 placeholder 텍스트가 textContent 에 섞이고 framework state 가
@@ -1351,6 +1573,24 @@
   }
 
   function findPromptTextarea() {
+    // -1. 🎓 학습된 selector — 이전에 사용자가 학습 모드로 알려준 정답이 있으면 최우선.
+    const learned = getLearnedInputSelector();
+    if (learned) {
+      try {
+        const learnedEls = document.querySelectorAll(learned);
+        for (const lEl of learnedEls) {
+          if (isVisibleAndInteractable(lEl)) {
+            console.log(LOG_PREFIX, `[prompt] 🎓 학습된 selector 사용: ${learned}`);
+            return descendToSlateEditor(lEl);
+          }
+        }
+        console.warn(LOG_PREFIX, `[prompt] 학습된 selector "${learned}" 매치 0/${learnedEls.length} visible — 폴백`);
+      } catch (e) {
+        console.warn(LOG_PREFIX, `[prompt] 학습된 selector parse 에러, 클리어:`, e.message);
+        clearLearnedInputSelector();
+      }
+    }
+
     // 0. 🥇 BEST PATH: Slate editor 직접 검색 (Flow 의 새 UI 는 Slate.js)
     //    data-slate-node="value" 또는 data-slate-editor="true" 가 실제 editable element.
     //    이걸 못 찾으면 textContent 에 placeholder ("무엇을 만들고 싶으신가요?") 가 섞여 들어와
@@ -1538,6 +1778,27 @@
         continue;
       }
 
+      // 🔍 wrapper 감지: textContent 에 placeholder 가 그대로 박혀있으면
+      //   우리가 wrapper div 에 입력한 것 (진짜 editor 는 그 안쪽).
+      //   학습된 selector 가 잘못된 것일 가능성도 있으므로 클리어.
+      if (!isTextarea && /무엇을\s*만들고\s*싶으|What\s+do\s+you\s+want\s+to\s+create/i.test(actual)) {
+        console.warn(LOG_PREFIX, `[prompt] ⚠️ placeholder 텍스트가 함께 검출 — wrapper 에 입력한 듯 (시도 ${attempt})`);
+        if (getLearnedInputSelector()) {
+          console.warn(LOG_PREFIX, '[prompt] 잘못 학습된 selector 클리어');
+          clearLearnedInputSelector();
+        }
+        if (attempt < 2) {
+          try {
+            input.focus();
+            await delay(100);
+            document.execCommand('selectAll', false, null);
+            document.execCommand('delete', false, null);
+          } catch (_) {}
+          await delay(200);
+        }
+        continue;
+      }
+
       // 🔑 검증 2 (phantom textarea 가드): 입력 후 800ms 대기 + submit 버튼 활성 확인.
       //   값은 들어갔는데 버튼이 disabled 면 framework state 가 다른 element 를 참조 = phantom.
       console.log(LOG_PREFIX, `[prompt] 값 검증 OK (시도 ${attempt}): "${actual.substring(0, 40)}..." — submit 버튼 활성 확인 중`);
@@ -1566,10 +1827,14 @@
       }
     }
 
-    // 2회 모두 실패 — 값은 들어가나 submit 비활성 OR 값 자체 실패.
-    // phantom textarea 가능성 — background 가 탭 reload + retry.
-    const err = new Error(`Prompt 입력 검증 실패 (phantom textarea or Slate desync, 마지막 값: "${lastActual.substring(0, 60)}")`);
+    // 2회 모두 실패 — 진단 dump + 학습 모드 자동 발동.
+    // 사용자가 한번 진짜 입력란을 클릭하면 localStorage 에 영구 저장 → 다음 자동화 OK.
+    console.error(LOG_PREFIX, `[prompt] ❌ 2회 모두 실패. 마지막 값: "${lastActual.substring(0, 80)}"`);
+    try { dumpFlowInputDiagnostics(); } catch (_) {}
+    try { activateInputLearner(30000); } catch (_) {}
+    const err = new Error(`Prompt 입력 위치 학습이 필요합니다. 화면 우상단 안내에서 입력란을 한 번 클릭해주세요 (30초). 마지막 값: "${lastActual.substring(0, 60)}"`);
     err.errorCode = 'PROMPT_INSERT_FAILED';
+    err.needsLearning = true;
     throw err;
   }
 
