@@ -1271,81 +1271,171 @@
   }
 
   // ─── Prompt Input ───
+  //
+  // 🔑 phantom textarea 문제 대응 (UI 개편 때마다 반복되는 이슈):
+  //   Flow UI 에는 종종 OFF-SCREEN / pointer-events:none / opacity:0 인 hidden textarea 가
+  //   상태 관리용으로 존재. placeholder 매치만으로 찾으면 hidden 쪽을 잡아 입력은 되는데
+  //   submit 버튼이 비활성 상태로 머무름 — "엄청 고생했던" 그 버그.
+  // ⛑ 해결: 진짜 보이고 (display/visibility/opacity OK) + interactable (pointer-events) +
+  //          hit-test 통과 (다른 layer 가 위 안 덮음) 인 요소만 인정. 다중 매치 시 점수순 선택.
+
+  function isVisibleAndInteractable(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 80 || r.height < 16) return false;  // 너무 작으면 hidden 추정
+
+    const vw = window.innerWidth || document.documentElement.clientWidth;
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) return false;
+
+    try {
+      const cs = window.getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      if (parseFloat(cs.opacity) < 0.5) return false;
+      if (cs.pointerEvents === 'none') return false;
+    } catch (_) { return false; }
+
+    return true;
+  }
+
+  // 중앙 좌표에서 el (또는 자손) 이 실제 hit-test 잡히는지 — 다른 요소가 위에 있으면 phantom 추정
+  function isHitTestTarget(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    if (cx < 0 || cy < 0) return false;
+    try {
+      const top = document.elementFromPoint(cx, cy);
+      if (!top) return false;
+      return top === el || el.contains(top) || top.contains(el);
+    } catch (_) { return false; }
+  }
+
+  // 후보들 중 visible 만 골라 점수순 정렬 — 새 Flow UI 의 입력은 화면 하단에 위치.
+  function pickBestVisibleCandidate(candidates) {
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    const scored = [];
+    for (const el of candidates) {
+      if (!isVisibleAndInteractable(el)) continue;
+      const r = el.getBoundingClientRect();
+      const area = r.width * r.height;
+      const hitOk = isHitTestTarget(el);
+      // 점수: 하단 근접 우선 + 면적 + hit-test 통과 보너스 1000점
+      const bottomScore = Math.max(0, vh - Math.abs(r.bottom - vh));
+      const score = bottomScore * 2 + Math.min(area, 50000) * 0.001 + (hitOk ? 1000 : 0);
+      scored.push({ el, score, hitOk, bottom: r.bottom, area });
+    }
+    if (!scored.length) return null;
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored[0];
+    console.log(LOG_PREFIX, `[prompt] visible 후보 ${scored.length}개 → 선택 (score=${Math.round(top.score)}, hit=${top.hitOk}, bottom=${Math.round(top.bottom)}, area=${Math.round(top.area)})`);
+    return top.el;
+  }
+
   function findPromptTextarea() {
-    // 1. by ID (PINHOLE_TEXT_AREA_ELEMENT_ID)
+    // 1. by ID — 빠른 path. 단 visibility 검증.
     let el = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
-    if (el) { console.log(LOG_PREFIX, '[prompt] ID로 발견'); return el; }
+    if (el && isVisibleAndInteractable(el)) {
+      console.log(LOG_PREFIX, '[prompt] ID 로 발견 (visible)');
+      return el;
+    }
+    if (el) console.log(LOG_PREFIX, '[prompt] ID 매치는 있으나 hidden — 다음 단계로');
 
-    // 2. placeholder/aria-label 속성으로 textarea/contenteditable 검색
+    // 2. placeholder/aria-label 매치 — 모든 후보 모은 뒤 visible+interactable 중 최적 선택.
     //    새 Flow UI (2026-06): placeholder="무엇을 만들고 싶으신가요?"
-    //    "무엇을" 키워드도 매치하도록 추가.
-    el = document.querySelector(
-      'textarea[placeholder*="create" i], textarea[placeholder*="만들"], textarea[placeholder*="무엇"], ' +
-      'textarea[placeholder*="want" i], ' +
-      'textarea[aria-label*="create" i], textarea[aria-label*="prompt" i], ' +
-      'textarea[aria-label*="만들"], textarea[aria-label*="무엇"]'
-    );
-    if (el) { console.log(LOG_PREFIX, '[prompt] textarea 속성으로 발견:', el.tagName, 'placeholder=', el.placeholder); return el; }
+    const selectors = [
+      // textarea — 다양한 placeholder/aria-label 패턴
+      'textarea[placeholder*="무엇"]',
+      'textarea[placeholder*="만들"]',
+      'textarea[placeholder*="create" i]',
+      'textarea[placeholder*="want" i]',
+      'textarea[aria-label*="무엇"]',
+      'textarea[aria-label*="만들"]',
+      'textarea[aria-label*="create" i]',
+      'textarea[aria-label*="prompt" i]',
+      // contenteditable div — 새 UI 는 div 일 가능성
+      '[contenteditable="true"][aria-label*="무엇"]',
+      '[contenteditable="true"][aria-label*="만들"]',
+      '[contenteditable="true"][aria-label*="create" i]',
+      '[contenteditable="true"][aria-label*="prompt" i]',
+      '[contenteditable="true"][data-placeholder*="무엇"]',
+      '[contenteditable="true"][data-placeholder*="만들"]',
+    ];
+    const placeholderCandidates = [];
+    for (const sel of selectors) {
+      try {
+        document.querySelectorAll(sel).forEach(c => {
+          if (!(c.id || '').includes('recaptcha') && c.type !== 'hidden') {
+            placeholderCandidates.push(c);
+          }
+        });
+      } catch (_) {}
+    }
+    // 중복 제거
+    const seen = new WeakSet();
+    const uniqueCandidates = placeholderCandidates.filter(c => {
+      if (seen.has(c)) return false;
+      seen.add(c);
+      return true;
+    });
+    if (uniqueCandidates.length) {
+      console.log(LOG_PREFIX, `[prompt] placeholder/aria-label 매치 ${uniqueCandidates.length}개 후보 (visible 필터 전)`);
+      const best = pickBestVisibleCandidate(uniqueCandidates);
+      if (best) {
+        const ph = best.placeholder || best.getAttribute('aria-label') || best.getAttribute('data-placeholder') || '';
+        console.log(LOG_PREFIX, `[prompt] placeholder/aria-label visible 선택: ${best.tagName}#${best.id || '-'} ph="${ph.substring(0, 30)}"`);
+        return best;
+      }
+      console.warn(LOG_PREFIX, '[prompt] placeholder 매치는 있으나 visible 후보 없음');
+    }
 
-    // 2-b. 새 UI 는 contenteditable div 일 가능성 — placeholder/aria-label 동일 패턴으로 검색
-    el = document.querySelector(
-      '[contenteditable="true"][aria-label*="만들"], [contenteditable="true"][aria-label*="무엇"], ' +
-      '[contenteditable="true"][aria-label*="create" i], [contenteditable="true"][aria-label*="prompt" i], ' +
-      '[contenteditable="true"][data-placeholder*="만들"], [contenteditable="true"][data-placeholder*="무엇"]'
-    );
-    if (el) { console.log(LOG_PREFIX, '[prompt] contenteditable 속성으로 발견:', el.tagName); return el; }
-
-    // 3. 생성 버튼(arrow_forward) 근처의 textarea 검색
+    // 3. 생성 버튼 근처 textarea/contenteditable — 단 visible 만
     const genBtn = findGenerateButton();
     if (genBtn) {
       let container = genBtn.parentElement;
       for (let i = 0; i < 6 && container; i++) {
-        const ta = container.querySelector('textarea:not([id*="recaptcha"])');
-        if (ta) { console.log(LOG_PREFIX, '[prompt] 생성버튼 근처 textarea 발견'); return ta; }
-        container = container.parentElement;
-      }
-    }
-
-    // 4. 보이는 textarea 중 recaptcha 제외
-    const allTextareas = document.querySelectorAll('textarea');
-    for (const ta of allTextareas) {
-      if ((ta.id || '').includes('recaptcha')) continue;
-      if (ta.type === 'hidden') continue;
-      if (ta.offsetHeight > 10 && ta.offsetWidth > 50) {
-        console.log(LOG_PREFIX, `[prompt] 보이는 textarea: id="${ta.id}", ${ta.offsetWidth}x${ta.offsetHeight}`);
-        return ta;
-      }
-    }
-
-    // 5. 생성 버튼 근처의 contenteditable
-    if (genBtn) {
-      let container = genBtn.parentElement;
-      for (let i = 0; i < 6 && container; i++) {
-        const ce = container.querySelector('[contenteditable="true"]');
-        if (ce && ce.offsetHeight > 10) {
-          console.log(LOG_PREFIX, '[prompt] 생성버튼 근처 contenteditable 발견');
-          return ce;
+        const nearCandidates = [];
+        container.querySelectorAll('textarea:not([id*="recaptcha"]), [contenteditable="true"]').forEach(c => {
+          nearCandidates.push(c);
+        });
+        if (nearCandidates.length) {
+          const best = pickBestVisibleCandidate(nearCandidates);
+          if (best) {
+            console.log(LOG_PREFIX, `[prompt] 생성버튼 근처 (depth=${i}) visible 선택`);
+            return best;
+          }
         }
         container = container.parentElement;
       }
     }
 
-    // 6. 페이지 하단 근처의 contenteditable (프롬프트 영역)
-    const editables = document.querySelectorAll('[contenteditable="true"]');
-    for (const ce of editables) {
-      if (ce.offsetHeight > 10 && ce.offsetWidth > 100) {
-        console.log(LOG_PREFIX, '[prompt] 보이는 contenteditable 발견');
-        return ce;
+    // 4. 전체 textarea + contenteditable 중 visible 만 점수 매겨 최고점 선택
+    const allCandidates = [];
+    document.querySelectorAll('textarea').forEach(ta => {
+      if ((ta.id || '').includes('recaptcha')) return;
+      if (ta.type === 'hidden') return;
+      allCandidates.push(ta);
+    });
+    document.querySelectorAll('[contenteditable="true"]').forEach(ce => allCandidates.push(ce));
+    if (allCandidates.length) {
+      const best = pickBestVisibleCandidate(allCandidates);
+      if (best) {
+        console.log(LOG_PREFIX, `[prompt] 전체 후보 중 visible 최고점 선택: ${best.tagName}`);
+        return best;
       }
     }
 
-    // 7. 디버그: 모든 textarea/contenteditable 덤프
-    console.warn(LOG_PREFIX, '[prompt] 못찾음! textarea 목록:');
-    for (const ta of allTextareas) {
-      console.log(LOG_PREFIX, `  textarea: id="${ta.id}" placeholder="${(ta.placeholder||'').substring(0,30)}" size=${ta.offsetWidth}x${ta.offsetHeight}`);
+    // 5. 디버그 — 못 찾으면 전체 덤프 (visible 여부 포함)
+    console.warn(LOG_PREFIX, '[prompt] 못찾음! 모든 textarea/contenteditable 덤프:');
+    for (const ta of document.querySelectorAll('textarea')) {
+      const vis = isVisibleAndInteractable(ta);
+      console.log(LOG_PREFIX, `  textarea: id="${ta.id}" placeholder="${(ta.placeholder||'').substring(0,30)}" size=${ta.offsetWidth}x${ta.offsetHeight} visible=${vis}`);
     }
     for (const ce of document.querySelectorAll('[contenteditable="true"]')) {
-      console.log(LOG_PREFIX, `  contenteditable: tag=${ce.tagName} id="${ce.id}" size=${ce.offsetWidth}x${ce.offsetHeight} text="${(ce.textContent||'').substring(0,30)}"`);
+      const vis = isVisibleAndInteractable(ce);
+      const al = ce.getAttribute('aria-label') || '';
+      console.log(LOG_PREFIX, `  contenteditable: tag=${ce.tagName} id="${ce.id}" aria="${al.substring(0,30)}" size=${ce.offsetWidth}x${ce.offsetHeight} visible=${vis} text="${(ce.textContent||'').substring(0,30)}"`);
     }
     return null;
   }
@@ -1379,32 +1469,56 @@
       }
       await delay(300);
 
-      // 검증
+      // 검증 1: 입력값 자체
       const actual = isTextarea ? (input.value || '') : (input.textContent || '');
       lastActual = actual;
-      if (actual.includes(text.substring(0, 20))) {
-        console.log(LOG_PREFIX, `[prompt] 검증 OK (시도 ${attempt}): "${actual.substring(0, 40)}..."`);
+      if (!actual.includes(text.substring(0, 20))) {
+        console.warn(LOG_PREFIX, `[prompt] 값 검증 실패 (시도 ${attempt}): "${actual.substring(0, 40)}"`);
+        if (attempt < 2 && !isTextarea) {
+          try {
+            input.focus();
+            await delay(100);
+            document.execCommand('selectAll', false, null);
+            await delay(50);
+            document.execCommand('delete', false, null);
+            await delay(200);
+            console.log(LOG_PREFIX, '[prompt] 강제 clear 후 재시도');
+          } catch (_) {}
+        }
+        continue;
+      }
+
+      // 🔑 검증 2 (phantom textarea 가드): 입력 후 800ms 대기 + submit 버튼 활성 확인.
+      //   값은 들어갔는데 버튼이 disabled 면 framework state 가 다른 element 를 참조 = phantom.
+      console.log(LOG_PREFIX, `[prompt] 값 검증 OK (시도 ${attempt}): "${actual.substring(0, 40)}..." — submit 버튼 활성 확인 중`);
+      await delay(800);
+      const submitBtn = findGenerateButton();
+      const submitOk = !!submitBtn && !submitBtn.disabled && submitBtn.getAttribute('aria-disabled') !== 'true';
+      if (submitOk) {
+        console.log(LOG_PREFIX, `[prompt] ✅ 완료 — 값 + submit 버튼 활성 모두 통과`);
         return;
       }
-      console.warn(LOG_PREFIX, `[prompt] 검증 실패 (시도 ${attempt}): "${actual.substring(0, 40)}"`);
-
-      // 1번 실패 시 강제 clear 후 재시도
-      if (attempt < 2 && !isTextarea) {
-        try {
-          input.focus();
-          await delay(100);
-          document.execCommand('selectAll', false, null);
-          await delay(50);
-          document.execCommand('delete', false, null);
-          await delay(200);
-          console.log(LOG_PREFIX, '[prompt] 강제 clear 후 재시도');
-        } catch (_) {}
+      console.warn(LOG_PREFIX, `[prompt] ⚠️ 값은 들어갔으나 submit 버튼이 비활성 (phantom textarea 의심) — 시도 ${attempt}/2`);
+      if (attempt < 2) {
+        // 재시도 전 강제 clear (다음 iteration 에서 다시 입력)
+        if (!isTextarea) {
+          try {
+            input.focus();
+            await delay(100);
+            document.execCommand('selectAll', false, null);
+            await delay(50);
+            document.execCommand('delete', false, null);
+          } catch (_) {}
+        } else {
+          try { MangoDom.setTextareaValue(input, ''); } catch (_) {}
+        }
+        await delay(200);
       }
     }
 
-    // 2회 모두 실패 — Slate state desync 추정. background 가 잡아서 탭 reload + retry.
-    // 사용자 보고: "새로고침하면 다시 됨". reload 가 유일한 복구법.
-    const err = new Error(`Prompt 입력 검증 실패 (Slate desync 추정, 마지막 textContent: "${lastActual.substring(0, 60)}")`);
+    // 2회 모두 실패 — 값은 들어가나 submit 비활성 OR 값 자체 실패.
+    // phantom textarea 가능성 — background 가 탭 reload + retry.
+    const err = new Error(`Prompt 입력 검증 실패 (phantom textarea or Slate desync, 마지막 값: "${lastActual.substring(0, 60)}")`);
     err.errorCode = 'PROMPT_INSERT_FAILED';
     throw err;
   }
