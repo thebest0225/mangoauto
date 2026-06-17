@@ -1333,12 +1333,52 @@
     return top.el;
   }
 
+  // 후보 element 안에 Slate editor 가 있으면 그것으로 내려감.
+  // (Flow 새 UI 는 Slate.js — 진짜 editable 은 [data-slate-node="value"] / [data-slate-editor="true"]
+  //  바깥 wrapper div 에 typing 하면 placeholder 텍스트가 textContent 에 섞이고 framework state 가
+  //  업데이트 안 됨 → submit 버튼 비활성. 사용자 보고: "값은 보이는데 전송 안 됨".)
+  function descendToSlateEditor(el) {
+    if (!el) return el;
+    try {
+      if (el.matches && el.matches('[data-slate-editor="true"], [data-slate-node="value"]')) return el;
+      const inside = el.querySelector && el.querySelector('[data-slate-editor="true"], [data-slate-node="value"]');
+      if (inside) {
+        console.log(LOG_PREFIX, '[prompt] 후보 내부에서 Slate editor 발견 → 그것으로 내려감');
+        return inside;
+      }
+    } catch (_) {}
+    return el;
+  }
+
   function findPromptTextarea() {
-    // 1. by ID — 빠른 path. 단 visibility 검증.
+    // 0. 🥇 BEST PATH: Slate editor 직접 검색 (Flow 의 새 UI 는 Slate.js)
+    //    data-slate-node="value" 또는 data-slate-editor="true" 가 실제 editable element.
+    //    이걸 못 찾으면 textContent 에 placeholder ("무엇을 만들고 싶으신가요?") 가 섞여 들어와
+    //    framework state 가 빈 채로 남고 submit 버튼 활성 안 됨.
+    const slateSelectors = [
+      '[data-slate-editor="true"]',
+      '[data-slate-node="value"]',
+    ];
+    for (const sel of slateSelectors) {
+      try {
+        const slateCandidates = Array.from(document.querySelectorAll(sel))
+          .filter(c => !(c.id || '').includes('recaptcha'));
+        if (slateCandidates.length) {
+          const best = pickBestVisibleCandidate(slateCandidates);
+          if (best) {
+            console.log(LOG_PREFIX, `[prompt] ✅ Slate editor 직접 발견 (selector="${sel}")`);
+            return best;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 1. by ID — 빠른 path. 단 visibility 검증 + Slate editor 내려감.
     let el = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
     if (el && isVisibleAndInteractable(el)) {
+      const descended = descendToSlateEditor(el);
       console.log(LOG_PREFIX, '[prompt] ID 로 발견 (visible)');
-      return el;
+      return descended;
     }
     if (el) console.log(LOG_PREFIX, '[prompt] ID 매치는 있으나 hidden — 다음 단계로');
 
@@ -1445,11 +1485,21 @@
     await closeSettingsPanel();
     await delay(300);
 
-    const input = findPromptTextarea();
+    let input = findPromptTextarea();
     if (!input) throw new Error('Cannot find prompt input');
 
+    // 🛡️ Phantom textarea 방어: 후보가 contenteditable wrapper 인 경우
+    //    내부에 [data-slate-node="value"] / [data-slate-editor="true"] 가 있으면 그것으로 내려감.
+    //    이 단계 없이 wrapper 에 입력하면 placeholder 텍스트가 textContent 에 섞이고
+    //    Slate state 가 업데이트 안 되어 submit 버튼이 활성 안 됨.
+    input = descendToSlateEditor(input);
+
     const isTextarea = (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT');
-    console.log(LOG_PREFIX, `[prompt] 발견: ${input.tagName}#${input.id}, isTextarea=${isTextarea}`);
+    const slateRole = input.getAttribute && (
+      input.getAttribute('data-slate-editor') === 'true' ? 'slate-editor' :
+      input.getAttribute('data-slate-node') === 'value' ? 'slate-value' : ''
+    );
+    console.log(LOG_PREFIX, `[prompt] 발견: ${input.tagName}#${input.id}, isTextarea=${isTextarea}${slateRole ? `, role=${slateRole}` : ''}`);
 
     // 최대 2회 시도 — 첫 시도에서 DOM 검증 실패하면 한번 더 강제 clear + paste
     let attempt = 0;
