@@ -273,11 +273,11 @@
       await ensureProjectPage();
       checkStopped();
 
-      // Step 1+2: Switch mode + apply settings via settings panel (New UI Feb 2026)
+      // Step 1+2: 사용자 정책 (2026-06-17) — 모델/aspect/count 설정 일체 안 건드림.
+      // 새 Flow UI ("무엇을 만들고 싶으신가요?") 에서 사용자가 수동으로 모든 세부설정 선택.
+      // 확장은 텍스트 입력 + 전송 + 결과 다운로드만 담당.
       const isImageOutput = (mediaType === 'image');
-      await applyAllSettings(mode, settings, isImageOutput);
-      await delay(500);
-      checkStopped();
+      console.log(LOG_PREFIX, '[settings] 사용자 정책 — 모델/aspect/count 자동설정 SKIP. 사용자가 수동 선택 가정.');
 
       // Step 3: Upload source image (for frame-to-video or image-to-image mode)
       if ((mode === 'image-video' || mode === 'image-image') && sourceImageDataUrl) {
@@ -1276,12 +1276,24 @@
     let el = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID);
     if (el) { console.log(LOG_PREFIX, '[prompt] ID로 발견'); return el; }
 
-    // 2. placeholder/aria-label 속성으로 textarea 검색
+    // 2. placeholder/aria-label 속성으로 textarea/contenteditable 검색
+    //    새 Flow UI (2026-06): placeholder="무엇을 만들고 싶으신가요?"
+    //    "무엇을" 키워드도 매치하도록 추가.
     el = document.querySelector(
-      'textarea[placeholder*="create" i], textarea[placeholder*="만들"], textarea[placeholder*="want" i], ' +
-      'textarea[aria-label*="create" i], textarea[aria-label*="prompt" i], textarea[aria-label*="만들"]'
+      'textarea[placeholder*="create" i], textarea[placeholder*="만들"], textarea[placeholder*="무엇"], ' +
+      'textarea[placeholder*="want" i], ' +
+      'textarea[aria-label*="create" i], textarea[aria-label*="prompt" i], ' +
+      'textarea[aria-label*="만들"], textarea[aria-label*="무엇"]'
     );
-    if (el) { console.log(LOG_PREFIX, '[prompt] 속성으로 발견:', el.tagName); return el; }
+    if (el) { console.log(LOG_PREFIX, '[prompt] textarea 속성으로 발견:', el.tagName, 'placeholder=', el.placeholder); return el; }
+
+    // 2-b. 새 UI 는 contenteditable div 일 가능성 — placeholder/aria-label 동일 패턴으로 검색
+    el = document.querySelector(
+      '[contenteditable="true"][aria-label*="만들"], [contenteditable="true"][aria-label*="무엇"], ' +
+      '[contenteditable="true"][aria-label*="create" i], [contenteditable="true"][aria-label*="prompt" i], ' +
+      '[contenteditable="true"][data-placeholder*="만들"], [contenteditable="true"][data-placeholder*="무엇"]'
+    );
+    if (el) { console.log(LOG_PREFIX, '[prompt] contenteditable 속성으로 발견:', el.tagName); return el; }
 
     // 3. 생성 버튼(arrow_forward) 근처의 textarea 검색
     const genBtn = findGenerateButton();
