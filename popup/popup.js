@@ -11,7 +11,7 @@ let currentPlatform = 'grok';
 let currentMode = 'text-image';  // text-image | image-video (프레임→영상). text-video / image-image / Whisk 제거됨.
 let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
-let currentApiType = 'longform-v2';  // 'longform-v2' (기본: 롱폼 = V2) | 'shortform' | 'mangomaker'
+let currentApiType = 'longform-v2';  // 'longform-v2' (기본: 롱폼 = V2) | 'longform-v3' (롱폼V2) | 'shortform' | 'mangomaker'
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
 let reviewItems = [];
@@ -727,9 +727,9 @@ function updateQueuePreview() {
     if (item.imageUrl) {
       thumbHtml = `<img class="queue-thumb" src="${escapeHtml(item.imageUrl)}" title="${escapeHtml(item.imageName || '')}">`;
     }
-    // longform/shortform은 seg.index가 1-based, longform-v2/mangomaker/standalone은 0-based → +1
+    // longform/shortform은 seg.index가 1-based, longform-v2/v3/mangomaker/standalone은 0-based → +1
     const displayIdx = item._isThumbnail ? item.idx + 1
-      : (item._isMangoHub && currentApiType !== 'mangomaker' && currentApiType !== 'longform-v2') ? item.idx
+      : (item._isMangoHub && currentApiType !== 'mangomaker' && currentApiType !== 'longform-v2' && currentApiType !== 'longform-v3') ? item.idx
       : item.idx + 1;
     div.innerHTML = `
       <input type="checkbox" class="queue-check queue-select" data-idx="${item.idx}" data-num="${displayIdx}" checked>
