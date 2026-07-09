@@ -750,11 +750,12 @@ function updateQueuePreview() {
 
 // ─── Queue Selection Helpers ───
 // 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어.
-// v1=(≤44 또는 짝수), odd=홀수, even=짝수, 그 외=lo~hi 범위.
-const STANDALONE_MODES = new Set(['v1', 'odd', 'even']);
+// all=전체, odd=홀수, even=짝수, 그 외=lo~hi 범위.
+// (2026-07-09: v1 모드 제거, 전체(all) 추가. 범위 ~20/~40/~60 = 1~20/21~40/41~60)
+const STANDALONE_MODES = new Set(['all', 'odd', 'even']);
 function btnPredicate(btn) {
   const mode = btn.dataset.mode;
-  if (mode === 'v1') return (num) => num <= 44 || num % 2 === 0;
+  if (mode === 'all') return () => true;
   if (mode === 'odd') return (num) => num % 2 === 1;
   if (mode === 'even') return (num) => num % 2 === 0;
   const lo = parseInt(btn.dataset.rangeLo);
