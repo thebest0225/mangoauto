@@ -486,6 +486,22 @@ function bindEvents() {
   //   범위 버튼을 누르면 단독 모드(v1/odd/even) 는 자동 해제.
   $$('.qs-pct-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      // 수기입력: 범위를 직접 입력받아 range 버튼처럼 동작
+      if (btn.dataset.mode === 'manual') {
+        const raw = prompt('대기열 범위 입력 — 예) 26-50, 또는 30 (=1~30)', btn.dataset.range || '');
+        if (raw == null) return;
+        const m = raw.trim().match(/^(\d+)\s*(?:[-~]\s*(\d+))?$/);
+        if (!m) { alert('형식이 올바르지 않습니다. 예) 26-50 또는 30'); return; }
+        let lo = m[2] ? parseInt(m[1]) : 1;
+        let hi = m[2] ? parseInt(m[2]) : parseInt(m[1]);
+        if (lo > hi) { const t = lo; lo = hi; hi = t; }
+        btn.dataset.rangeLo = String(lo); btn.dataset.rangeHi = String(hi); btn.dataset.range = `${lo}-${hi}`;
+        btn.textContent = `수기 ${lo}-${hi}`;
+        $$('.qs-pct-btn').forEach(b => { if (STANDALONE_MODES.has(b.dataset.mode)) b.classList.remove('active'); });
+        btn.classList.add('active');
+        applyQuickSelect();
+        return;
+      }
       const isStandalone = STANDALONE_MODES.has(btn.dataset.mode);
       if (isStandalone) {
         const willActivate = !btn.classList.contains('active');
