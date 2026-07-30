@@ -316,6 +316,7 @@
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
         // Step 10: 업스케일 시도 (timeout 60초 — 사용자 정책 2026-06-07)
+        const postUrlBeforeUpscale = location.href;
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('Step 10: 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(60000);
@@ -324,7 +325,19 @@
             // videoUrl 그대로 유지 — 추가 URL 추출 불필요
           } else if (upscaled) {
             const hdUrl = await extractVideoUrl();
-            if (hdUrl) videoUrl = hdUrl;
+            // 🔒 업스케일 결과 채택 조건 — 둘 중 하나라도 만족해야 한다.
+            //    (a) 업스케일 전과 같은 post 페이지에 그대로 있다 (정상 경로)
+            //    (b) asset 식별자가 업스케일 전과 동일 (같은 생성물의 _hd 버전)
+            //    버튼 오클릭으로 다른 post 로 이동한 경우 hdUrl 은 '이전에 만들었던 영상' 이므로 폐기.
+            const baseId = assetGenId(videoUrl);
+            const samePage = location.href === postUrlBeforeUpscale;
+            const sameGen = !!(hdUrl && baseId && assetGenId(hdUrl) === baseId);
+            if (hdUrl && (samePage || sameGen)) {
+              videoUrl = hdUrl;
+            } else if (hdUrl) {
+              console.error(LOG_PREFIX, `업스케일 URL 폐기 (다른 post 의 영상) — base=${baseId} got=${assetGenId(hdUrl)} url=${location.href}`);
+              showToast('⚠️ 업스케일 중 페이지 이동 — 원본 영상 사용', 'warn');
+            }
           }
         }
         checkStopped();
@@ -378,6 +391,7 @@
         if (!videoUrl) throw new Error('비디오 URL을 찾을 수 없습니다');
 
         // Step 4: 업스케일 (timeout 60초 — 사용자 정책 2026-06-07)
+        const postUrlBeforeUpscale = location.href;
         if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
           showToast('480p 감지 - 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(60000);
@@ -385,7 +399,19 @@
             console.log(LOG_PREFIX, '이미 720p HD — 업스케일 스킵');
           } else if (upscaled) {
             const hdUrl = await extractVideoUrl();
-            if (hdUrl) videoUrl = hdUrl;
+            // 🔒 업스케일 결과 채택 조건 — 둘 중 하나라도 만족해야 한다.
+            //    (a) 업스케일 전과 같은 post 페이지에 그대로 있다 (정상 경로)
+            //    (b) asset 식별자가 업스케일 전과 동일 (같은 생성물의 _hd 버전)
+            //    버튼 오클릭으로 다른 post 로 이동한 경우 hdUrl 은 '이전에 만들었던 영상' 이므로 폐기.
+            const baseId = assetGenId(videoUrl);
+            const samePage = location.href === postUrlBeforeUpscale;
+            const sameGen = !!(hdUrl && baseId && assetGenId(hdUrl) === baseId);
+            if (hdUrl && (samePage || sameGen)) {
+              videoUrl = hdUrl;
+            } else if (hdUrl) {
+              console.error(LOG_PREFIX, `업스케일 URL 폐기 (다른 post 의 영상) — base=${baseId} got=${assetGenId(hdUrl)} url=${location.href}`);
+              showToast('⚠️ 업스케일 중 페이지 이동 — 원본 영상 사용', 'warn');
+            }
           }
         }
         checkStopped();
@@ -2506,8 +2532,27 @@
   // 또한 720p 로 만들어진 영상은 메뉴에 "업스케일" 항목 자체가 없으므로 — 그 경우 'already-hd' 반환.
   // 결과 페이지 구조: 비디오 오른쪽에 세로 아이콘 버튼들, 맨 아래가 "..." 버튼
   // "..." 클릭 → 팝업 메뉴: 좋아요 / 싫어요 / 동영상 업스케일
+  // 🛡️ MangoAuto 자체 UI(디버그 토스트 등) 를 페이지 요소로 오인하지 않도록 판별.
+  //    사고 사례(2026-07-30): 토스트 "[MangoAuto] Step 10: 업스케일 시도..." 가
+  //    업스케일 메뉴 항목 전체검색(방법 3)에 매칭돼 자기 토스트를 클릭했다.
+  function isOwnUiEl(el) {
+    try {
+      if (!el || !el.closest) return false;
+      if (el.closest('#mangoauto-debug, [data-mangoauto]')) return true;
+      return (el.textContent || '').trim().startsWith('[MangoAuto]');
+    } catch (_) { return false; }
+  }
+
   async function tryUpscaleVideo(timeout = 60000) {  // 5분 → 1분 (실제 업스케일 ~30-50초)
     const upscaleKeywords = ['업스케일', 'upscale'];
+    // 🔒 업스케일 도중 다른 post 로 페이지가 이동했는지 감시하기 위한 기준 URL.
+    const _upscaleStartUrl = location.href;
+    const _navChanged = () => {
+      if (location.href === _upscaleStartUrl) return false;
+      console.error(LOG_PREFIX, `업스케일 중단 — 페이지가 다른 post 로 이동: ${location.href}`);
+      showToast('업스케일 중단 (페이지 이동 감지) — 원본 영상 유지', 'warn');
+      return true;
+    };
 
     // Step 1: 비디오 요소 등장 대기 (페이지 전환 후 DOM에 video 태그 로드 시간 필요)
     // 새 UI 는 결과 페이지 라우팅 후 video 태그 마운트까지 2~10초 걸림.
@@ -2608,6 +2653,11 @@
         'thêm', 'xem thêm', 'tùy chọn', 'tuỳ chọn',
       ];
       if (moreKeys.some(k => ariaLabel.includes(k) || title.includes(k))) return true;
+      // data-testid / id / class 기반 (2026-07-30 새 UI — aria-label 이 비어있는 케이스)
+      const testId = (btn.getAttribute('data-testid') || btn.id || '').toLowerCase();
+      if (/(^|[-_])(more|menu|options?|ellipsis|overflow|kebab)([-_]|$)/.test(testId)) return true;
+      // 라벨 자체가 점 문자인 케이스
+      if (['...', '⋯', '⋮', '…'].includes((ariaLabel || title).trim())) return true;
       // SVG에 circle 3개 (점 세 개 패턴)
       const svg = btn.querySelector('svg');
       if (svg) {
@@ -2691,9 +2741,19 @@
           if (!isNearVideo(b)) return false;
           if (isVideoControlBtn(b)) return false;
           if (isBlacklistedIcon(b)) return false;  // 공유/좋아요/다운로드 등 제외
+          if (isOwnUiEl(b)) return false;          // MangoAuto 자체 오버레이 제외
           const t = (b.textContent || '').trim();
           if (t.length > 6) return false;
           if (b.querySelector('textarea, input')) return false;
+          // 🚨 2026-07-30: 새 UI 에서 '게시물 카드' 버튼이 폴백에 걸려 클릭 → 다른 post 로 페이지 이동,
+          //    그 결과 이전에 만든 영상 URL 을 받아오는 사고가 있었다. 카드류를 구조적으로 배제한다.
+          if (b.tagName === 'A' || b.hasAttribute('href') || b.closest('a[href]')) return false;  // 링크 = 이동
+          if (b.querySelector('video, img, canvas, picture')) return false;                       // 카드 썸네일
+          const al = (b.getAttribute('aria-label') || '').trim();
+          if (al.length > 24) return false;   // 카드 aria-label = 프롬프트 전문 (⋯ 은 '더보기' 수준의 짧은 라벨)
+          const rb = b.getBoundingClientRect();
+          const squareish = Math.abs(rb.width - rb.height) < 10 && rb.width >= 16 && rb.width <= 64;
+          if (!squareish) return false;       // ⋯ 는 작은 정사각 아이콘 버튼
           return true;
         });
         if (nearIconBtns.length >= 1) {
@@ -2829,6 +2889,7 @@
     let upscaleItem = null;
 
     for (let menuAttempt = 1; menuAttempt <= 3 && !upscaleItem; menuAttempt++) {
+      if (_navChanged()) return false;
       console.log(LOG_PREFIX, `"..." 메뉴 열기 시도 ${menuAttempt}/3...`);
       if (menuAttempt === 1) {
         showToast('"..." 메뉴 열기...', 'info');
@@ -2978,6 +3039,7 @@
           const cs = window.getComputedStyle(el);
           if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
           if (el.closest('[data-variant="sidebar"], aside')) continue;
+          if (isOwnUiEl(el)) continue;   // MangoAuto 자체 토스트 자기매칭 차단
           upscaleItem = el;
           const txt = (el.textContent || '').trim();
           console.log(LOG_PREFIX, `업스케일 항목 발견 (전체 LEAF 폴백): "${txt}" (${el.tagName})`);
@@ -3058,6 +3120,7 @@
       }
       return el;  // 못 찾으면 원본
     }
+    if (_navChanged()) return false;
     const clickTarget = resolveClickable(upscaleItem);
     if (clickTarget !== upscaleItem) {
       console.log(LOG_PREFIX, `업스케일 클릭 대상 변경: ${upscaleItem.tagName} → ${clickTarget.tagName} (role=${clickTarget.getAttribute('role') || '-'})`);
@@ -3139,6 +3202,15 @@
   /**
    * 비디오 URL 추출: 여러 방법 시도 + 재시도
    */
+  // 🔑 에셋 URL 에서 '생성물 식별자' 추출 — https://assets.grok.com/users/<uid>/generated/<id>[_hd].mp4
+  //    업스케일은 같은 id 에 _hd 만 붙는다. id 가 바뀌었다면 = 다른 영상(다른 post) 이다.
+  //    사고 사례(2026-07-30): 업스케일 중 페이지가 이전 post 로 이동해 그 영상 URL 을 받아 다운로드했다.
+  function assetGenId(url) {
+    const m = String(url || '').match(/\/generated\/([^/?#]+)/);
+    if (!m) return '';
+    return m[1].replace(/\.[a-z0-9]+$/i, '').replace(/_hd.*$/i, '');
+  }
+
   async function extractVideoUrl() {
     // 즉시 시도
     let url = getVideoUrl();
