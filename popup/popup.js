@@ -11,7 +11,9 @@ let currentPlatform = 'grok';
 let currentMode = 'text-image';  // text-image | image-video (프레임→영상). text-video / image-image / Whisk 제거됨.
 let currentContentType = 'segments';  // segments | thumbnail
 let currentProject = null;
-let currentApiType = 'longform-v2';  // 'longform-v2' (기본: 롱폼) | 'shortform' | 'mangomaker'
+let currentApiType = 'longform-v2';  // 롱폼 V2 전용 (숏폼·메이커·무비 폐기 2026-08-04).
+// ⚠️ 아래에 남아 있는 currentApiType === 'mangomaker' 분기들은 도달하지 않는 죽은 코드다.
+//    세그먼트 인덱스 0/1-based 처리와 얽혀 있어 섣불리 걷어내면 회귀 위험이 있어 남겨둔다.
 let uploadedImages = [];  // { file, dataUrl, name }
 let lastState = null;
 let reviewItems = [];
@@ -151,9 +153,30 @@ function showToast(message, type = 'info', duration = 2400) {
 }
 
 // ─── Load Projects ───
+// 카테고리 표시명 캐시 ({ 'senior-psychology': '심리학 돋보기', ... }).
+// 팝업이 열려 있는 동안만 유지 — 카테고리는 자주 바뀌지 않으므로 1회 조회로 충분하다.
+let _categoryNames = null;
+
+async function loadCategoryNames() {
+  if (_categoryNames) return _categoryNames;
+  try {
+    const cats = await sendBg({ type: 'API_LIST_CATEGORIES' });
+    _categoryNames = {};
+    // 응답이 배열([{id,name}]) 또는 {categories:[...]} 양쪽 모두를 허용
+    const list = Array.isArray(cats) ? cats : (cats && cats.categories) || [];
+    list.forEach(c => { if (c && c.id) _categoryNames[c.id] = c.name || c.id; });
+  } catch (_) {
+    _categoryNames = {};   // 실패해도 그룹화만 못 할 뿐, 목록은 정상 표시
+  }
+  return _categoryNames;
+}
+
 async function loadProjects() {
   try {
-    const projects = await sendBg({ type: 'API_LIST_PROJECTS', apiType: currentApiType });
+    const [projects, catNames] = await Promise.all([
+      sendBg({ type: 'API_LIST_PROJECTS', apiType: currentApiType }),
+      loadCategoryNames(),
+    ]);
     const select = $('#projectSelect');
     select.innerHTML = '<option value="">프로젝트 선택...</option>';
     if (Array.isArray(projects)) {
@@ -162,12 +185,35 @@ async function loadProjects() {
         if (a.created_at && b.created_at) return new Date(b.created_at) - new Date(a.created_at);
         return (b.id || 0) - (a.id || 0);
       });
+
+      // 망고허브 롱폼 사이드바와 같은 방식으로 카테고리별 묶음.
+      // 정렬 순서는 위에서 정한 최신순을 그대로 따르므로, 가장 최근에 손댄
+      // 프로젝트가 속한 카테고리가 위로 온다.
+      const groups = [];               // [{ key, label, items: [] }]
+      const byKey = new Map();
       projects.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        opt.textContent = `⚪ ${p.name || `Project ${p.id}`}`;
-        select.appendChild(opt);
+        const key = p.category || '_none';
+        if (!byKey.has(key)) {
+          const g = { key, label: catNames[key] || (key === '_none' ? '카테고리 없음' : key), items: [] };
+          byKey.set(key, g); groups.push(g);
+        }
+        byKey.get(key).items.push(p);
       });
+
+      groups.forEach(g => {
+        // 카테고리가 하나뿐이면 optgroup 이 공간만 잡아먹으니 평면으로 둔다
+        const host = groups.length > 1
+          ? select.appendChild(Object.assign(document.createElement('optgroup'),
+              { label: `${g.label} (${g.items.length})` }))
+          : select;
+        g.items.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = `⚪ ${p.name || `Project ${p.id}`}`;
+          host.appendChild(opt);
+        });
+      });
+
       // 백그라운드에서 각 프로젝트 상태 가져와서 동그라미 업데이트
       fetchProjectStatuses(projects);
     }

@@ -427,6 +427,9 @@ async function handleMessage(msg, sender) {
     case 'API_LIST_PROJECTS':
       return await MangoHubAPI.listProjects(msg.apiType);
 
+    case 'API_LIST_CATEGORIES':
+      return await MangoHubAPI.listCategories();
+
     case 'API_GET_PROJECT':
       return await MangoHubAPI.getProject(msg.projectId, msg.apiType);
 

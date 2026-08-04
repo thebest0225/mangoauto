@@ -139,11 +139,10 @@
       <!-- MangoHub Section -->
       <section id="mangohubSection" class="card">
         <div class="card-inner">
-          <div class="api-type-tabs segmented segmented-xs">
+          <!-- 2026-08-04: 숏폼·메이커 라우터 폐기, 무비스튜디오 서비스 종료 → 롱폼(V2)만 남김.
+               탭이 하나뿐이라 UI 에서 감춘다(핸들러는 유지 — 나중에 탭이 늘면 다시 노출). -->
+          <div class="api-type-tabs segmented segmented-xs" hidden>
             <button class="api-type-tab active" data-api="longform-v2">롱폼</button>
-            <button class="api-type-tab" data-api="shortform">숏폼</button>
-            <button class="api-type-tab" data-api="mangomaker">메이커</button>
-            <button class="api-type-tab" data-api="movie">무비</button>
           </div>
           <div class="row gap-4">
             <select id="projectSelect" class="select flex-1">
