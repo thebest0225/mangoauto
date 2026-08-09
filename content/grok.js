@@ -252,9 +252,19 @@
 
         // Step 2: 비디오 모드 전환 + 설정 (새 UI: 하단 바에서 직접, 구 UI: 패널)
         // 새 UI에서는 비디오 모드를 먼저 선택해야 이미지가 프레임으로 처리됨
-        showToast('Step 2: 비디오 모드 전환 + 설정...', 'info');
-        const switched = await switchToVideoMode(settings);
-        if (!switched) throw new Error('비디오 모드 전환 실패');
+        //
+        // 🔒 skipVideoSettings (기본 ON, 2026-08-09):
+        //    리뉴얼된 그록 UI 에서 설정 패널 자동 조작이 엉뚱한 버튼을 눌러 페이지가
+        //    이동하는 사고가 반복돼, 사용자가 직접 설정해둔 값을 건드리지 않는 것을 기본으로 한다.
+        //    확장은 이미지 첨부 → 프롬프트 → 전송 → 다운로드/업스케일만 담당.
+        if (settings?.grok?.skipVideoSettings === false) {
+          showToast('Step 2: 비디오 모드 전환 + 설정...', 'info');
+          const switched = await switchToVideoMode(settings);
+          if (!switched) throw new Error('비디오 모드 전환 실패');
+        } else {
+          showToast('Step 2: 비디오 설정 자동화 OFF — 현재 설정 그대로 사용', 'info');
+          reportComposerMode();
+        }
         checkStopped();
 
         // Step 3: 이미지 먼저 첨부 (프롬프트보다 먼저 — 단일 업로드 + 업로드 완료 보장)
@@ -367,9 +377,14 @@
         checkStopped();
 
         // Step 1: 메인 페이지에서 비디오 모드 + 설정 적용
-        showToast('Step 1: 비디오 설정 적용 (메인)...', 'info');
-        await applySettingsOnMainPage(settings);
-        await delay(500);
+        if (settings?.grok?.skipVideoSettings === false) {
+          showToast('Step 1: 비디오 설정 적용 (메인)...', 'info');
+          await applySettingsOnMainPage(settings);
+          await delay(500);
+        } else {
+          showToast('Step 1: 비디오 설정 자동화 OFF — 현재 설정 그대로 사용', 'info');
+          reportComposerMode();
+        }
         checkStopped();
 
         // Step 2: 프롬프트 입력 + 제출 → 바로 영상 생성
@@ -857,6 +872,33 @@
   //   findButtonByTextInArea, findDropdownItem, findDropdownButtons,
   //   clickButtonInList, closeSettingsPanel
   // 워크플로우: 모달열기 → 동영상 만들기 선택 → 설정 적용 → 닫기
+  /**
+   * 현재 컴포저 설정을 **읽기만** 한다 (클릭 없음).
+   * 비디오 설정 자동화를 껐을 때, 사용자가 맞춰둔 상태가 실제로 뭔지 로그로 확인용.
+   */
+  function reportComposerMode() {
+    try {
+      const found = [];
+      document.querySelectorAll('button, [role="tab"], [role="radio"]').forEach(b => {
+        const r = b.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return;
+        if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
+        const t = (b.textContent || '').trim();
+        const a = (b.getAttribute('aria-label') || '').trim();
+        // 길이(10s) / 해상도(720p) / 비율(16:9) / 모드(비디오·이미지) 로 보이는 것만
+        if (/^\d{1,2}\s*(s|초)$/i.test(t) || /^\d{3,4}p$/i.test(t) || /^\d{1,2}\s*:\s*\d{1,2}$/.test(t) ||
+            (t.length <= 8 && /^(비디오|동영상|이미지|video|image)$/i.test(t))) {
+          const pressed = b.getAttribute('aria-pressed') || b.getAttribute('data-state') || '';
+          found.push(`${t || a}${pressed ? `(${pressed})` : ''}`);
+        }
+      });
+      console.log(LOG_PREFIX, `[읽기전용] 현재 컴포저 설정 후보: [${found.join(', ')}]`);
+      if (found.length) showToast(`현재 설정: ${found.slice(0, 8).join(' ')}`, 'info');
+    } catch (e) {
+      console.warn(LOG_PREFIX, 'reportComposerMode 실패 (무시):', e.message);
+    }
+  }
+
   async function switchToVideoMode(settings) {
     const grok = settings?.grok || {};
     const { videoDuration, videoResolution, aspectRatio } = grok;
@@ -1170,11 +1212,19 @@
   }
 
   async function goBack() {
-    // history.back()은 채팅(/c/...) 또는 프로젝트 페이지로 갈 수 있으므로
-    // /imagine으로 직접 이동
-    console.log(LOG_PREFIX, 'goBack: /imagine으로 직접 이동');
-    window.location.href = 'https://grok.com/imagine';
-    await delay(2000);
+    // history.back()은 채팅(/c/...) 또는 프로젝트 페이지로 갈 수 있으므로 쓰지 않는다.
+    //
+    // 🔑 2026-08-09: 예전엔 무조건 location.href 하드 리로드였는데,
+    //    비디오 설정 자동화를 끄고 사용자가 수동으로 맞춘 모드/해상도를 쓰는 운영에선
+    //    하드 리로드가 컴포저 상태를 초기화해버릴 수 있다.
+    //    → SPA 라우팅(사이드바 Imagine 링크) 우선, 실패 시에만 하드 이동.
+    console.log(LOG_PREFIX, 'goBack: /imagine 으로 복귀 (SPA 우선)');
+    try {
+      await ensureMainPage();   // 내부에서 SPA → 뒤로가기 → location.href 순으로 시도
+    } catch (e) {
+      console.warn(LOG_PREFIX, 'goBack: SPA 복귀 실패 → 하드 이동됨:', e.message);
+    }
+    await delay(1000);
   }
 
   async function waitForMainPage(timeout = 15000) {
