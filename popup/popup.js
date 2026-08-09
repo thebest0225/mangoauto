@@ -542,7 +542,8 @@ function bindEvents() {
         let hi = m[2] ? parseInt(m[2]) : parseInt(m[1]);
         if (lo > hi) { const t = lo; lo = hi; hi = t; }
         btn.dataset.rangeLo = String(lo); btn.dataset.rangeHi = String(hi); btn.dataset.range = `${lo}-${hi}`;
-        btn.textContent = `수기 ${lo}-${hi}`;
+        btn.textContent = `${lo}-${hi}`;   // 칸이 좁아 범위만 표기 (툴팁에 설명)
+        btn.title = `수기 입력 — 대기열번호 ${lo}~${hi}번 중 생성 필요한 것만 선택`;
         $$('.qs-pct-btn').forEach(b => { if (STANDALONE_MODES.has(b.dataset.mode)) b.classList.remove('active'); });
         btn.classList.add('active');
         applyQuickSelect();
@@ -812,14 +813,19 @@ function updateQueuePreview() {
 
 // ─── Queue Selection Helpers ───
 // 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어.
-// all=전체, odd=홀수, even=짝수, 그 외=lo~hi 범위.
-// (2026-07-09: v1 모드 제거, 전체(all) 추가. 범위 ~20/~40/~60 = 1~20/21~40/41~60)
+// (2026-08-09: 5개 모드로 재편 — 영1=1~13, 영2=14~30, 이1=앞 50%, 이2=뒤 50%, 수기=직접입력)
+//   pct1/pct2 는 고정 번호가 아니라 화면의 최대 대기열번호를 반으로 나눠 계산한다.
+//   all=전체, odd=홀수, even=짝수 는 과거 버튼용 (현재 UI 에는 없지만 호환 유지).
 const STANDALONE_MODES = new Set(['all', 'odd', 'even']);
-function btnPredicate(btn) {
+function btnPredicate(btn, maxNum) {
   const mode = btn.dataset.mode;
   if (mode === 'all') return () => true;
   if (mode === 'odd') return (num) => num % 2 === 1;
   if (mode === 'even') return (num) => num % 2 === 0;
+  if (mode === 'pct1' || mode === 'pct2') {
+    const half = Math.ceil((maxNum || 0) / 2);
+    return mode === 'pct1' ? (num) => num <= half : (num) => num > half;
+  }
   const lo = parseInt(btn.dataset.rangeLo);
   const hiRaw = (btn.dataset.rangeHi || '').trim();
   const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
@@ -839,7 +845,12 @@ function applyQuickSelect() {
     updateQueueSelectedCount();
     return;
   }
-  const preds = [...activeBtns].map(btnPredicate);
+  // 퍼센트 모드(이1/이2) 계산 기준 — 화면에 있는 가장 큰 대기열번호
+  const maxNum = [...allCbs].reduce((m, cb) => {
+    const n = parseInt(cb.dataset.num);
+    return isNaN(n) ? m : Math.max(m, n);
+  }, 0);
+  const preds = [...activeBtns].map(b => btnPredicate(b, maxNum));
   let matched = 0;
   allCbs.forEach(cb => {
     const num = parseInt(cb.dataset.num);
