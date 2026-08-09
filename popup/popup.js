@@ -534,7 +534,7 @@ function bindEvents() {
     btn.addEventListener('click', () => {
       // 수기입력: 범위를 직접 입력받아 range 버튼처럼 동작
       if (btn.dataset.mode === 'manual') {
-        const raw = prompt('대기열 범위 입력 — 예) 26-50, 또는 30 (=1~30)', btn.dataset.range || '');
+        const raw = prompt('대기열번호 범위 입력 — 예) 26-50, 또는 30 (=1~30)\n※ 영1/영2/이1/이2 와 달리 수기는 "대기열번호" 기준입니다.', btn.dataset.range || '');
         if (raw == null) return;
         const m = raw.trim().match(/^(\d+)\s*(?:[-~]\s*(\d+))?$/);
         if (!m) { alert('형식이 올바르지 않습니다. 예) 26-50 또는 30'); return; }
@@ -812,23 +812,39 @@ function updateQueuePreview() {
 }
 
 // ─── Queue Selection Helpers ───
-// 범위 버튼 1개의 "대기열번호 → 포함 여부" 술어.
-// (2026-08-09: 5개 모드로 재편 — 영1=1~13, 영2=14~30, 이1=앞 50%, 이2=뒤 50%, 수기=직접입력)
-//   pct1/pct2 는 고정 번호가 아니라 화면의 최대 대기열번호를 반으로 나눠 계산한다.
-//   all=전체, odd=홀수, even=짝수 는 과거 버튼용 (현재 UI 에는 없지만 호환 유지).
+// 범위 버튼 1개의 "포함 여부" 술어. 술어는 (num, pos) 를 받는다.
+//   num = 화면에 표시되는 대기열번호, pos = 목록에서 위에서부터 몇 번째인지 (1-based)
+//
+// (2026-08-09 재편) 고정 버튼 4개는 **대기열번호가 아니라 위에서부터 개수** 기준이다.
+//   이미 생성된 항목은 큐에서 빠져 번호에 구멍이 생기므로, 번호 기준이면
+//   "영1" 을 눌러도 13개가 아니라 7개만 잡히는 식이 된다. 화면에 보이는 대로
+//   위에서부터 세는 게 실제로 원하는 동작.
+//     영1  = 위에서부터 1~14번째
+//     영2  = 위에서부터 15~30번째
+//     이1  = 앞 절반 (목록 개수의 절반, 홀수면 앞쪽이 하나 더)
+//     이2  = 뒤 절반
+//   수기 = 예외적으로 **대기열번호** 기준 (여러 컴퓨터로 1~20 / 21~40 나눠 작업하는 용도).
+//   all/odd/even 은 과거 버튼용 (현재 UI 에는 없지만 호환 유지).
 const STANDALONE_MODES = new Set(['all', 'odd', 'even']);
-function btnPredicate(btn, maxNum) {
+function btnPredicate(btn, total) {
   const mode = btn.dataset.mode;
   if (mode === 'all') return () => true;
   if (mode === 'odd') return (num) => num % 2 === 1;
   if (mode === 'even') return (num) => num % 2 === 0;
   if (mode === 'pct1' || mode === 'pct2') {
-    const half = Math.ceil((maxNum || 0) / 2);
-    return mode === 'pct1' ? (num) => num <= half : (num) => num > half;
+    const half = Math.ceil((total || 0) / 2);
+    return mode === 'pct1' ? (num, pos) => pos <= half : (num, pos) => pos > half;
   }
+  if (mode === 'pos') {
+    const lo = parseInt(btn.dataset.posLo);
+    const hiRaw = (btn.dataset.posHi || '').trim();
+    const hi = hiRaw === '' ? Infinity : parseInt(hiRaw);
+    return (num, pos) => pos >= lo && pos <= hi;
+  }
+  // 수기입력 등 — 대기열번호 기준 범위
   const lo = parseInt(btn.dataset.rangeLo);
   const hiRaw = (btn.dataset.rangeHi || '').trim();
-  const hi = hiRaw === '' ? Infinity : parseInt(btn.dataset.rangeHi);
+  const hi = hiRaw === '' ? Infinity : parseInt(hiRaw);
   return (num) => num >= lo && num <= hi;
 }
 
@@ -845,16 +861,14 @@ function applyQuickSelect() {
     updateQueueSelectedCount();
     return;
   }
-  // 퍼센트 모드(이1/이2) 계산 기준 — 화면에 있는 가장 큰 대기열번호
-  const maxNum = [...allCbs].reduce((m, cb) => {
-    const n = parseInt(cb.dataset.num);
-    return isNaN(n) ? m : Math.max(m, n);
-  }, 0);
-  const preds = [...activeBtns].map(b => btnPredicate(b, maxNum));
+  // 개수 기준(영1/영2/이1/이2) 계산 기준 — 화면에 표시된 항목 총 개수
+  const total = allCbs.length;
+  const preds = [...activeBtns].map(b => btnPredicate(b, total));
   let matched = 0;
-  allCbs.forEach(cb => {
+  allCbs.forEach((cb, i) => {
     const num = parseInt(cb.dataset.num);
-    const sel = !isNaN(num) && preds.some(p => p(num));
+    const pos = i + 1;   // 위에서부터 1-based 순번
+    const sel = preds.some(p => p(num, pos));
     cb.checked = sel;
     if (sel) matched++;
   });
