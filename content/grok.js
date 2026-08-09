@@ -209,6 +209,12 @@
     }
     isProcessing = true;
     shouldStop = false; // 새 작업 시작 시 중지 플래그 리셋 (위 중단 신호 해제)
+    // 🚨 작업 중에는 공용 다이얼로그 자동닫기를 끈다.
+    //    shared-dom 의 MangoDialogDismisser 는 4초마다 [role="dialog"]/[class*="modal"] 안의
+    //    '확인/계속/닫기/OK/Yes' 포함 버튼을 무조건 클릭한다. 리뉴얼된 그록 UI 에선
+    //    생성 중 모달·설정 팝업을 건드려 엉뚱한 동작(페이지 이동/중복 전송)을 일으킬 수 있다.
+    //    (flow.js 는 이미 같은 방식으로 꺼둔다.)
+    try { window.MangoDialogDismisser?.stop(); } catch (_) {}
     showToast('handleExecutePrompt 시작', 'info');
 
     try {
@@ -502,6 +508,7 @@
       return { error: err.message, errorCode: err instanceof ModerationError ? 'MODERATED' : '' };
     } finally {
       isProcessing = false;
+      try { window.MangoDialogDismisser?.resume(); } catch (_) {}
     }
   }
 
@@ -2543,6 +2550,30 @@
     } catch (_) { return false; }
   }
 
+  /**
+   * 잘못 클릭해서 열린 오버레이(라이트박스/모달/메뉴)를 닫는다.
+   * 🚨 2026-08-09: 리뉴얼 UI 에서 "Expand video" 를 오클릭해 전체화면 모달이 열린 채
+   *    남으면 다음 작업의 에디터/전송 버튼 탐색이 전부 실패해 큐가 멈췄다.
+   */
+  async function closeStrayOverlay() {
+    const hasOverlay = () => !!document.querySelector(
+      '[role="dialog"], [role="menu"], [data-radix-popper-content-wrapper], [data-state="open"][role]'
+    );
+    for (let i = 0; i < 3; i++) {
+      if (!hasOverlay()) break;
+      for (const target of [document.activeElement || document.body, document.body, document]) {
+        try {
+          target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+          target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+        } catch (_) {}
+      }
+      await delay(350);
+    }
+    if (hasOverlay()) {
+      console.warn(LOG_PREFIX, '오버레이가 ESC 로 안 닫힘 — 남은 상태로 진행');
+    }
+  }
+
   async function tryUpscaleVideo(timeout = 60000) {  // 5분 → 1분 (실제 업스케일 ~30-50초)
     const upscaleKeywords = ['업스케일', 'upscale'];
     // 🔒 업스케일 도중 다른 post 로 페이지가 이동했는지 감시하기 위한 기준 URL.
@@ -2607,8 +2638,14 @@
     const videoControlLabels = [
       // EN
       'mute', 'unmute', 'volume', 'sound', 'play', 'pause', 'fullscreen', 'full screen',
+      // 🚨 2026-08-09 리뉴얼: 영상 옆에 "Expand video" (확대/라이트박스) 버튼이 생겼다.
+      //    이게 폴백 후보로 잡혀 클릭되면 전체화면 모달이 열리고 이후 모든 단계가 깨진다.
+      'expand', 'collapse', 'enlarge', 'zoom', 'minimize', 'maximize',
+      'picture in picture', 'picture-in-picture', 'pip',
+      'seek', 'speed', 'caption', 'subtitle', 'replay', 'restart', 'settings',
       // KO
       '음소거', '재생', '일시정지', '전체화면', '볼륨', '해제',
+      '확대', '축소', '크게', '전체 화면', '자막', '설정', '다시 재생',
       // TH
       'ปิดเสียง', 'เปิดเสียง', 'ระดับเสียง', 'เล่น', 'หยุดชั่วคราว', 'เต็มจอ',
       // VI
@@ -2873,6 +2910,7 @@
         dbgContainer = dbgContainer.parentElement;
       }
       showToast('업스케일 실패: "..." 버튼 못 찾음', 'warn');
+      await closeStrayOverlay();
       return false;
     }
 
@@ -2900,7 +2938,8 @@
         moreBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
         moreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       } else {
-        // 재시도: 다른 클릭 방식 시도
+        // 재시도: 잘못 열린 오버레이(라이트박스 등) 부터 ESC 로 정리 후 다른 클릭 방식 시도
+        await closeStrayOverlay();
         document.body.click(); // 기존 메뉴 닫기
         await delay(500);
         if (menuAttempt === 2) {
@@ -3094,6 +3133,7 @@
       }
 
       showToast('업스케일 실패: 메뉴 항목 못 찾음', 'warn');
+      await closeStrayOverlay();
       return false;
     }
 
@@ -3194,6 +3234,7 @@
 
     console.warn(LOG_PREFIX, 'Upscale timeout after', timeout / 1000, 'seconds');
     showToast('업스케일 타임아웃 - 480p로 진행', 'warn');
+    await closeStrayOverlay();
     return false;
   }
 
