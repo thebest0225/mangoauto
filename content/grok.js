@@ -2682,22 +2682,24 @@
    *    남으면 다음 작업의 에디터/전송 버튼 탐색이 전부 실패해 큐가 멈췄다.
    */
   async function closeStrayOverlay() {
-    const hasOverlay = () => !!document.querySelector(
-      '[role="dialog"], [role="menu"], [data-radix-popper-content-wrapper], [data-state="open"][role]'
+    // ⛔️ Escape 키는 절대 쓰지 않는다 (2026-08-09 사고):
+    //    1) document 에 dispatch 하면 그록 핸들러가 e.target.closest() 를 호출하다
+    //       "t.closest is not a function" 로 죽는다 (document 에는 closest 가 없음).
+    //    2) 그록 post 페이지에서 ESC = 뒤로가기. 결과 페이지에서 눌리면 history 를 거슬러
+    //       예전 post 로 이동해버려, 작업이 완료 신호를 못 보내고 통째로 재시도된다.
+    //    → 진짜 모달이 열려 있을 때, 그 모달 안의 닫기 버튼만 클릭한다.
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) return;
+    const closeBtn = dialog.querySelector(
+      'button[aria-label*="close" i], button[aria-label*="닫기"], button[aria-label*="Dismiss" i]'
     );
-    for (let i = 0; i < 3; i++) {
-      if (!hasOverlay()) break;
-      for (const target of [document.activeElement || document.body, document.body, document]) {
-        try {
-          target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
-          target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
-        } catch (_) {}
-      }
-      await delay(350);
+    if (closeBtn) {
+      console.log(LOG_PREFIX, '열린 모달 닫기 버튼 클릭');
+      try { closeBtn.click(); } catch (_) {}
+      await delay(400);
+      return;
     }
-    if (hasOverlay()) {
-      console.warn(LOG_PREFIX, '오버레이가 ESC 로 안 닫힘 — 남은 상태로 진행');
-    }
+    console.warn(LOG_PREFIX, '모달이 열려있으나 닫기 버튼 없음 — 건드리지 않고 진행');
   }
 
   async function tryUpscaleVideo(timeout = 60000) {  // 5분 → 1분 (실제 업스케일 ~30-50초)
@@ -2769,9 +2771,11 @@
       'expand', 'collapse', 'enlarge', 'zoom', 'minimize', 'maximize',
       'picture in picture', 'picture-in-picture', 'pip',
       'seek', 'speed', 'caption', 'subtitle', 'replay', 'restart', 'settings',
+      // 💸 "프레임에서 연장 / Extend from frame" — 누르면 새 영상이 생성돼 크레딧이 나간다. 절대 클릭 금지.
+      'extend', 'continue video',
       // KO
       '음소거', '재생', '일시정지', '전체화면', '볼륨', '해제',
-      '확대', '축소', '크게', '전체 화면', '자막', '설정', '다시 재생',
+      '확대', '축소', '크게', '전체 화면', '자막', '설정', '다시 재생', '연장',
       // TH
       'ปิดเสียง', 'เปิดเสียง', 'ระดับเสียง', 'เล่น', 'หยุดชั่วคราว', 'เต็มจอ',
       // VI
@@ -2881,19 +2885,63 @@
       container = container.parentElement;
     }
 
-    // 2차 폴백: depth 0~6, 위치 가까운 버튼 중 BLACKLIST 제외 후 가장 아래 (= ⋯ 위치)
-    // 현재 그록 사이드 패널 (top→bottom): ❤️ Like → 𝕏 X → ⬇️ Download → ⬆️ Share → ⋯ More
-    // ⋯ 가 패널 맨 아래 — 따라서 BLACKLIST 제외 후 마지막 y-좌표 버튼 = ⋯ 확률 가장 높음.
     function isBlacklistedIcon(b) {
       const al = (b.getAttribute('aria-label') || '').toLowerCase();
       const tt = (b.getAttribute('title') || '').toLowerCase();
       const blackKeys = [
-        'share', 'copy', 'like', 'download', 'upload', 'follow', 'unfollow',
+        'share', 'copy', 'like', 'dislike', 'download', 'upload', 'follow', 'unfollow',
         'comment', 'reply', 'bookmark', 'pin', 'save', 'twitter', 'post to x',
-        '공유', '복사', '좋아요', '다운로드', '업로드', '팔로우', '북마크', '저장', '링크 복사',
+        'upvote', 'downvote', 'thumbs', 'favorite', 'report', 'delete', 'regenerate', 'extend',
+        '공유', '복사', '좋아요', '싫어요', '다운로드', '업로드', '팔로우', '북마크', '저장', '링크 복사',
+        '신고', '삭제', '연장', '재생성', '프리셋',
       ];
       return blackKeys.some(k => al.includes(k) || tt.includes(k));
     }
+
+    // ── 2차: 액션 바 앵커 방식 (2026-08-09 리뉴얼 대응) ──
+    //
+    // 리뉴얼된 post 페이지는 ⋯ 가 **영상 옆이 아니라 오른쪽 패널 최하단 액션 줄**로 옮겼다.
+    //   [👍 👎]        [♡ 𝕏 ⬇ ⋯]   ← 영상보다 한참 아래(y≈950), 오른쪽 끝
+    // 그래서 "영상 근처" 조건으로는 영영 못 찾는다 (로그: 근처 버튼 = Expand/일시정지/음소거/연장 뿐).
+    // → 확실히 아는 버튼(다운로드/공유/좋아요)을 앵커로 그 '줄'을 찾고,
+    //   같은 줄에서 블랙리스트에 안 걸리는 가장 오른쪽 아이콘 버튼 = ⋯ 로 본다.
+    function findActionBarMoreBtn() {
+      const ANCHOR = /download|다운로드|share|공유|like|좋아요|post to x|repost/i;
+      const anchors = Array.from(document.querySelectorAll('button')).filter(b => {
+        const s = ((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')).trim();
+        if (!ANCHOR.test(s)) return false;
+        if (b.closest('[data-variant="sidebar"], aside, nav, header')) return false;
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      for (const anchor of anchors) {
+        const aTop = anchor.getBoundingClientRect().top;
+        let row = anchor.parentElement;
+        for (let d = 0; d < 3 && row; d++, row = row.parentElement) {
+          // 앵커와 같은 가로줄에 있는 보이는 버튼들
+          const sibs = Array.from(row.querySelectorAll('button')).filter(b => {
+            const r = b.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) return false;
+            return Math.abs(r.top - aTop) <= 20;
+          });
+          if (sibs.length < 3) continue;   // 액션 줄은 보통 아이콘 4개 이상
+          const cands = sibs.filter(b =>
+            !isBlacklistedIcon(b) && !isVideoControlBtn(b) && !isOwnUiEl(b) &&
+            (b.textContent || '').trim().length <= 2 && !b.closest('a[href]')
+          );
+          if (!cands.length) continue;
+          cands.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+          const picked = cands[cands.length - 1];   // 줄의 가장 오른쪽 = ⋯
+          const pr = picked.getBoundingClientRect();
+          console.log(LOG_PREFIX, `액션바 앵커로 ⋯ 후보 발견 (앵커="${anchor.getAttribute('aria-label') || (anchor.textContent || '').trim()}", 줄 버튼 ${sibs.length}개): aria="${picked.getAttribute('aria-label') || ''}" @${Math.round(pr.left)},${Math.round(pr.top)}`);
+          return picked;
+        }
+      }
+      return null;
+    }
+    if (!moreBtn) moreBtn = findActionBarMoreBtn();
+
+    // 3차 폴백: depth 0~6, 위치 가까운 버튼 중 BLACKLIST 제외 후 가장 아래 (= 구 UI 사이드 패널 ⋯)
     if (!moreBtn) {
       console.log(LOG_PREFIX, 'isThreeDotsBtn 매칭 실패 — 위치기반 폴백 검색...');
       container = video.parentElement;

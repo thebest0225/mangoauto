@@ -50,7 +50,10 @@
     const entry = { t: Date.now(), url: String(url).substring(0, 160), len: bodyStr.length, body: bodyStr.substring(0, 200), verdict };
     postLog.push(entry);
     if (postLog.length > 200) postLog.shift();
-    console.log(LOG_PREFIX, `POST[${verdict}] ${entry.url} (body ${entry.len}자)`);
+    // 콘솔은 생성요청/차단만 — 나머지는 __mangoPostLog 에만 쌓는다 (로그 폭주 방지)
+    if (verdict.startsWith('BLOCK') || isGenerationUrl(url)) {
+      console.log(LOG_PREFIX, `POST[${verdict}] ${entry.url} (body ${entry.len}자) ${entry.body.substring(0, 120)}`);
+    }
   }
 
   // ─── 절대 dedupe 하면 안 되는 endpoint (조회/구성/인증) ───
@@ -75,6 +78,12 @@
     'presigned',
     'statsig',
     '/rest/v2/',
+    'cdn-cgi',            // Cloudflare RUM 텔레메트리
+    '/rest/media/',       // 미디어 조회 (reference/canvas/search/quota_info/post-get)
+    'billing',            // 크레딧/결제 조회
+    '/rest/connectors',
+    '/rest/skills',
+    '/rest/system-prompt',
     'analytic', 'tracking', 'telemetry', 'segment.io', 'sentry',
     'facebook.com', 'doubleclick',
   ];
@@ -159,7 +168,26 @@
       .replace(/\b\d{10,}\b/g, '<ts>');
   }
 
+  // ─── 생성(=크레딧 소모) endpoint — body 무시하고 URL 만으로 dedupe ───
+  //
+  // 🚨 2026-08-09 로그로 확인된 영상 2개 생성의 실체:
+  //     POST /rest/app-chat/conversations/new  (body 500자)
+  //     POST /rest/app-chat/conversations/new  (body 424자)   ← 같은 클릭에서 연속 발사
+  //   → post 2개(62673aed…, 210ff8a7…) 생성 = 크레딧 2배.
+  //   body 가 서로 달라서 body 기반 dedupe 로는 못 잡는다. 우리 워크플로는
+  //   한 작업당 submit 1회, 다음 작업은 60초 이상 뒤 → 3초 안의 2번째 생성요청은 무조건 중복.
+  const GENERATION_PATTERNS = [
+    'app-chat/conversations/new',
+    'imagine/generate',
+    'imagine/create',
+  ];
+  function isGenerationUrl(url) {
+    const lower = pathOf(url).toLowerCase();
+    return GENERATION_PATTERNS.some(p => lower.includes(p));
+  }
+
   function fingerprint(url, bodyStr) {
+    if (isGenerationUrl(url)) return normalize(url) + '|<generation>';
     return normalize(url) + '|' + normalize(bodyStr);
   }
 
