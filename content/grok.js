@@ -908,66 +908,102 @@
     }
 
     // ═══ 구 UI 폴백: 플로팅 패널 방식 ═══
+    //
+    // 🚨 2026-08-09 리뉴얼 사고 수정:
+    //    예전 로직은 트리거 후보를 "하나" 골라 클릭하고, 열린 게 무엇이든 그대로 진행했다.
+    //    리뉴얼 후 aria 키워드 매칭이 "Video Generation: Normal Mode" 버튼을 잡았는데
+    //    이건 사용량 팝오버(버튼 1개: "사용량 보기")를 여는 버튼이라, 그 뒤로
+    //    페이지 전체 버튼을 뒤지는 폴백이 사이드바까지 클릭해 엉뚱한 곳으로 이동했다.
+    //
+    //    → 후보를 여러 개 모아 하나씩 시도하고, "열린 패널이 진짜 설정 패널인지" 검증한다.
+    //      아니면 ESC 로 닫고 다음 후보. 도중에 URL 이 바뀌면 즉시 중단.
     console.log(LOG_PREFIX, '구 UI 폴백: 플로팅 패널 방식 시도');
 
-    // Step 1: 설정 패널 트리거 버튼 찾기
-    let modelBtn = document.querySelector('button[aria-label="모델 선택"]') ||
-                   findButtonByTextInArea('이미지') ||
-                   findButtonByTextInArea('Image');
+    const _urlBefore = location.href;
+    const navAborted = () => {
+      if (location.href === _urlBefore) return false;
+      console.error(LOG_PREFIX, `설정 조작 중 페이지 이동 감지 → 중단: ${location.href}`);
+      showToast('설정 중 페이지 이동 감지 — 중단', 'error');
+      return true;
+    };
 
-    // 방법 2: 결과 페이지 (aria-label 기반, 하단 250px 이내)
-    if (!modelBtn) {
-      const ariaKeywords = ['설정', 'setting', '모드', 'mode', '모델'];
-      const allBtns = document.querySelectorAll('button[aria-label]');
-      for (const btn of allBtns) {
-        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-        if (ariaKeywords.some(kw => aria.includes(kw))) {
-          const rect = btn.getBoundingClientRect();
-          if (rect.top > window.innerHeight - 250) {
-            modelBtn = btn;
-            console.log(LOG_PREFIX, `트리거 (aria): "${btn.getAttribute('aria-label')}" top=${Math.round(rect.top)}`);
-            break;
-          }
-        }
-      }
+    // 🚫 눌렀을 때 생성 설정과 무관한 것 (사용량/결제/네비게이션) — 트리거 후보에서 제외
+    const TRIGGER_BLACKLIST = /사용량|usage|크레딧|credit|업그레이드|upgrade|구독|subscribe|요금|plan|결제|billing|프로필|profile|계정|account|히스토리|history|프로젝트|project|검색|search|채팅|chat|저장|saved|공유|share|로그인|logout|sign/i;
+
+    function isSafeTrigger(btn) {
+      if (!btn) return false;
+      try {
+        if (btn.closest('a[href]')) return false;                                  // 링크 = 페이지 이동
+        if (btn.closest('[data-variant="sidebar"], aside, nav, header')) return false;
+        const label = ((btn.getAttribute('aria-label') || '') + ' ' + (btn.textContent || '')).trim();
+        if (TRIGGER_BLACKLIST.test(label)) return false;
+        const r = btn.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      } catch (_) { return false; }
     }
 
-    // 방법 3: 에디터 컨테이너 내 드롭다운 트리거 버튼
-    if (!modelBtn) {
+    // 열린 팝오버가 "생성 설정 패널" 인지 검증 — 길이(10s)/해상도(720p)/비율(16:9)/비디오 토큰이 2개 이상.
+    function isSettingsPanel(panel) {
+      if (!panel) return false;
+      const items = panel.querySelectorAll('button, [role="menuitem"], [role="option"]');
+      let hits = 0;
+      for (const it of items) {
+        const t = (it.textContent || '').trim();
+        const s = (t + ' ' + (it.getAttribute('aria-label') || '')).trim();
+        if (/^\d{1,2}\s*(s|초)$/i.test(t)) hits++;
+        else if (/^\d{3,4}p$/i.test(t)) hits++;
+        else if (/^\d{1,2}\s*:\s*\d{1,2}$/.test(t)) hits++;
+        else if (s.length <= 20 && /동영상|비디오|video/i.test(s)) hits++;
+      }
+      return hits >= 2;
+    }
+
+    // ── 트리거 후보 수집 (신뢰도 순) ──
+    const triggerCandidates = [];
+    const pushCand = (b, why) => {
+      if (b && isSafeTrigger(b) && !triggerCandidates.some(c => c.btn === b)) {
+        triggerCandidates.push({ btn: b, why });
+      }
+    };
+
+    // 1) 컴포저(에디터) 안의 드롭다운 트리거 — 리뉴얼 전후 모두 가장 신뢰도 높음 (예: "16:9" 칩)
+    {
       const editor = findEditor();
       if (editor) {
         let container = editor;
-        for (let i = 0; i < 6; i++) container = container?.parentElement;
+        for (let i = 0; i < 6 && container; i++) container = container.parentElement;
         if (container) {
           const submitBtn = findSubmitButton();
-          const candidates = Array.from(container.querySelectorAll('button'))
+          const cands = Array.from(container.querySelectorAll('button'))
             .filter(b => b !== submitBtn && !b.disabled && (b.textContent || '').trim().length <= 10);
-          for (const btn of candidates) {
-            if (btn.getAttribute('aria-expanded') !== null || btn.getAttribute('aria-haspopup')) {
-              modelBtn = btn;
-              console.log(LOG_PREFIX, `트리거 (에디터 aria-expanded): "${(btn.textContent || '').trim()}"`);
-              break;
+          cands.forEach(b => {
+            if (b.getAttribute('aria-expanded') !== null || b.getAttribute('aria-haspopup')) {
+              pushCand(b, '컴포저 aria-expanded');
             }
-          }
-          if (!modelBtn) {
-            for (const btn of candidates) {
-              if (btn.querySelector('svg')) {
-                modelBtn = btn;
-                console.log(LOG_PREFIX, `트리거 (에디터 SVG): "${(btn.textContent || '').trim()}"`);
-                break;
-              }
-            }
-          }
+          });
+          cands.forEach(b => { if (b.querySelector('svg')) pushCand(b, '컴포저 SVG'); });
         }
       }
     }
+    // 2) 명시적 모델 선택 / 하단바 모드 버튼
+    pushCand(document.querySelector('button[aria-label="모델 선택"]'), 'aria=모델 선택');
+    pushCand(findButtonByTextInArea('이미지') || findButtonByTextInArea('Image'), '하단바 이미지');
+    // 3) 하단 250px 이내 aria 키워드 버튼 (가장 낮은 신뢰도 — 마지막 후보)
+    {
+      const ariaKeywords = ['설정', 'setting', '모드', 'mode', '모델'];
+      for (const btn of document.querySelectorAll('button[aria-label]')) {
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (!ariaKeywords.some(kw => aria.includes(kw))) continue;
+        if (btn.getBoundingClientRect().top <= window.innerHeight - 250) continue;
+        pushCand(btn, `aria="${btn.getAttribute('aria-label')}"`);
+      }
+    }
 
-    if (!modelBtn) {
+    if (triggerCandidates.length === 0) {
       console.error(LOG_PREFIX, '설정 패널 트리거 버튼 못 찾음');
       showToast('설정 트리거 버튼 없음', 'error');
-      const allBtns = document.querySelectorAll('button');
       console.log(LOG_PREFIX, '=== 하단바 버튼 디버그 ===');
-      allBtns.forEach((b, i) => {
+      document.querySelectorAll('button').forEach((b, i) => {
         const rect = b.getBoundingClientRect();
         if (rect.top > window.innerHeight - 250) {
           console.log(LOG_PREFIX, `  btn[${i}]: "${(b.textContent || '').trim().substring(0, 30)}" aria="${b.getAttribute('aria-label') || ''}" top=${Math.round(rect.top)}`);
@@ -975,53 +1011,80 @@
       });
       return false;
     }
+    console.log(LOG_PREFIX, `트리거 후보 ${triggerCandidates.length}개: [${triggerCandidates.map(c => c.why).join(' | ')}]`);
 
-    showToast(`트리거 버튼: "${(modelBtn.textContent || '').trim().substring(0, 20)}"`, 'info');
-    MangoDom.simulateClick(modelBtn);
-    await delay(800);
+    // ── 후보를 하나씩 열어보고 진짜 설정 패널일 때만 진행 ──
+    let panel = null;
+    let modelBtn = null;
+    for (const cand of triggerCandidates) {
+      if (navAborted()) return false;
+      showToast(`트리거 시도: ${cand.why}`, 'info');
+      MangoDom.simulateClick(cand.btn);
+      await delay(800);
+      if (navAborted()) return false;
 
-    // 설정 먼저 적용
-    let dropdownBtns = findDropdownButtons();
-    if (dropdownBtns.length > 0) {
-      const btnTexts = dropdownBtns.map(b => (b.textContent || '').trim()).filter(t => t.length < 20);
-      showToast(`패널 버튼 ${dropdownBtns.length}개: [${btnTexts.join(', ')}]`, 'info');
-      if (videoDuration) {
-        clickButtonInList(dropdownBtns, [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)], 'duration');
-        await delay(200);
+      const opened = findFloatingContainer();
+      if (isSettingsPanel(opened)) {
+        panel = opened;
+        modelBtn = cand.btn;
+        console.log(LOG_PREFIX, `✓ 설정 패널 확인 (트리거: ${cand.why})`);
+        break;
       }
-      if (videoResolution) {
-        clickButtonInList(dropdownBtns, [videoResolution, videoResolution.replace('p', '')], 'resolution');
-        await delay(200);
+
+      if (opened) {
+        const names = Array.from(opened.querySelectorAll('button, [role="menuitem"], [role="option"]'))
+          .map(b => `"${(b.textContent || '').trim().substring(0, 20)}"`).join(', ');
+        console.warn(LOG_PREFIX, `✗ 설정 패널 아님 (트리거: ${cand.why}) — 항목: [${names}] → 닫고 다음 후보`);
+      } else {
+        console.warn(LOG_PREFIX, `✗ 패널이 안 열림 (트리거: ${cand.why}) → 다음 후보`);
       }
-      if (aspectRatio) {
-        clickButtonInList(dropdownBtns, [aspectRatio], 'aspectRatio');
-        await delay(200);
-      }
+      await closeStrayOverlay();
+      await closeSettingsPanel(cand.btn);
+      await delay(300);
     }
 
-    // "동영상 만들기" 모드 선택
-    const videoItem = findDropdownItem('동영상 만들기') ||
-                      findDropdownItem('동영상 생성') ||
-                      findDropdownItem('비디오') ||
-                      findDropdownItem('Video');
-    if (videoItem) {
-      const itemText = (videoItem.textContent || '').trim().substring(0, 30);
-      showToast(`"${itemText}" 클릭`, 'info');
-      MangoDom.simulateClick(videoItem);
-      await delay(1000);
-    } else {
-      console.warn(LOG_PREFIX, '동영상 만들기 옵션 못 찾음');
-      const panel = findFloatingContainer();
-      if (panel) {
-        const panelBtns = panel.querySelectorAll('button, [role="menuitem"], [role="option"]');
-        console.log(LOG_PREFIX, `=== 패널 내 항목 ${panelBtns.length}개 ===`);
-        panelBtns.forEach((b, i) => {
-          console.log(LOG_PREFIX, `  [${i}]: "${(b.textContent || '').trim().substring(0, 40)}"`);
-        });
-      }
-      await closeSettingsPanel(modelBtn);
+    if (!panel) {
+      console.error(LOG_PREFIX, '설정 패널을 여는 트리거를 찾지 못함 (모든 후보 실패)');
+      showToast('설정 패널 못 엶 — 작업 중단', 'error');
+      await closeStrayOverlay();
       return false;
     }
+
+    // ── 설정 적용: 반드시 검증된 패널 내부 항목만 사용 (페이지 전역 검색 금지) ──
+    const panelItems = Array.from(panel.querySelectorAll('button, [role="menuitem"], [role="option"]'));
+    const itemTexts = panelItems.map(b => (b.textContent || '').trim()).filter(t => t && t.length < 20);
+    showToast(`패널 항목 ${panelItems.length}개: [${itemTexts.join(', ')}]`, 'info');
+
+    if (videoDuration) {
+      clickButtonInList(panelItems, [`${videoDuration}s`, `${videoDuration}초`, String(videoDuration)], 'duration');
+      await delay(200);
+    }
+    if (videoResolution) {
+      clickButtonInList(panelItems, [videoResolution, videoResolution.replace('p', '')], 'resolution');
+      await delay(200);
+    }
+    if (aspectRatio) {
+      clickButtonInList(panelItems, [aspectRatio], 'aspectRatio');
+      await delay(200);
+    }
+    if (navAborted()) return false;
+
+    // "동영상 만들기" 모드 선택 — 패널 내부에서만 찾는다
+    const videoItem = panelItems.find(el => {
+      const t = (el.textContent || '').trim();
+      return t.length <= 20 && /동영상 만들기|동영상 생성|^동영상$|^비디오$|^video$/i.test(t);
+    });
+    if (!videoItem) {
+      console.warn(LOG_PREFIX, `동영상 만들기 옵션 못 찾음 — 패널 항목: [${itemTexts.join(', ')}]`);
+      showToast('동영상 모드 항목 없음 — 작업 중단', 'error');
+      await closeSettingsPanel(modelBtn);
+      await closeStrayOverlay();
+      return false;
+    }
+    showToast(`"${(videoItem.textContent || '').trim().substring(0, 30)}" 클릭`, 'info');
+    MangoDom.simulateClick(videoItem);
+    await delay(1000);
+    if (navAborted()) return false;
 
     const editor = findEditor();
     if (editor) {
@@ -2239,6 +2302,19 @@
    * 버튼 리스트에서 레이블 매칭하여 클릭
    */
   function clickButtonInList(buttons, labels, settingName) {
+    // 🛡️ 안전 필터 — 링크/사이드바/네비게이션 버튼은 절대 클릭하지 않는다.
+    //    (2026-08-09: 패널을 못 찾으면 페이지 전체 버튼을 후보로 삼는 폴백이 있어
+    //     사이드바의 '검색/채팅/프로젝트/히스토리' 를 눌러 페이지가 이동하는 사고가 있었다.)
+    buttons = (buttons || []).filter(b => {
+      try {
+        if (!b || !b.getBoundingClientRect) return false;
+        if (b.closest('a[href]')) return false;
+        if (b.closest('[data-variant="sidebar"], aside, nav, header')) return false;
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      } catch (_) { return false; }
+    });
+
     // 1차: 정확 매칭 (텍스트)
     for (const label of labels) {
       for (const btn of buttons) {
@@ -3401,6 +3477,31 @@
       if (btn) { btn.click(); console.log(LOG_PREFIX, 'Dismissed:', text); }
     });
   }, 8000);
+
+  // ─── 진단 헬퍼 ───
+  // 리뉴얼된 UI 의 컴포저 구조를 파악하기 위한 덤프. grok 탭 콘솔에서 __mangoDumpComposer() 실행.
+  window.__mangoDumpComposer = function () {
+    const rows = [];
+    document.querySelectorAll('button, [role="menuitem"], [role="option"], [role="tab"]').forEach((b) => {
+      const r = b.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return;
+      rows.push({
+        text: (b.textContent || '').trim().substring(0, 30),
+        aria: b.getAttribute('aria-label') || '',
+        expanded: b.getAttribute('aria-expanded'),
+        haspopup: b.getAttribute('aria-haspopup'),
+        testid: b.getAttribute('data-testid') || '',
+        x: Math.round(r.left), y: Math.round(r.top),
+        w: Math.round(r.width), h: Math.round(r.height),
+        inSidebar: !!b.closest('[data-variant="sidebar"], aside, nav, header'),
+        isLink: !!b.closest('a[href]'),
+      });
+    });
+    rows.sort((a, b) => a.y - b.y);
+    console.table(rows);
+    console.log('editor:', findEditor());
+    return rows;
+  };
 
   console.log(LOG_PREFIX, `Content script loaded (instance ${INSTANCE_ID.slice(-6)}, active=${isActiveInstance()})`);
   if (isActiveInstance()) {
