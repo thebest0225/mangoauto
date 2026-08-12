@@ -34,20 +34,54 @@
     '[class*="documentTitle"]',
   ].join(',');
 
+  // ⚠️ 제목이 안 채워졌던 이유: SmartEditor ONE 은 제목과 본문이 하나의 contenteditable
+  //    문서 안의 서로 다른 '섹션'이다. 제목 문단 자체에는 contenteditable 이 없어서
+  //    contenteditable 목록만 훑으면 제목을 영원히 못 찾는다.
+  //    → contenteditable 여부를 따지지 않고 제목 문단을 직접 찾고, 그 안에 커서를 놓는다.
+  const TITLE_SEL = [
+    '.se-documentTitle .se-text-paragraph',
+    '.se-section-documentTitle .se-text-paragraph',
+    '[class*="documentTitle"] [class*="text-paragraph"]',
+    '[class*="documentTitle"] [class*="textarea"]',
+    '.se-title-text',
+    '.se-documentTitle',
+  ];
+
   function editables() {
     return Array.from(document.querySelectorAll('[contenteditable="true"]'))
       .filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
   }
 
   function findTitle() {
-    for (const el of editables()) {
-      if (el.closest(TITLE_HINT)) return el;
+    for (const s of TITLE_SEL) {
+      const el = document.querySelector(s);
+      if (el && (el.offsetParent !== null || el.getClientRects().length > 0)) return el;
     }
     // 폴백: 제목만 별도 input 인 구버전 에디터
     return document.querySelector('input#subject, input[name="subject"]') || null;
   }
 
+  // 마우스로 실제 클릭한 것처럼 눌러 포커스를 준다. 제목 섹션은 클릭 없이는
+  // 커서를 안 받는 경우가 있다.
+  function clickInto(el) {
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, composed: true,
+                clientX: Math.round(r.left + Math.min(20, r.width / 2)),
+                clientY: Math.round(r.top + r.height / 2) };
+    try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (_) {}
+    el.dispatchEvent(new MouseEvent('mousedown', o));
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.dispatchEvent(new MouseEvent('click', o));
+  }
+
   function findBody() {
+    // 본문 섹션 안의 문단을 먼저 노린다 (제목/본문이 한 문서인 구조에서 본문 자리를 정확히 잡으려고)
+    const inBody = document.querySelector(
+      '.se-component.se-text:not([class*="documentTitle"]) .se-text-paragraph, ' +
+      '.se-section-text .se-text-paragraph'
+    );
+    if (inBody && (inBody.offsetParent !== null || inBody.getClientRects().length > 0)) return inBody;
+
     const title = findTitle();
     for (const el of editables()) {
       if (el === title) continue;
@@ -98,9 +132,12 @@
     } catch (_) { return false; }
   }
 
-  // ─── 1단계: 합성 paste ───
+  // ─── 합성 paste ───
   // Chrome 은 ClipboardEvent 생성자에 clipboardData 를 넘길 수 있다.
   // 에디터가 e.clipboardData 를 읽는 구조면 이게 진짜 붙여넣기와 같게 동작한다.
+  //
+  // ⚠️ text/plain 을 같이 넣으면 에디터가 그쪽을 골라 서식이 다 날아간다(1차 시도에서 겪음).
+  //    서식을 살릴 때는 text/html 만 넣는다.
   function tryPaste(el, { html, text }) {
     try {
       const dt = new DataTransfer();
@@ -145,19 +182,40 @@
   async function fillOne(el, payload, label) {
     if (!el) return { ok: false, how: 'none', reason: `${label} 영역을 못 찾음` };
 
-    const before = textLen(el);
+    // ⚠️ 성공 판정은 '편집 문서 전체' 길이로 한다.
+    //    insertHTML 은 <p> 블록을 넣을 때 대상 문단을 쪼개서 내용이 el 밖으로 나간다.
+    //    el 만 재면 '실패'로 보고 다음 방법을 또 실행해 같은 글이 두 번 들어간다.
+    const scope = (el.closest && el.closest('[contenteditable="true"]')) || el;
+    const before = textLen(scope);
 
     if (trySetValue(el, payload.text)) {
       return { ok: true, how: 'value', label };
     }
 
-    tryPaste(el, payload);
-    await sleep(220);
-    if (textLen(el) > before) return { ok: true, how: 'paste', label };
+    clickInto(el);
+    await sleep(120);
+    focusEnd(el);
 
-    tryExec(el, payload);
-    await sleep(220);
-    if (textLen(el) > before) return { ok: true, how: 'exec', label };
+    // 서식이 있는 경우 순서를 뒤집는다.
+    // 1차 시도에서 paste 가 평문으로 먼저 '성공'해버려 서식 경로에 도달하지 못했다.
+    // insertHTML 이 contenteditable 에서 서식을 가장 확실히 남긴다.
+    const attempts = payload.html
+      ? [
+          ['insertHTML', () => tryExec(el, { html: payload.html, text: null })],
+          ['paste(html)', () => tryPaste(el, { html: payload.html, text: null })],
+          ['paste', () => tryPaste(el, payload)],
+          ['insertText', () => tryExec(el, { html: null, text: payload.text })],
+        ]
+      : [
+          ['paste', () => tryPaste(el, payload)],
+          ['insertText', () => tryExec(el, payload)],
+        ];
+
+    for (const [how, run] of attempts) {
+      run();
+      await sleep(240);
+      if (textLen(scope) > before) return { ok: true, how, label };
+    }
 
     // 여기까지 실패면 CDP 차례. 포커스는 남겨둔다 — background 가 focused element 로 쏜다.
     focusEnd(el);

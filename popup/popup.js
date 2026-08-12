@@ -1765,24 +1765,169 @@ async function pickBlogDraft(id) {
     let article = {};
     try { article = JSON.parse(w.article_json || '{}'); } catch (_) {}
     blogPicked = { id: w.id, title: w.title || article.title || '', html: w.html || '', article };
-    blogPicked.parsed = naverize(blogPicked.html, article);
+
+    // ★네이버는 초안 원본을 쓴다. work_items.html 은 블로그라이터가 워드프레스용으로
+    //   재생성한 것이라 볼드 소제목·구분선·사진 슬롯·해시태그가 다 뭉개져 있다.
+    let parsed = null;
+    const isNaver = w.target === 'naver' || w.destination_id === 'naver_mango';
+    if (isNaver && w.draft_id) {
+      try {
+        const d = await bwFetch('/api/drafts/' + encodeURIComponent(w.draft_id));
+        if (d && d.content) {
+          parsed = naverizeDraft(d.content);
+          if (d.title) blogPicked.title = d.title;   // 초안 제목이 네이버 규격(30~45자)이다
+          blogLog('초안 원본에서 변환했습니다 (네이버 서식 유지)');
+        }
+      } catch (e) {
+        blogLog('초안 원본을 못 읽어 재생성 html 로 대체합니다 — ' + e.message, 'warn');
+      }
+    }
+    if (!parsed) {
+      parsed = naverize(blogPicked.html, article);
+      if (isNaver) blogLog('워드프레스용 html 로 변환했습니다. 볼드 소제목·사진 슬롯은 빠집니다', 'warn');
+    }
+    blogPicked.parsed = parsed;
 
     $('#blogDetail').style.display = '';
     $('#blogPickedTitle').textContent = blogPicked.title;
-    const p = blogPicked.parsed;
-    $('#blogPickedMeta').textContent =
-      `본문 ${p.charCount.toLocaleString()}자 · 이미지 ${p.images.length}장 · 해시태그 ${p.tags.length}개`;
+    const p = parsed;
+    const bits = [`본문 ${p.charCount.toLocaleString()}자`];
+    if (p.photos?.length) bits.push(`사진 슬롯 ${p.photos.length}칸`);
+    else bits.push(`이미지 ${p.images.length}장`);
+    bits.push(`해시태그 ${p.tags.length}개`);
+    if (p.meta?.category) bits.push(p.meta.category);
+    $('#blogPickedMeta').textContent = bits.join(' · ');
+    renderPhotoSlots(p.photos || []);
     renderBlogList();
     blogLog(`선택: ${blogPicked.title}`);
     if (p.charCount > 2600) blogLog(`본문이 ${p.charCount}자입니다. 네이버 권장은 1,500~2,500자 — 길면 줄이세요.`, 'warn');
-    if (!p.images.length) blogLog('이미지가 없습니다. 망고 사진함에서 2~4장 골라 직접 넣으세요.', 'warn');
+    if (!p.photos?.length && !p.images.length) blogLog('사진 자리가 없습니다. 망고 사진함에서 2~4장 골라 직접 넣으세요.', 'warn');
   } catch (e) {
     blogLog(e.message, 'error');
     blogStatus(e.message, 'error');
   }
 }
 
-// ─── 워드프레스 HTML → 네이버용 텍스트/간이 HTML ───
+// ─── 초안 원본(마크다운) → 네이버 서식 ───
+//
+// ★이게 제대로 된 경로다. 블로그라이터가 재생성한 html 은 워드프레스용이라
+//   볼드 소제목·구분선·사진 슬롯·해시태그가 전부 평문으로 뭉개진다.
+//   초안 원본은 루틴이 이미 네이버 규칙대로 써놓은 것이므로 그걸 그대로 살린다.
+//
+// 살리는 것: **볼드 소제목** / ——— 구분선 / 마크다운 표 / [사진N · 태그] 슬롯 + 캡션
+//            · 불릿 / 맨 URL(네이버가 링크 카드로 바꿔줌) / 해시태그 / 짧은 줄바꿈 리듬
+const ESC = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// 인라인 서식: **굵게** 만 쓴다 (초안 규칙이 그렇다)
+function inlineMd(line) {
+  return ESC(line).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+function naverizeDraft(md) {
+  let src = String(md || '').replace(/\r\n/g, '\n');
+
+  // 1) 썸네일 프롬프트 블록은 본문이 아니다 — 잘라서 따로 보관
+  let thumb = '';
+  const ti = src.search(/^##\s*썸네일 프롬프트/m);
+  if (ti >= 0) { thumb = src.slice(ti).replace(/^##\s*썸네일 프롬프트\s*/m, '').trim(); src = src.slice(0, ti); }
+
+  // 2) 맨 위 메타 두 줄
+  const meta = {};
+  src = src.replace(/^\s*카테고리\s*[:：]\s*(.+)$/m, (_, v) => { meta.category = v.trim(); return ''; });
+  src = src.replace(/^\s*원본참고\s*[:：]\s*(.+)$/m, (_, v) => { meta.source = v.trim(); return ''; });
+
+  // 3) 해시태그 줄 (# 이 3개 이상 있는 줄)
+  let tagLine = '';
+  src = src.replace(/^\s*(#[^\s#]+(?:\s+#[^\s#]+){2,})\s*$/m, (_, v) => { tagLine = v.trim(); return ''; });
+
+  const groups = src.split(/\n{2,}/).map(g => g.trim()).filter(Boolean);
+  const html = [];
+  const text = [];
+  const photos = [];
+
+  const pushText = (t) => text.push(t);
+
+  for (const g of groups) {
+    const lines = g.split('\n').map(l => l.trim()).filter(l => l !== '');
+    if (!lines.length) continue;
+
+    // 구분선
+    if (lines.every(l => /^[—–\-─]{3,}$/.test(l))) {
+      html.push('<hr>');
+      pushText('———');
+      continue;
+    }
+
+    // 사진 슬롯 — [사진1 · walk+summer] (+ 다음 줄에 캡션: ...)
+    const pm = lines[0].match(/^\[\s*사진\s*(\d+)\s*[·:]?\s*([^\]]*)\]$/);
+    if (pm) {
+      const capLine = (lines[1] || '').replace(/^캡션\s*[:：]\s*/, '').trim();
+      photos.push({ n: Number(pm[1]), tags: pm[2].trim(), caption: capLine });
+      // 자리를 눈에 보이게 남긴다 — 사진을 넣고 이 줄만 지우면 된다
+      const marker = `📷 사진${pm[1]} (${pm[2].trim()}) — 캡션: ${capLine}`;
+      html.push(`<p><strong>${ESC(marker)}</strong></p>`);
+      pushText(marker);
+      continue;
+    }
+
+    // 마크다운 표
+    if (lines.length >= 2 && lines.every(l => l.startsWith('|'))) {
+      const rows = lines
+        .filter(l => !/^\|[\s:|-]+\|$/.test(l))
+        .map(l => l.replace(/^\||\|$/g, '').split('|').map(c => c.trim()));
+      if (rows.length) {
+        const head = rows.shift();
+        html.push(
+          '<table><thead><tr>' + head.map(c => `<th>${inlineMd(c)}</th>`).join('') + '</tr></thead><tbody>' +
+          rows.map(r => '<tr>' + r.map(c => `<td>${inlineMd(c)}</td>`).join('') + '</tr>').join('') +
+          '</tbody></table>'
+        );
+        pushText([head, ...rows].map(r => r.join(' | ')).join('\n'));
+        continue;
+      }
+    }
+
+    // 불릿 (· 로 시작)
+    if (lines.every(l => /^[·•]\s/.test(l))) {
+      html.push('<ul>' + lines.map(l => `<li>${inlineMd(l.replace(/^[·•]\s*/, ''))}</li>`).join('') + '</ul>');
+      pushText(lines.join('\n'));
+      continue;
+    }
+
+    // 볼드만 있는 줄 = 소제목
+    if (lines.length === 1 && /^\*\*.+\*\*$/.test(lines[0])) {
+      html.push(`<p><strong>${ESC(lines[0].replace(/^\*\*|\*\*$/g, ''))}</strong></p>`);
+      pushText(lines[0].replace(/\*\*/g, ''));
+      continue;
+    }
+
+    // 맨 URL 만 있는 줄들 → 각각 독립 문단 (네이버가 링크 카드로 만든다)
+    if (lines.every(l => /^https?:\/\/\S+$/.test(l))) {
+      for (const u of lines) { html.push(`<p>${ESC(u)}</p>`); pushText(u); }
+      continue;
+    }
+
+    // 일반 문단 — 초안의 짧은 줄바꿈 리듬을 <br> 로 그대로 살린다
+    html.push('<p>' + lines.map(inlineMd).join('<br>') + '</p>');
+    pushText(lines.join('\n'));
+  }
+
+  const body = text.join('\n\n');
+  return {
+    html: html.join(''),
+    text: body,
+    images: [],           // 사진은 슬롯으로 관리한다 (초안에는 이미지 URL 이 없다)
+    photos,
+    meta,
+    thumbPrompt: thumb,
+    tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
+    tagLine,
+    charCount: body.replace(/\s/g, '').length,
+    from: 'draft',
+  };
+}
+
+// ─── 워드프레스 HTML → 네이버용 텍스트/간이 HTML (초안 원본이 없을 때만 쓰는 폴백) ───
 // 원본 html 은 인라인 스타일이 잔뜩 붙어 있어서 네이버에 그대로 붙이면 깨진다.
 // 그래서 블록 단위로 뜯어 텍스트를 뽑고, 서식은 볼드·구분선만 남긴 최소 HTML 로 다시 만든다.
 function naverize(html, article) {
@@ -2055,6 +2200,35 @@ async function diagnoseNaver() {
   }
 }
 
+// ─── 사진 슬롯 목록 ───
+// 초안이 '[사진1 · walk+summer]' 로 자리와 태그를 지정해뒀다. 본문에도 눈에 보이는
+// 표시가 들어가고, 여기서 캡션을 복사해 네이버 사진 아래에 붙이면 된다.
+function renderPhotoSlots(photos) {
+  const box = $('#blogSlots');
+  if (!box) return;
+  if (!photos.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+  box.style.display = '';
+  box.innerHTML = `<div class="blog-slots-head">사진 자리 ${photos.length}칸 — 망고 사진함에서 태그로 골라 넣으세요</div>`;
+  for (const p of photos) {
+    const row = document.createElement('div');
+    row.className = 'blog-slot';
+    row.innerHTML = `
+      <div class="blog-slot-n">사진${p.n}</div>
+      <div class="blog-slot-body">
+        <div class="blog-slot-tags"></div>
+        <div class="blog-slot-cap"></div>
+      </div>
+      <button class="btn-ghost btn-xs blog-slot-copy">캡션</button>`;
+    row.querySelector('.blog-slot-tags').textContent = p.tags || '(태그 없음)';
+    row.querySelector('.blog-slot-cap').textContent = p.caption || '(캡션 없음)';
+    row.querySelector('.blog-slot-copy').addEventListener('click', async () => {
+      await navigator.clipboard.writeText(p.caption || '');
+      blogLog(`사진${p.n} 캡션 복사: ${p.caption}`);
+    });
+    box.appendChild(row);
+  }
+}
+
 function bindBlogEvents() {
   $('#blogRefresh')?.addEventListener('click', loadBlogDrafts);
   $$('.btab').forEach(t => t.addEventListener('click', () => {
@@ -2083,6 +2257,13 @@ function bindBlogEvents() {
     if (!blogPicked) return;
     await navigator.clipboard.writeText(blogPicked.parsed.tagLine);
     blogLog('해시태그를 복사했습니다');
+  });
+  $('#blogCopyThumb')?.addEventListener('click', async () => {
+    if (!blogPicked) return;
+    const t = blogPicked.parsed.thumbPrompt;
+    if (!t) { blogLog('이 초안에는 썸네일 프롬프트가 없습니다', 'warn'); return; }
+    await navigator.clipboard.writeText(t);
+    blogLog('썸네일 프롬프트를 복사했습니다 (베이크 문구 포함)');
   });
   $('#blogSaveImages')?.addEventListener('click', saveBlogImages);
   $('#blogDiagnose')?.addEventListener('click', diagnoseNaver);
