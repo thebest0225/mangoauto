@@ -1145,3 +1145,4 @@ button.badge.badge-on { cursor: default; }
 #blogPanel .blog-card.done { opacity: .72; }
 #blogPanel .blog-card-meta .tag-done { background: rgba(255,255,255,.12); }
 #blogPanel .blog-card-meta .tag-wait { background: rgba(255,200,90,.18); color: #ffd27f; }
+#blogPanel .ver-chip { font-size: 9.5px; opacity: .5; font-weight: 400; margin-left: 4px; font-variant-numeric: tabular-nums; }

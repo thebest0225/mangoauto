@@ -2717,11 +2717,20 @@ async function fillNaver() {
       if (!n) blogLog('사진은 직접 넣어주세요. 자리표시 줄과 캡션은 그대로 남겨뒀습니다', 'warn');
     }
 
-    // ⑤ 링크 카드 — 맨 주소를 제목·설명·썸네일 있는 카드로
-    if (body.ok && $('#blogLinkCard')?.checked !== false && p.links?.length) {
-      blogLog(`링크 ${p.links.length}개를 카드로 변환 시도`);
-      const n = await insertLinkCards(tabId, body.frameId, p.links);
-      blogLog(`링크 카드 ${n}/${p.links.length}개`, n ? 'info' : 'warn');
+    // ⑤ 링크 카드 — 본문 타이핑 때 자동 변환된 걸 세고, 부족하면 그때만 툴바로 보완
+    if (body.ok && p.links?.length) {
+      const cnt = await sendFrame(tabId, body.frameId, { type: 'NAVER_OGLINK_COUNT' });
+      const auto = cnt.count || 0;
+      blogLog(`링크 카드 ${auto}/${p.links.length}개 (본문 타이핑에서 자동 변환)`);
+      // 툴바 방식은 팝업이 안 닫혀 주소가 덧씌워지는 문제가 있어 기본으로 쓰지 않는다.
+      // 자동 변환이 하나도 안 됐고 사용자가 켜뒀을 때만 보완으로 돌린다.
+      if (auto === 0 && $('#blogLinkCard')?.checked) {
+        blogLog('자동 변환이 안 됐습니다 — 툴바 방식으로 보완 시도', 'warn');
+        const n = await insertLinkCards(tabId, body.frameId, p.links);
+        blogLog(`툴바 보완 ${n}/${p.links.length}개`, n ? 'info' : 'warn');
+      } else if (auto < p.links.length) {
+        blogLog(`카드가 안 된 주소는 글자로 남아 있습니다 — 그 줄 끝에서 Enter 를 한 번 치면 카드가 됩니다`, 'warn');
+      }
     }
 
     // ⑥ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
@@ -2991,4 +3000,13 @@ function bindBlogEvents() {
   $('#blogDiagnose')?.addEventListener('click', diagnoseNaver);
 }
 
-document.addEventListener('DOMContentLoaded', bindBlogEvents);
+document.addEventListener('DOMContentLoaded', () => {
+  bindBlogEvents();
+  // 확장 새로고침을 안 하면 옛 코드가 돌아 로그가 그대로다(실제로 겪었다).
+  // 버전을 화면에 띄워 바로 확인할 수 있게 한다.
+  try {
+    const v = chrome.runtime.getManifest().version;
+    const el = $('#blogVer');
+    if (el) el.textContent = 'v' + v;
+  } catch (_) {}
+});

@@ -594,18 +594,34 @@ async function handleMessage(msg, sender) {
         // 한 번에 다 넣으면 에디터가 렌더를 못 따라오는 경우가 있어 줄 단위로 넣고
         // 줄바꿈은 신뢰 Enter 로 만든다 (insertText 는 개행을 문단으로 안 바꾼다).
         const lines = String(msg.text || '').split('\n');
+        // ★맨 URL 줄은 천천히 넣는다.
+        //   네이버는 '주소를 치고 Enter' 하면 알아서 링크 카드(썸네일·제목·설명)로 바꿔준다.
+        //   사람이 쓸 때와 같은 경로다. 툴바 링크 버튼을 쓸 필요가 없다.
+        //   전에는 Enter 후 20~45ms 만 기다려서, 네이버가 대상 페이지를 읽어오기 전에
+        //   다음 줄을 쳐버렸다. 그래서 어떤 건 카드가 되고 어떤 건 주소 글자로 남았다.
+        const isUrl = (l) => /^https?:\/\/\S+$/.test(l.trim());
+        let urlLines = 0;
         for (let i = 0; i < lines.length; i++) {
-          if (lines[i]) {
-            await chrome.debugger.sendCommand(target, 'Input.insertText', { text: lines[i] });
-            await _delay(_rand(12, 30));
+          const line = lines[i];
+          const url = isUrl(line);
+          if (line) {
+            await chrome.debugger.sendCommand(target, 'Input.insertText', { text: line });
+            // 주소를 다 치고 나면 에디터가 인식할 틈을 준다
+            await _delay(url ? _rand(500, 700) : _rand(12, 30));
           }
           if (i < lines.length - 1) {
             await trustedEnterKey(msg.tabId);
-            await _delay(_rand(20, 45));
+            if (url) {
+              // 카드로 바뀌는 데 네이버가 대상 페이지를 읽어온다. 넉넉히 기다린다.
+              urlLines++;
+              await _delay(msg.linkWaitMs || 2400);
+            } else {
+              await _delay(_rand(20, 45));
+            }
           }
         }
-        broadcastLog(`[네이버] CDP 입력 완료 (${lines.length}줄)`, 'info');
-        return { ok: true, lines: lines.length };
+        broadcastLog(`[네이버] CDP 입력 완료 (${lines.length}줄${urlLines ? `, 주소 ${urlLines}줄은 카드 변환 대기` : ''})`, 'info');
+        return { ok: true, lines: lines.length, urlLines };
       } catch (e) {
         const m = String(e && e.message || e);
         broadcastLog(`[네이버] CDP 입력 실패: ${m}`, 'error');
