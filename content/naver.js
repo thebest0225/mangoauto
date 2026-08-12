@@ -689,54 +689,37 @@
             return;
           }
 
-          case 'NAVER_TABLE_PICKER': {
-            // 표 크기 피커. 격자에서 원하는 행×열 칸을 찍어야 한다.
-            // ⚠️ 전에는 '한 행에 몇 칸인지'를 첫 행 top 으로만 세서 5×3 을 요청했는데
-            //    3×3 이 만들어졌다(닛폰·토요타·롯데가 2행에 뭉쳤다).
-            //    → 셀들의 left/top 을 각각 모아 실제 격자 크기를 기하학적으로 계산한다.
-            const want = { r: Math.max(1, msg.rows | 0), c: Math.max(1, msg.cols | 0) };
+          case 'NAVER_TABLE_ADD': {
+            // ★진단으로 확인된 구조 (2026-08-13)
+            //   표 버튼을 누르면 크기 선택 없이 3×3 이 바로 삽입된다. 크기 피커는 없다.
+            //   대신 표 안에 커서가 있으면 se-cell-add-button 이 나타난다 —
+            //   "2행 다음에 행 추가" / "2열 다음에 열 추가" 처럼 글자에 인덱스가 들어 있다.
+            //   마지막 인덱스 버튼을 눌러 행·열을 늘린다.
             const vis = (el) => el.getClientRects().length > 0;
-            const pools = [
-              '[class*="table"] [class*="cell"]',
-              '[class*="table"] td',
-              '[class*="grid"] [class*="cell"]',
-              '[class*="table-select"] *[data-row]',
-              '[class*="table"] li',
-            ];
-            let cells = [];
-            for (const sel of pools) {
-              const got = Array.from(document.querySelectorAll(sel)).filter(vis);
-              if (got.length > cells.length) cells = got;
-              if (cells.length >= want.r * want.c) break;
+            const axis = msg.axis === 'col' ? '열' : '행';
+            const re = new RegExp(`(\\d+)${axis} 다음에 ${axis} 추가`);
+            let best = null, bestIdx = -1;
+            for (const b of Array.from(document.querySelectorAll('button.se-cell-add-button, button[class*="cell-add"]')).filter(vis)) {
+              const m = re.exec((b.textContent || '').trim());
+              if (!m) continue;
+              const i = +m[1];
+              if (i > bestIdx) { bestIdx = i; best = b; }
             }
-            if (!cells.length) { sendResponse({ ok: false, error: '표 크기 피커를 못 찾음' }); return; }
-
-            const rnd = (n) => Math.round(n / 4) * 4;   // 1~2px 흔들림 흡수
-            const info = cells.map((el) => {
-              const b = el.getBoundingClientRect();
-              return { el, l: rnd(b.left), t: rnd(b.top),
-                       r: +(el.getAttribute('data-row') || el.dataset?.row || 0),
-                       c: +(el.getAttribute('data-col') || el.dataset?.col || 0) };
-            });
-            const lefts = [...new Set(info.map((x) => x.l))].sort((a, b) => a - b);
-            const tops  = [...new Set(info.map((x) => x.t))].sort((a, b) => a - b);
-
-            // 1순위: data-row/col 속성
-            let hit = info.find((x) => x.r === want.r && x.c === want.c);
-            // 2순위: 격자 좌표로 정확히 찾기 (행=top 순서, 열=left 순서)
-            if (!hit && want.r <= tops.length && want.c <= lefts.length) {
-              const T = tops[want.r - 1], L = lefts[want.c - 1];
-              hit = info.find((x) => x.t === T && x.l === L);
-            }
-            if (!hit) {
-              sendResponse({ ok: false, error: `${want.r}x${want.c} 칸 없음 (피커 격자 ${tops.length}행 × ${lefts.length}열)`,
-                             gridRows: tops.length, gridCols: lefts.length });
+            if (!best) {
+              sendResponse({ ok: false, error: `${axis} 추가 버튼 없음 (표 안에 커서가 있어야 나타납니다)`,
+                dump: Array.from(document.querySelectorAll('button[class*="cell-add"]')).slice(0, 6)
+                  .map((b) => ({ cls: String(b.className || '').slice(0, 40), txt: (b.textContent || '').trim().slice(0, 20),
+                                 vis: b.getClientRects().length > 0 })) });
               return;
             }
-            const v = viewportRect(hit.el);
+            const v = viewportRect(best);
+            const t = document.querySelectorAll('[class*="se-table-content"], table');
+            const tt = t[t.length - 1];
             sendResponse({
-              ok: true, count: cells.length, gridRows: tops.length, gridCols: lefts.length,
+              ok: true, lastIndex: bestIdx,
               x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+              rows: tt ? tt.querySelectorAll('tr').length : 0,
+              cols: tt && tt.querySelector('tr') ? tt.querySelector('tr').querySelectorAll('td,th').length : 0,
             });
             return;
           }

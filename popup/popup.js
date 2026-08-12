@@ -2466,7 +2466,7 @@ async function attachSlotPhotos(tabId, frameId, photos) {
 async function insertTables(tabId, frameId, tables) {
   if (!tables?.length) return 0;
   const btn = await sendFrame(tabId, frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'table' });
-  if (!btn.ok) { blogLog(`표 버튼을 못 찾음 — ${btn.error}. 평문으로 넣습니다`, 'warn'); }
+  if (!btn.ok) blogLog(`표 버튼을 못 찾음 — ${btn.error}. 평문으로 넣습니다`, 'warn');
 
   let done = 0;
   for (const t of tables) {
@@ -2482,99 +2482,88 @@ async function insertTables(tabId, frameId, tables) {
     };
 
     try {
-      // ① 자리표시 줄에 커서를 놓고 지운다
+      // ① 자리표시 줄을 지워 그 자리에 표를 넣는다
       const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: t.marker });
       if (!sel.ok || !sel.drag) { await fallback('자리표시 못 찾음'); continue; }
       await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
       await new Promise(r => setTimeout(r, 130));
       await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Backspace' });
       await new Promise(r => setTimeout(r, 200));
-
       if (!btn.ok) { await fallback('표 버튼 없음'); continue; }
 
-      // ② 표 버튼 → 크기 피커
+      // ② 표 버튼 → 3×3 이 바로 삽입된다 (크기 피커는 없다 — 진단으로 확인)
       const before = (await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_COUNT' })).count || 0;
       await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
-      await new Promise(r => setTimeout(r, 600));
-
-      const pick = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_PICKER', rows, cols });
-      if (!pick.ok) {
-        blogLog(`  피커 격자 ${pick.gridRows ?? '?'}행 × ${pick.gridCols ?? '?'}열 — ${pick.error}`, 'warn');
-        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
-        await fallback(pick.error);
-        continue;
-      }
-      blogLog(`  피커 격자 ${pick.gridRows}×${pick.gridCols} 에서 ${rows}×${cols} 선택`);
-      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: pick.x, y: pick.y });
       await new Promise(r => setTimeout(r, 900));
-
       const after = (await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_COUNT' })).count || 0;
       if (after <= before) { await fallback('표가 삽입되지 않음'); continue; }
 
-      // ⚠️ 5×3 을 요청했는데 3×3 이 만들어져 나머지 행이 한 칸에 뭉친 적이 있다.
-      //    행이 부족하면 마지막 셀에서 Tab 을 쳐서 행을 늘린다(네이버 기본 동작).
-      for (let guard = 0; guard < 8; guard++) {
-        const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
-        if (!st.ok || st.rows >= rows) break;
-        blogLog(`  행 ${st.rows}/${rows} — 마지막 셀에서 Tab 으로 행 추가`);
-        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
-        await new Promise(r => setTimeout(r, 200));
-        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
-        await new Promise(r => setTimeout(r, 350));
-        const st2 = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
-        if (!st2.ok || st2.rows <= st.rows) { blogLog(`  행 추가가 안 됩니다 (${st.rows}행에서 멈춤)`, 'warn'); break; }
+      // ③ 표 안에 커서를 넣어야 행·열 추가 버튼(se-cell-add-button)이 나타난다
+      const first = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
+      if (first.ok) {
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: first.x, y: first.y });
+        await new Promise(r => setTimeout(r, 500));
       }
 
-      // ③ 셀마다 좌표를 받아 직접 클릭해 넣는다.
-      //    ⚠️ 전에는 첫 셀 클릭 후 Tab 으로 옮겼는데 Tab 이 셀 이동으로 먹지 않아
-      //    첫 셀에 표 내용이 전부 들어갔다(그런데 '완료' 로 로그가 찍혔다 — 검증이 없었다).
+      // ④ 필요한 만큼 행·열을 늘린다.
+      //    버튼 글자에 인덱스가 들어 있어("2행 다음에 행 추가") 마지막 것을 누르면 된다.
+      for (const [axis, need, label] of [['col', cols, '열'], ['row', rows, '행']]) {
+        for (let guard = 0; guard < 12; guard++) {
+          const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
+          if (!st.ok) {
+            console.log('[MangoAuto] 표 추가 버튼 없음', st);
+            blogLog(`  ${label} 추가 버튼을 못 찾음 — ${st.error}`, 'warn');
+            break;
+          }
+          const have = axis === 'row' ? st.rows : st.cols;
+          if (have >= need) break;
+          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
+          await new Promise(r => setTimeout(r, 320));
+        }
+      }
+
+      // ⑤ 셀마다 좌표를 받아 직접 클릭해 넣는다 (Tab 은 셀 이동이 안 된다)
       const cells = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_CELLS' });
-      if (!cells.ok || !cells.grid?.length) {
-        blogLog(`  ${t.marker} 표는 만들었지만 셀 좌표를 못 구함 — 직접 채워주세요`, 'warn');
-        continue;
-      }
-      if (cells.rows !== rows || cells.cols !== cols) {
-        blogLog(`  ${t.marker} 표 크기가 ${cells.rows}×${cells.cols} 로 만들어졌습니다(원하던 ${rows}×${cols}) — 있는 칸만 채웁니다`, 'warn');
-      }
+      if (!cells.ok || !cells.grid?.length) { blogLog(`  ${t.marker} 셀 좌표를 못 구함`, 'warn'); continue; }
+      blogLog(`  ${t.marker} 표 ${cells.rows}×${cells.cols} 준비 (원하던 ${rows}×${cols})`);
       for (let r = 0; r < Math.min(rows, cells.rows); r++) {
         for (let c = 0; c < Math.min(cols, cells.cols); c++) {
           const text = t.rows[r][c];
           if (!text) continue;
           const cell = cells.grid[r][c];
           await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: cell.x, y: cell.y });
-          await new Promise(x => setTimeout(x, 180));
+          await new Promise(x => setTimeout(x, 170));
           await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
-          await new Promise(x => setTimeout(x, 120));
+          await new Promise(x => setTimeout(x, 110));
         }
       }
-      // ④ 실제로 칸마다 들어갔는지 확인한다
+
+      // ⑥ 칸마다 실제로 들어갔는지 센다
       const vfy = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_TEXT' });
       const want = t.rows.flat().filter(Boolean).length;
       if (vfy.ok && vfy.filled >= Math.ceil(want * 0.8)) {
         done++;
-        blogLog(`  ${t.marker} 표 ${cells.rows}×${cells.cols} — ${vfy.filled}/${vfy.total} 칸 채움`);
+        blogLog(`  ${t.marker} 완료 — ${vfy.filled}/${vfy.total} 칸 채움`);
       } else {
-        blogLog(`  ${t.marker} 표 입력 미흡 (${vfy.filled ?? '?'}/${vfy.total ?? '?'} 칸) — 확인해주세요`, 'warn');
+        blogLog(`  ${t.marker} 입력 미흡 (${vfy.filled ?? '?'}/${vfy.total ?? '?'} 칸)`, 'warn');
       }
-      // 표 행이 모자라 못 들어간 줄은 표 바로 아래에 글자로 남긴다. 자료를 잃지 않는다.
+
+      // ⑦ 그래도 행이 모자라면 남은 줄을 표 아래 불릿으로 (자료 유실 방지)
       if (cells.rows < rows) {
-        // ⚠️ 전에는 마지막 셀을 클릭하고 Escape 로 표를 빠져나오려 했는데 안 나가서
-        //    남은 줄이 전부 그 셀 안에 쳐박혔다(화면으로 확인). 표 '다음 문단' 을 직접 찾아 쓴다.
         const head = t.rows[0];
         const left = t.rows.slice(cells.rows).filter(r => r.some(Boolean));
         if (left.length) {
-          const after = await sendFrame(tabId, frameId, { type: 'NAVER_AFTER_TABLE' });
-          if (!after.ok) {
-            blogLog(`  표에 안 들어간 ${left.length}줄을 넣을 자리를 못 찾았습니다 — 직접 넣어주세요`, 'error');
-            console.log('[MangoAuto] 표에 못 넣은 줄', left);
-          } else {
-            blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래에 불릿으로 남깁니다`, 'warn');
-            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: after.x, y: after.y });
+          const at = await sendFrame(tabId, frameId, { type: 'NAVER_AFTER_TABLE' });
+          if (at.ok) {
+            blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래 불릿으로`, 'warn');
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: at.x, y: at.y });
             await new Promise(x => setTimeout(x, 250));
-            // 'a | b | c' 로 뭉치지 않고 '항목 — 값 / 값' 으로 읽히게 쓴다
             const lines = left.map(r => '· ' + r[0] + ' — ' + r.slice(1)
               .map((v, i) => (head[i + 1] ? head[i + 1] + ': ' : '') + v).filter(Boolean).join(' / '));
             await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: lines.join('\n') });
+          } else {
+            blogLog(`  표에 안 들어간 ${left.length}줄 — 자리를 못 찾았습니다`, 'error');
+            console.log('[MangoAuto] 표에 못 넣은 줄', left);
           }
         }
       }
@@ -2978,41 +2967,7 @@ async function diagnoseNaver() {
     if (bodyPick) {
       const fi = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_FILE_INPUT' });
       blogLog(`file input ${fi.inputs?.length ?? 0}개 · 사진버튼 ${fi.button ? fi.button.hint + ` @(${fi.button.x},${fi.button.y})` : '못 찾음'}`);
-      // 표 크기 피커 구조 — 5×3 을 요청했는데 3×3 이 만들어지는 원인을 찾는다
-      const tbtn = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'table' });
-      if (tbtn.ok) {
-        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: tbtn.x, y: tbtn.y });
-        await new Promise(r => setTimeout(r, 700));
-        const pd = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_PICKER_DUMP' });
-        console.log('[MangoAuto] 표 버튼 누른 직후', pd);
-        for (const p of (pd.pools || [])) blogLog(`표피커: ${p.sel} → ${p.n}개, ${p.grid}`);
-        if (!pd.pools?.length) blogLog('크기 피커가 없습니다 — 표가 바로 삽입되는 구조로 보입니다', 'warn');
-        extra.tablePicker = pd;
-
-        // 표가 바로 삽입됐는지 보고, 삽입됐으면 첫 셀을 클릭해 행·열 추가 UI 를 뽑는다
-        const cnt = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_COUNT' });
-        blogLog(`표 버튼 누른 뒤 표 개수: ${cnt.count ?? '?'}`);
-        if ((cnt.count || 0) > 0) {
-          const fc = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
-          if (fc.ok) {
-            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: fc.x, y: fc.y });
-            await new Promise(r => setTimeout(r, 600));
-          }
-          const tui = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_UI' });
-          console.log('[MangoAuto] 표 안 커서 상태 UI', tui);
-          blogLog(`삽입된 표: ${tui.tableRows}행 × ${tui.tableCols}열 (${tui.tableCls})`);
-          blogLog(`행·열 조작 후보 ${tui.addish?.length ?? 0}개 / 핸들 ${tui.handles?.length ?? 0}개 — 콘솔 확인`);
-          extra.tableUI = tui;
-          // 진단으로 넣은 표는 지운다
-          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
-          await new Promise(r => setTimeout(r, 200));
-          blogLog('※ 진단이 표를 하나 넣었습니다 — Ctrl+Z 로 되돌리세요', 'warn');
-        }
-        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
-        await new Promise(r => setTimeout(r, 300));
-      } else {
-        blogLog('표 버튼을 못 찾음', 'warn');
-      }
+      // ※표 구조는 2026-08-13 진단으로 확인 완료 — 진단이 표를 넣지 않는다.
       const sb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_STYLE_BTN' });
       if (sb.ok) {
         blogLog(`문단 스타일 버튼 발견 — ${sb.hint} "${sb.txt}" @(${sb.x},${sb.y})`);
