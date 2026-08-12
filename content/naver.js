@@ -335,6 +335,71 @@
             return;
           }
 
+          case 'NAVER_RECT': {
+            // 제목/본문 영역의 화면 좌표. CDP 로 '진짜 클릭'을 쏠 위치를 알아내는 데 쓴다.
+            const el = msg.area === '제목' ? findTitle() : findBody();
+            if (!el) { sendResponse({ ok: false, error: `${msg.area} 영역 없음` }); return; }
+            el.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(150);
+            const r = el.getBoundingClientRect();
+            sendResponse({
+              ok: true,
+              // 왼쪽 끝에 붙여 클릭한다 (가운데를 찍으면 글자 사이에 커서가 낀다)
+              x: Math.round(r.left + 12), y: Math.round(r.top + r.height / 2),
+              w: Math.round(r.width), h: Math.round(r.height),
+              chars: textLen(el),
+            });
+            return;
+          }
+
+          case 'NAVER_FORMAT': {
+            // ─── 서식 후처리 ───
+            // SmartEditor 는 붙여넣은 <strong>·<hr> 을 자기 모델로 정규화하면서 버린다.
+            // 그래서 평문으로 먼저 넣고, 여기서 '해당 줄을 선택 → 굵게' 를 실제 편집
+            // 명령으로 적용한다. execCommand('bold') 는 브라우저 기본 편집 명령이라
+            // 에디터의 붙여넣기 필터를 거치지 않는다.
+            const want = new Set((msg.bolds || []).map((s) => s.trim()).filter(Boolean));
+            if (!want.size) { sendResponse({ ok: true, applied: 0, missed: [] }); return; }
+
+            const root = (findBody() && findBody().closest('[contenteditable="true"]')) || document.body;
+            const hits = [];
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            let n;
+            while ((n = walker.nextNode())) {
+              const t = (n.nodeValue || '').trim();
+              if (t && want.has(t)) hits.push(n);
+            }
+
+            let applied = 0;
+            const found = new Set();
+            for (const node of hits) {
+              const t = (node.nodeValue || '').trim();
+              try {
+                const r = document.createRange();
+                r.selectNodeContents(node);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(r);
+                document.execCommand('bold');
+                if (msg.fontSize) document.execCommand('fontSize', false, String(msg.fontSize));
+                // 실제로 굵어졌는지 확인
+                const p = node.parentElement;
+                if (p && (p.closest('b,strong') || /(^|\s)(700|bold)/i.test(getComputedStyle(p).fontWeight))) {
+                  applied++; found.add(t);
+                }
+              } catch (_) {}
+              await sleep(40);
+            }
+            try { window.getSelection().removeAllRanges(); } catch (_) {}
+            sendResponse({
+              ok: applied > 0,
+              applied,
+              total: want.size,
+              missed: [...want].filter((t) => !found.has(t)),
+            });
+            return;
+          }
+
           case 'NAVER_STATUS':
             sendResponse({
               ok: true,

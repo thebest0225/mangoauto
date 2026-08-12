@@ -431,6 +431,11 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: m };
       }
 
+    // 네이버 작업이 끝나면 디버거를 뗀다 — 노란 배너를 계속 띄워두지 않는다.
+    case 'NAVER_CDP_DONE':
+      if (msg.tabId) await detachDebuggerSafe(msg.tabId);
+      return { ok: true };
+
     // ── MangoHub API Proxy ──
     case 'API_CHECK_AUTH':
       return { loggedIn: await MangoHubAPI.checkAuth() };
@@ -531,8 +536,9 @@ async function handleMessage(msg, sender) {
 
     // ── File Injection (MAIN world) ──
     case 'DEBUGGER_TRUSTED_CLICK': {
-      // tabId 은 sender.tab.id 우선, 없으면 활성 탭
-      let tabId = sender?.tab?.id;
+      // tabId 은 호출부 지정 > sender.tab.id > 활성 탭 순서.
+      // (사이드패널에서 부를 때는 sender.tab 이 없으므로 msg.tabId 를 봐야 한다)
+      let tabId = msg.tabId || sender?.tab?.id;
       if (!tabId) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         tabId = tab?.id;

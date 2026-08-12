@@ -1844,6 +1844,7 @@ function naverizeDraft(md) {
   const html = [];
   const text = [];
   const photos = [];
+  const bolds = [];   // 소제목 — 붙여넣기 후에 '굵게'를 따로 적용할 대상
 
   const pushText = (t) => text.push(t);
 
@@ -1864,7 +1865,7 @@ function naverizeDraft(md) {
       const capLine = (lines[1] || '').replace(/^캡션\s*[:：]\s*/, '').trim();
       photos.push({ n: Number(pm[1]), tags: pm[2].trim(), caption: capLine });
       // 자리를 눈에 보이게 남긴다 — 사진을 넣고 이 줄만 지우면 된다
-      const marker = `📷 사진${pm[1]} (${pm[2].trim()}) — 캡션: ${capLine}`;
+      const marker = `[사진${pm[1]} · ${pm[2].trim()}] 캡션: ${capLine}`;
       html.push(`<p><strong>${ESC(marker)}</strong></p>`);
       pushText(marker);
       continue;
@@ -1896,8 +1897,10 @@ function naverizeDraft(md) {
 
     // 볼드만 있는 줄 = 소제목
     if (lines.length === 1 && /^\*\*.+\*\*$/.test(lines[0])) {
-      html.push(`<p><strong>${ESC(lines[0].replace(/^\*\*|\*\*$/g, ''))}</strong></p>`);
-      pushText(lines[0].replace(/\*\*/g, ''));
+      const h = lines[0].replace(/^\*\*|\*\*$/g, '').trim();
+      html.push(`<p><strong>${ESC(h)}</strong></p>`);
+      bolds.push(h);
+      pushText(h);
       continue;
     }
 
@@ -1918,6 +1921,7 @@ function naverizeDraft(md) {
     text: body,
     images: [],           // 사진은 슬롯으로 관리한다 (초안에는 이미지 URL 이 없다)
     photos,
+    bolds,
     meta,
     thumbPrompt: thumb,
     tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
@@ -2080,6 +2084,55 @@ function sendToNaver(tabId, msg) {
   });
 }
 
+// ─── 제목 채우기 (CDP 진짜 클릭) ───
+//
+// 제목은 에디터가 포커스를 스스로 관리해서 합성 이벤트·Range 로는 커서가 안 들어간다.
+// 좌표를 구해 CDP 로 진짜 클릭을 쏘고 Input.insertText 로 넣는다.
+// 에디터는 iframe 안이므로 iframe 의 화면 위치를 더해 최상위 뷰포트 좌표로 환산한다.
+async function fillNaverTitle(tabId, title) {
+  try {
+    const r = await sendToNaver(tabId, { type: 'NAVER_RECT', area: '제목' });
+    if (!r.ok) { blogLog('제목 영역을 못 찾음 — ' + (r.error || ''), 'warn'); return false; }
+
+    // iframe 오프셋. 에디터가 최상위 프레임이면 0.
+    let ox = 0, oy = 0;
+    if (naverFrameId !== 0) {
+      const top = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        func: () => {
+          const ifr = document.querySelector('#mainFrame') ||
+            [...document.querySelectorAll('iframe')].sort(
+              (a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
+          if (!ifr) return null;
+          const b = ifr.getBoundingClientRect();
+          return { x: Math.round(b.left), y: Math.round(b.top) };
+        },
+      });
+      const off = top?.[0]?.result;
+      if (off) { ox = off.x; oy = off.y; blogLog(`iframe 오프셋 (${ox}, ${oy})`); }
+    }
+
+    const x = r.x + ox, y = r.y + oy;
+    blogLog(`제목 클릭 좌표 (${x}, ${y}) — 노란 디버깅 배너가 뜹니다`);
+
+    const click = await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x, y });
+    if (!click?.ok) { blogLog('제목 클릭 실패 — ' + (click?.error || ''), 'error'); return false; }
+    await new Promise(res => setTimeout(res, 400));
+
+    const ins = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: title });
+    if (!ins?.ok) { blogLog('제목 입력 실패 — ' + (ins?.error || ''), 'error'); return false; }
+
+    await new Promise(res => setTimeout(res, 400));
+    const chk = await sendToNaver(tabId, { type: 'NAVER_STATUS' });
+    if (chk.ok && chk.titleChars > 0) { blogLog(`제목 채움 (${chk.titleChars}자)`); return true; }
+    blogLog('제목이 비어 있습니다 — 좌표가 어긋났을 수 있습니다', 'warn');
+    return false;
+  } catch (e) {
+    blogLog('제목 처리 오류 — ' + e.message, 'error');
+    return false;
+  }
+}
+
 // ─── 채우기 ───
 async function fillNaver() {
   if (!blogPicked) return;
@@ -2102,26 +2155,44 @@ async function fillNaver() {
 
     const keep = $('#blogKeepFormat').checked;
     const p = blogPicked.parsed;
+
+    // ① 본문 먼저. 제목보다 본문을 먼저 넣어야 제목 클릭이 본문을 밀지 않는다.
     const res = await sendToNaver(tabId, {
       type: 'NAVER_FILL',
-      title: blogPicked.title,
+      title: null,
       bodyText: p.text,
       bodyHtml: keep ? p.html : null,
     });
-
     for (const r of (res.results || [])) {
       blogLog(r.ok ? `${r.label} 채움 (${r.how})` : `${r.label} 실패 — ${r.reason}`, r.ok ? 'info' : 'warn');
     }
 
-    if (res.needCdp) {
-      blogLog('합성 입력이 막혔습니다. CDP 신뢰 입력으로 재시도합니다 (노란 디버깅 배너가 뜹니다)', 'warn');
-      for (const area of res.cdpPending || []) {
-        await sendToNaver(tabId, { type: 'NAVER_FOCUS', area, replace: area === '제목' });
-        const text = area === '제목' ? blogPicked.title : p.text;
-        const c = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
-        blogLog(c?.ok ? `${area} CDP 입력 완료` : `${area} CDP 입력 실패 — ${c?.error || '알 수 없음'}`, c?.ok ? 'info' : 'error');
+    // ② 소제목 굵게 — 붙여넣은 <strong> 은 에디터가 정규화하며 버린다.
+    //    평문으로 들어간 뒤 '그 줄을 선택 → 굵게' 를 실제 편집 명령으로 적용한다.
+    if (keep && p.bolds?.length) {
+      const f = await sendToNaver(tabId, { type: 'NAVER_FORMAT', bolds: p.bolds, fontSize: 5 });
+      if (f.ok) {
+        blogLog(`소제목 굵게 ${f.applied}/${f.total}개 적용`);
+        if (f.missed?.length) blogLog(`못 찾은 소제목: ${f.missed.join(' / ')}`, 'warn');
+      } else {
+        blogLog('소제목 굵게 적용 실패 — 에디터에서 직접 지정해주세요', 'warn');
       }
     }
+
+    // ③ 제목 — 여기가 까다롭다.
+    //    합성 마우스 이벤트로는 실제 커서가 안 옮겨진다. 그래서 제목에 넣었다고 생각한
+    //    글자가 에디터가 기억하는 본문 위치로 들어가버렸다(1차 시도의 증상).
+    //    → CDP 로 제목 좌표에 '진짜 클릭'을 쏜 뒤 Input.insertText 로 넣는다.
+    if (blogPicked.title) {
+      const ok = await fillNaverTitle(tabId, blogPicked.title);
+      if (!ok) {
+        await navigator.clipboard.writeText(blogPicked.title).catch(() => {});
+        blogLog('제목은 직접 입력해주세요 — 클립보드에 복사해뒀습니다', 'warn');
+      }
+    }
+
+    // 디버거를 떼서 노란 배너를 없앤다 (붙어 있는 상태를 네이버가 볼 이유가 없다)
+    await sendBg({ type: 'NAVER_CDP_DONE', tabId });
 
     const st = await sendToNaver(tabId, { type: 'NAVER_STATUS' });
     if (st.ok) blogLog(`현재 에디터: 제목 ${st.titleChars}자 / 본문 ${st.bodyChars}자`);
