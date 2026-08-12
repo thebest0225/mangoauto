@@ -1871,6 +1871,13 @@ function naverize(html, article) {
 
 // ─── 네이버 글쓰기 탭 확보 ───
 async function ensureNaverTab() {
+  // 지금 보고 있는 탭이 이미 네이버면 그걸 쓴다 — 열려 있는 글쓰기 화면을 다른 주소로
+  // 덮어써서 작업 중인 내용을 날리는 일이 없게.
+  try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active && /^https:\/\/blog\.naver\.com/.test(active.url || '')) return active.id;
+  } catch (_) {}
+
   const tabs = await chrome.tabs.query({ url: 'https://blog.naver.com/*' });
   const writing = tabs.find(t => /PostWriteForm|Redirect=Write/i.test(t.url || ''));
   if (writing) { await chrome.tabs.update(writing.id, { active: true }); return writing.id; }
@@ -1879,10 +1886,49 @@ async function ensureNaverTab() {
   return t.id;
 }
 
-// 여러 프레임이 응답하므로 전체 프레임에 보내고 에디터를 가진 프레임의 응답만 쓴다.
+// ─── 에디터가 있는 프레임 찾기 ───
+//
+// ⚠️ 여기가 처음에 안 됐던 이유다. 네이버 글쓰기는 최상위 페이지 안의 #mainFrame iframe 에
+//    SmartEditor 가 들어 있다. chrome.tabs.sendMessage 는 탭의 모든 프레임에 뿌리고
+//    '가장 먼저 온 응답' 하나만 쓰는데, 최상위 프레임이 먼저 대답해서 hasEditor=false 로
+//    판정돼 버렸다. 그래서 프레임을 먼저 특정하고 그 프레임에만 말을 건다.
+//
+// 겸사겸사 매니페스트 content_scripts 에 의존하지 않고 그 자리에서 주입한다 —
+// 확장을 새로고침한 뒤 열려 있던 탭에는 content script 가 안 들어가서, 페이지를 다시
+// 불러야 하는 함정이 있었다. 주입하면 그럴 필요가 없다.
+let naverFrameId = null;
+
+async function findNaverFrame(tabId) {
+  const probe = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: () => {
+      const vis = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
+      const eds = Array.from(document.querySelectorAll('[contenteditable="true"]')).filter(vis);
+      return { url: location.href.slice(0, 110), n: eds.length };
+    },
+  });
+
+  const frames = probe.filter(f => f && f.result).map(f => ({ id: f.frameId, ...f.result }));
+  for (const f of frames) blogLog(`프레임 ${f.id}: 입력영역 ${f.n}개 · ${f.url}`);
+
+  const best = frames.filter(f => f.n > 0).sort((a, b) => b.n - a.n)[0];
+  if (!best) return null;
+
+  // 그 프레임에만 스크립트를 넣는다 (naver.js 안에 중복 로드 가드가 있다)
+  await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [best.id] },
+    files: ['content/naver.js'],
+  });
+  naverFrameId = best.id;
+  blogLog(`에디터 프레임 확정: ${best.id} (입력영역 ${best.n}개)`);
+  return best.id;
+}
+
+// 확정된 프레임에만 메시지를 보낸다.
 function sendToNaver(tabId, msg) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, msg, (res) => {
+    const opts = naverFrameId != null ? { frameId: naverFrameId } : undefined;
+    chrome.tabs.sendMessage(tabId, msg, opts, (res) => {
       if (chrome.runtime.lastError) return resolve({ ok: false, error: chrome.runtime.lastError.message });
       resolve(res || { ok: false, error: '응답 없음' });
     });
@@ -1897,14 +1943,17 @@ async function fillNaver() {
   blogStatus('채우는 중…');
   try {
     const tabId = await ensureNaverTab();
-    // 에디터가 뜰 때까지 기다린다 (네이버 글쓰기는 로딩이 느리다)
+    // 에디터 프레임을 찾는다 (네이버 글쓰기는 로딩이 느려서 몇 번 다시 본다)
+    naverFrameId = null;
     let ready = false;
-    for (let i = 0; i < 20; i++) {
-      const p = await sendToNaver(tabId, { type: 'NAVER_PING' });
-      if (p.ok && p.hasEditor) { ready = true; break; }
-      await new Promise(r => setTimeout(r, 700));
+    for (let i = 0; i < 12; i++) {
+      if (await findNaverFrame(tabId)) {
+        const p = await sendToNaver(tabId, { type: 'NAVER_PING' });
+        if (p.ok && p.hasEditor) { ready = true; break; }
+      }
+      await new Promise(r => setTimeout(r, 800));
     }
-    if (!ready) throw new Error('네이버 에디터를 못 찾았습니다. 글쓰기 화면이 완전히 열린 뒤 다시 눌러주세요');
+    if (!ready) throw new Error('에디터를 못 찾았습니다. 위 프레임 목록을 확인하고 진단 버튼을 눌러주세요');
 
     const keep = $('#blogKeepFormat').checked;
     const p = blogPicked.parsed;
@@ -1982,6 +2031,19 @@ async function saveBlogImages() {
 async function diagnoseNaver() {
   try {
     const tabId = await ensureNaverTab();
+    naverFrameId = null;
+    const fid = await findNaverFrame(tabId);
+    if (fid == null) {
+      // 입력영역이 아예 없으면 프레임 목록만이라도 보여준다 (에디터 구조가 바뀐 경우)
+      const all = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: () => ({ url: location.href.slice(0, 140), tags: document.body ? document.body.children.length : 0 }),
+      });
+      console.log('[MangoAuto] 프레임 목록', all);
+      blogLog(`입력영역이 있는 프레임이 없습니다. 프레임 ${all.length}개 정보를 콘솔에 출력했습니다`, 'error');
+      await navigator.clipboard.writeText(JSON.stringify(all, null, 2)).catch(() => {});
+      return;
+    }
     const r = await sendToNaver(tabId, { type: 'NAVER_DIAGNOSE' });
     if (!r.ok) { blogLog('진단 실패 — ' + (r.error || '에디터 없음'), 'error'); return; }
     console.log('[MangoAuto] 네이버 에디터 진단', r.info);
