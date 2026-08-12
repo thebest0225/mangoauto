@@ -1716,10 +1716,12 @@ async function loadBlogDrafts() {
   const list = $('#blogList');
   list.innerHTML = '<div class="blog-empty">불러오는 중…</div>';
   try {
-    const j = await bwFetch('/api/work?status=generated');
+    const wantPublished = blogScope === 'published';
+    const j = await bwFetch('/api/work?status=' + (wantPublished ? 'published' : 'generated'));
     blogItems = (j.items || []).filter(it => {
-      if (blogScope !== 'naver') return true;
-      return it.target === 'naver' || it.destination_id === 'naver_mango';
+      const isNaver = it.target === 'naver' || it.destination_id === 'naver_mango';
+      if (blogScope === 'all') return true;
+      return isNaver;   // naver / published 둘 다 네이버만
     });
     renderBlogList();
     $('#blogCount').textContent = `${blogItems.length}건`;
@@ -1740,19 +1742,29 @@ function renderBlogList() {
     return;
   }
   list.innerHTML = '';
+  const done = blogScope === 'published';
   for (const it of blogItems) {
     const card = document.createElement('button');
-    card.className = 'blog-card' + (blogPicked?.id === it.id ? ' picked' : '');
+    card.className = 'blog-card' + (blogPicked?.id === it.id ? ' picked' : '') + (done ? ' done' : '');
     const when = it.created_at ? new Date(it.created_at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' }) : '';
     const isNaver = it.target === 'naver' || it.destination_id === 'naver_mango';
     card.innerHTML = `
       <div class="blog-card-title"></div>
       <div class="blog-card-meta">
-        <span class="tag ${isNaver ? 'tag-naver' : ''}">${isNaver ? '네이버' : (it.target || '기타')}</span>
+        <span class="tag ${done ? 'tag-done' : (isNaver ? 'tag-naver' : '')}">${done ? '발행됨' : (isNaver ? '네이버' : (it.target || '기타'))}</span>
         <span>${when}</span>
       </div>`;
     card.querySelector('.blog-card-title').textContent = it.title || '(제목 없음)';
-    card.addEventListener('click', () => pickBlogDraft(it.id));
+    if (done) {
+      // 발행완료 목록은 기록 보관용 — 누르면 그 글을 새 탭에서 연다
+      card.title = it.published_url || '주소 미기록';
+      card.addEventListener('click', () => {
+        if (it.published_url) chrome.tabs.create({ url: it.published_url, active: true });
+        else blogLog('이 글은 주소가 기록되지 않았습니다', 'warn');
+      });
+    } else {
+      card.addEventListener('click', () => pickBlogDraft(it.id));
+    }
     list.appendChild(card);
   }
 }
@@ -1764,7 +1776,12 @@ async function pickBlogDraft(id) {
     const w = await bwFetch('/api/work/' + encodeURIComponent(id));
     let article = {};
     try { article = JSON.parse(w.article_json || '{}'); } catch (_) {}
-    blogPicked = { id: w.id, title: w.title || article.title || '', html: w.html || '', article };
+    // ⚠️ upsertWorkItem 의 UPDATE 는 target·destination_id·title 에 COALESCE 를 쓰지 않는다.
+    //    발행 완료 처리 때 이 값들을 같이 보내지 않으면 지워진다.
+    blogPicked = {
+      id: w.id, title: w.title || article.title || '', html: w.html || '', article,
+      target: w.target || 'naver', destinationId: w.destination_id || 'naver_mango',
+    };
 
     // ★네이버는 초안 원본을 쓴다. work_items.html 은 블로그라이터가 워드프레스용으로
     //   재생성한 것이라 볼드 소제목·구분선·사진 슬롯·해시태그가 다 뭉개져 있다.
@@ -1798,6 +1815,9 @@ async function pickBlogDraft(id) {
     if (p.meta?.category) bits.push(p.meta.category);
     $('#blogPickedMeta').textContent = bits.join(' · ');
     renderPhotoSlots(p.photos || []);
+    // 이미 발행한 뒤 고른 경우를 대비해 주소를 미리 채워둔다
+    const guess = await detectPublishedUrl();
+    if ($('#blogPubUrl')) $('#blogPubUrl').value = guess || '';
     renderBlogList();
     blogLog(`선택: ${blogPicked.title}`);
     if (p.charCount > 2600) blogLog(`본문이 ${p.charCount}자입니다. 네이버 권장은 1,500~2,500자 — 길면 줄이세요.`, 'warn');
@@ -2504,6 +2524,83 @@ async function saveBlogImages() {
   if (dead) blogLog('임시 CDN 링크가 만료된 것입니다. 초안을 오래 두면 이렇게 됩니다.', 'warn');
 }
 
+// ─── 발행 완료 처리 ───
+//
+// 네이버 발행은 사람이 직접 한다. 시스템은 그걸 알 수 없어서 초안이 계속 목록에 남는다.
+// 그래서 '발행 완료' 를 누르면 status 를 published 로 바꿔 목록에서 내리고, 주소를 기록한다.
+// 기록한 주소는 나중에 루틴의 내부 링크 목록을 갱신할 재료가 된다.
+
+// 네이버 글 주소를 표준형으로. PostView.naver?blogId=..&logNo=.. 도 받는다.
+function normalizeNaverPostUrl(url) {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)blog\.naver\.com$/.test(u.hostname)) return '';
+    const logNo = u.searchParams.get('logNo');
+    const blogId = u.searchParams.get('blogId');
+    if (logNo && blogId) return `https://blog.naver.com/${blogId}/${logNo}`;
+    const m = u.pathname.match(/^\/([A-Za-z0-9_-]+)\/(\d{6,})$/);
+    if (m) return `https://blog.naver.com/${m[1]}/${m[2]}`;
+    return '';
+  } catch (_) { return ''; }
+}
+
+// 열려 있는 네이버 탭에서 발행된 글 주소를 찾아본다
+async function detectPublishedUrl() {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://blog.naver.com/*' });
+    for (const t of tabs) {
+      const hit = normalizeNaverPostUrl(t.url || '');
+      if (hit) return hit;
+    }
+  } catch (_) {}
+  return '';
+}
+
+async function markPublished() {
+  if (!blogPicked) return;
+  const input = $('#blogPubUrl');
+  let url = (input?.value || '').trim();
+  if (!url) url = await detectPublishedUrl();
+  const norm = normalizeNaverPostUrl(url);
+
+  if (url && !norm) {
+    blogLog(`주소 형식을 못 알아봤습니다 — blog.naver.com/mangoabba/223… 형태로 넣어주세요`, 'warn');
+    return;
+  }
+  if (!norm) {
+    blogLog('발행 주소를 못 찾았습니다. 발행한 글을 탭에서 열어두거나 주소를 직접 넣어주세요', 'warn');
+    return;
+  }
+
+  try {
+    const r = await fetch(BLOGWRITE_BASE + '/api/work', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: blogPicked.id,
+        target: blogPicked.target,
+        destination_id: blogPicked.destinationId,
+        title: blogPicked.title,
+        status: 'published',
+        published_url: norm,
+        publish_mode: 'manual',
+      }),
+    });
+    if (!r.ok) throw new Error(`서버 응답 ${r.status}`);
+    blogLog(`발행 완료로 표시했습니다 — ${norm}`);
+    blogStatus('발행 완료로 기록했습니다', 'ok');
+    if (input) input.value = '';
+    blogPicked = null;
+    $('#blogDetail').style.display = 'none';
+    renderPhotoSlots([]);
+    await loadBlogDrafts();
+  } catch (e) {
+    blogLog('발행 완료 처리 실패 — ' + e.message, 'error');
+  }
+}
+
 // ─── 진단 ───
 // 프레임마다 구조를 뽑는다. 에디터가 바뀌어 셀렉터가 어긋날 때 이걸 보고 고친다.
 async function diagnoseNaver() {
@@ -2574,6 +2671,13 @@ function bindBlogEvents() {
     $$('.btab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
     blogScope = t.dataset.scope;
+    // 발행완료 목록은 기록 보관용이라 선택 패널이 남아 있으면 헷갈린다
+    if (blogScope === 'published') {
+      blogPicked = null;
+      $('#blogDetail').style.display = 'none';
+      renderPhotoSlots([]);
+      blogStatus('');
+    }
     loadBlogDrafts();
   }));
   $('#blogClear')?.addEventListener('click', () => {
@@ -2605,6 +2709,7 @@ function bindBlogEvents() {
     blogLog('썸네일 프롬프트를 복사했습니다 (베이크 문구 포함)');
   });
   $('#blogSaveImages')?.addEventListener('click', saveBlogImages);
+  $('#blogMarkPublished')?.addEventListener('click', markPublished);
   $('#blogDiagnose')?.addEventListener('click', diagnoseNaver);
 }
 

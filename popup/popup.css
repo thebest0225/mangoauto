@@ -1133,3 +1133,14 @@ button.badge.badge-on { cursor: default; }
   flex: 1; display: flex; align-items: center; justify-content: space-between;
   gap: 6px; font-size: 11px; opacity: .8; cursor: pointer;
 }
+
+#blogPanel .pub-row { display: flex; gap: 6px; margin-top: 10px; }
+#blogPanel .mini-input {
+  flex: 1; min-width: 0; background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.14); border-radius: 8px;
+  color: inherit; font-size: 11px; padding: 5px 8px;
+}
+#blogPanel .mini-input::placeholder { opacity: .45; }
+#blogPanel .mini-input:focus-visible { outline: 2px solid rgba(120,190,255,.5); outline-offset: 1px; }
+#blogPanel .blog-card.done { opacity: .72; }
+#blogPanel .blog-card-meta .tag-done { background: rgba(255,255,255,.12); }

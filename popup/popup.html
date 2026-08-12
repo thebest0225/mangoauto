@@ -313,6 +313,7 @@
         <div class="blog-filter segmented segmented-sm">
           <button class="btab active" data-scope="naver">네이버용</button>
           <button class="btab" data-scope="all">전체 초안</button>
+          <button class="btab" data-scope="published">발행완료</button>
         </div>
 
         <div id="blogList" class="blog-list">
@@ -383,6 +384,13 @@
               <option value="none">원본</option>
             </select>
           </label>
+        </div>
+
+        <!-- 발행 후 목록에서 내리기. 네이버 발행은 사람이 하므로 시스템이 알 수 없다.
+             그래서 발행했다고 알려주면 그때 status 를 published 로 바꿔 목록에서 빠지게 한다. -->
+        <div class="pub-row">
+          <input id="blogPubUrl" class="mini-input" placeholder="발행된 글 주소 (네이버 탭에서 자동 감지)">
+          <button id="blogMarkPublished" class="btn-ghost btn-xs">발행 완료</button>
         </div>
 
         <div id="blogStatus" class="blog-status"></div>
