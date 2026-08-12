@@ -3087,8 +3087,42 @@ function bindBlogEvents() {
   $('#blogDiagnose')?.addEventListener('click', diagnoseNaver);
 }
 
+// ─── 블로그 탭 설정 기억하기 ───
+// 매번 소제목 크기·사진 크기를 다시 고르는 게 번거로워서 선택을 저장한다.
+const BLOG_OPTS = ['blogHeadSize', 'blogPhotoFit', 'blogCapSource',
+                   'blogKeepFormat', 'blogAutoPhoto', 'blogPhotoCaption', 'blogLinkCard'];
+
+async function restoreBlogOpts() {
+  try {
+    const got = await chrome.storage.local.get('blogOpts');
+    const v = got?.blogOpts;
+    if (!v) return;
+    for (const id of BLOG_OPTS) {
+      const el = $('#' + id);
+      if (!el || v[id] === undefined) continue;
+      if (el.type === 'checkbox') el.checked = !!v[id];
+      else el.value = v[id];
+    }
+  } catch (_) {}
+}
+
+function bindBlogOptSaving() {
+  const save = async () => {
+    const v = {};
+    for (const id of BLOG_OPTS) {
+      const el = $('#' + id);
+      if (!el) continue;
+      v[id] = el.type === 'checkbox' ? el.checked : el.value;
+    }
+    try { await chrome.storage.local.set({ blogOpts: v }); } catch (_) {}
+  };
+  for (const id of BLOG_OPTS) $('#' + id)?.addEventListener('change', save);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   bindBlogEvents();
+  bindBlogOptSaving();
+  restoreBlogOpts();
   // 확장 새로고침을 안 하면 옛 코드가 돌아 로그가 그대로다(실제로 겪었다).
   // 버전을 화면에 띄워 바로 확인할 수 있게 한다.
   try {
