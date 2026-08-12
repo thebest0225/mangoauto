@@ -1872,6 +1872,7 @@ function naverizeDraft(md) {
   const text = [];
   const photos = [];
   const bolds = [];   // 소제목 — 붙여넣기 후에 '굵게'를 따로 적용할 대상
+  const tables = [];  // 표 — 본문에는 자리표시만 넣고, 나중에 진짜 네이버 표로 만든다
 
   const pushText = (t) => text.push(t);
 
@@ -1912,7 +1913,13 @@ function naverizeDraft(md) {
           rows.map(r => '<tr>' + r.map(c => `<td>${inlineMd(c)}</td>`).join('') + '</tr>').join('') +
           '</tbody></table>'
         );
-        pushText([head, ...rows].map(r => r.join(' | ')).join('\n'));
+        // ★본문에는 자리표시 한 줄만 넣는다. 나중에 그 자리를 진짜 네이버 표로 바꾼다.
+        //   'a | b | c' 평문으로 넣으면 표가 아니라 그냥 줄이 되어 체류시간 효과가 없다.
+        //   표 만들기가 실패하면 이 자리표시를 평문 표로 되돌린다(내용은 안 잃는다).
+        const n = tables.length + 1;
+        const marker = `[표${n}]`;
+        tables.push({ n, marker, rows: [head, ...rows], plain: [head, ...rows].map(r => r.join(' | ')).join('\n') });
+        pushText(marker);
         continue;
       }
     }
@@ -1955,6 +1962,7 @@ function naverizeDraft(md) {
     images: [],           // 사진은 슬롯으로 관리한다 (초안에는 이미지 URL 이 없다)
     photos,
     bolds,
+    tables,
     meta,
     thumbPrompt: thumb,
     tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
@@ -2408,6 +2416,85 @@ async function attachSlotPhotos(tabId, frameId, photos) {
   return ok;
 }
 
+// ─── 자리표시를 진짜 네이버 표로 바꾸기 ───
+//
+// 평문 'a | b | c' 로 넣으면 표가 아니라 그냥 줄이다. 네이버에서 표는 체류시간을 크게
+// 올리고 셀 안 글자도 검색 대상이 되므로 진짜 표 컴포넌트로 넣는 게 맞다.
+// (KIE 로 표 이미지를 만드는 건 안 한다 — AI 이미지는 한글이 깨지고, 이미지 안 글자는
+//  검색에 안 잡힌다.)
+//
+// 순서: 자리표시 줄 선택 → 지우기 → 표 버튼 → 크기 피커에서 R×C 클릭 → 첫 셀 클릭 →
+//       셀마다 insertText + Tab. 어느 단계든 실패하면 평문 표로 되돌린다(내용 안 잃음).
+async function insertTables(tabId, frameId, tables) {
+  if (!tables?.length) return 0;
+  const btn = await sendFrame(tabId, frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'table' });
+  if (!btn.ok) { blogLog(`표 버튼을 못 찾음 — ${btn.error}. 평문으로 넣습니다`, 'warn'); }
+
+  let done = 0;
+  for (const t of tables) {
+    const rows = t.rows.length, cols = t.rows[0].length;
+    const fallback = async (why) => {
+      blogLog(`  ${t.marker} 표 만들기 실패(${why}) → 평문으로 넣습니다`, 'warn');
+      const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: t.marker });
+      if (sel.ok && sel.drag) {
+        await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
+        await new Promise(r => setTimeout(r, 120));
+        await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: t.plain });
+      }
+    };
+
+    try {
+      // ① 자리표시 줄에 커서를 놓고 지운다
+      const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: t.marker });
+      if (!sel.ok || !sel.drag) { await fallback('자리표시 못 찾음'); continue; }
+      await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
+      await new Promise(r => setTimeout(r, 130));
+      await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Backspace' });
+      await new Promise(r => setTimeout(r, 200));
+
+      if (!btn.ok) { await fallback('표 버튼 없음'); continue; }
+
+      // ② 표 버튼 → 크기 피커
+      const before = (await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_COUNT' })).count || 0;
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
+      await new Promise(r => setTimeout(r, 600));
+
+      const pick = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_PICKER', rows, cols });
+      if (!pick.ok) {
+        console.log('[MangoAuto] 표 피커 덤프', pick.dump);
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+        await fallback(pick.error);
+        continue;
+      }
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: pick.x, y: pick.y });
+      await new Promise(r => setTimeout(r, 800));
+
+      const after = (await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_COUNT' })).count || 0;
+      if (after <= before) { await fallback('표가 삽입되지 않음'); continue; }
+
+      // ③ 첫 셀부터 Tab 으로 옮겨가며 채운다
+      const first = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
+      if (!first.ok) { blogLog(`  ${t.marker} 표는 만들었지만 셀을 못 찾음 — 직접 채워주세요`, 'warn'); continue; }
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: first.x, y: first.y });
+      await new Promise(r => setTimeout(r, 350));
+
+      const flat = t.rows.flat();
+      for (let i = 0; i < flat.length; i++) {
+        if (flat[i]) await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: flat[i] });
+        if (i < flat.length - 1) {
+          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
+          await new Promise(r => setTimeout(r, 90));
+        }
+      }
+      done++;
+      blogLog(`  ${t.marker} 표 ${rows}×${cols} 삽입·입력 완료`);
+    } catch (e) {
+      await fallback(e.message);
+    }
+  }
+  return done;
+}
+
 // ─── 채우기 ───
 async function fillNaver() {
   if (!blogPicked) return;
@@ -2474,14 +2561,21 @@ async function fillNaver() {
       }
     }
 
-    // ③ 사진 — 초안이 지정한 자리에 망고 사진함에서 골라 넣는다
+    // ③ 표 — 자리표시를 진짜 네이버 표로 바꾼다
+    if (body.ok && p.tables?.length) {
+      blogLog(`표 ${p.tables.length}개 삽입 시도`);
+      const n = await insertTables(tabId, body.frameId, p.tables);
+      blogLog(`표 ${n}/${p.tables.length}개 삽입`, n ? 'info' : 'warn');
+    }
+
+    // ④ 사진 — 초안이 지정한 자리에 망고 사진함에서 골라 넣는다
     if (body.ok && $('#blogAutoPhoto')?.checked && p.photos?.length) {
       const n = await attachSlotPhotos(tabId, body.frameId, p.photos);
       blogLog(`사진 ${n}/${p.photos.length}장 삽입`, n ? 'info' : 'warn');
       if (!n) blogLog('사진은 직접 넣어주세요. 자리표시 줄과 캡션은 그대로 남겨뒀습니다', 'warn');
     }
 
-    // ④ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
+    // ⑤ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
     let title = { ok: false };
     if (blogPicked.title) {
       title = await typeIntoArea(tabId, '제목', blogPicked.title);

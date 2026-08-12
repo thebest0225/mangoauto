@@ -689,6 +689,75 @@
             return;
           }
 
+          case 'NAVER_TABLE_PICKER': {
+            // 표 버튼을 누르면 '몇 행 몇 열' 격자 피커가 열린다.
+            // 원하는 크기의 셀 좌표를 찾아 준다. 구조를 모르면 못 찍으므로 덤프도 같이 준다.
+            const want = { r: Math.max(1, msg.rows | 0), c: Math.max(1, msg.cols | 0) };
+            const vis = (el) => el.getClientRects().length > 0;
+            const pools = [
+              '[class*="table"] [class*="cell"]',
+              '[class*="table"] td',
+              '[class*="grid"] [class*="cell"]',
+              '[class*="table-select"] *[data-row]',
+              '[class*="table"] li',
+            ];
+            let cells = [];
+            for (const sel of pools) {
+              cells = Array.from(document.querySelectorAll(sel)).filter(vis);
+              if (cells.length >= want.r * want.c) break;
+            }
+            const dump = cells.slice(0, 6).map((el) => ({
+              cls: String(el.className || '').slice(0, 50),
+              row: el.getAttribute('data-row') || el.dataset?.row || '',
+              col: el.getAttribute('data-col') || el.dataset?.col || '',
+            }));
+            if (!cells.length) { sendResponse({ ok: false, error: '표 크기 피커를 못 찾음', dump }); return; }
+
+            // 1순위: data-row/data-col 속성으로 정확히 찾기
+            let hit = cells.find((el) => {
+              const r = +(el.getAttribute('data-row') || el.dataset?.row || 0);
+              const c = +(el.getAttribute('data-col') || el.dataset?.col || 0);
+              return r === want.r && c === want.c;
+            });
+            // 2순위: 격자가 순서대로 놓였다고 보고 좌표로 역산 (열 수를 화면 위치로 추정)
+            if (!hit) {
+              const tops = [...new Set(cells.map((el) => Math.round(el.getBoundingClientRect().top)))].sort((a, b) => a - b);
+              const perRow = cells.filter((el) => Math.round(el.getBoundingClientRect().top) === tops[0]).length;
+              const idx = (want.r - 1) * perRow + (want.c - 1);
+              if (perRow && idx < cells.length) hit = cells[idx];
+            }
+            if (!hit) { sendResponse({ ok: false, error: `${want.r}x${want.c} 셀을 못 찾음 (후보 ${cells.length}개)`, dump }); return; }
+            const v = viewportRect(hit);
+            sendResponse({
+              ok: true, count: cells.length, dump,
+              x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+            });
+            return;
+          }
+
+          case 'NAVER_TABLE_COUNT': {
+            sendResponse({ ok: true, count: document.querySelectorAll('[class*="se-table"], table').length });
+            return;
+          }
+
+          case 'NAVER_TABLE_FIRST_CELL': {
+            // 방금 삽입된 표의 첫 셀 좌표. 여기 클릭하고 Tab 으로 칸을 옮겨가며 채운다.
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '삽입된 표를 못 찾음' }); return; }
+            t.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(200);
+            const cell = t.querySelector('td, th, [class*="cell"] [class*="paragraph"], [class*="cell"]');
+            if (!cell) { sendResponse({ ok: false, error: '표 셀을 못 찾음' }); return; }
+            const v = viewportRect(cell);
+            const rows = t.querySelectorAll('tr').length;
+            sendResponse({
+              ok: true, rows,
+              x: Math.round(v.x + Math.min(12, v.w / 2)), y: Math.round(v.y + v.h / 2),
+            });
+            return;
+          }
+
           case 'NAVER_STATUS':
             sendResponse({
               ok: true,

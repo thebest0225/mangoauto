@@ -621,6 +621,7 @@ async function handleMessage(msg, sender) {
           Backspace: { windowsVirtualKeyCode: 8,  code: 'Backspace', key: 'Backspace' },
           Delete:    { windowsVirtualKeyCode: 46, code: 'Delete',    key: 'Delete' },
           Escape:    { windowsVirtualKeyCode: 27, code: 'Escape',    key: 'Escape' },
+          Tab:       { windowsVirtualKeyCode: 9,  code: 'Tab',       key: 'Tab', text: '\t' },
         };
         const k = MAP[msg.key];
         if (!k) return { ok: false, error: '모르는 키: ' + msg.key };
