@@ -431,6 +431,26 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: m };
       }
 
+    // ─── 파일 선택창 가로채기 ───
+    // 네이버는 '사진' 버튼을 눌러야 input[type=file] 을 만든다. 그런데 그 버튼은
+    // OS 파일 대화상자를 띄워 브라우저를 멈춘다(1차 시도에서 겪음).
+    // CDP Page.setInterceptFileChooserDialog 를 켜면 대화상자가 아예 뜨지 않고
+    // input 만 DOM 에 남는다 → 거기에 DataTransfer 로 파일을 밀어넣을 수 있다.
+    // 사용자가 관찰한 '파일창이 열려 있을 때는 첨부가 잘 됐다' 가 이 경로를 가리켰다.
+    case 'NAVER_FILECHOOSER': {
+      try {
+        if (!msg.tabId) return { ok: false, error: 'tabId 없음' };
+        await ensureDebuggerAttached(msg.tabId);
+        const t = { tabId: msg.tabId };
+        try { await chrome.debugger.sendCommand(t, 'Page.enable'); } catch (_) {}
+        await chrome.debugger.sendCommand(t, 'Page.setInterceptFileChooserDialog', { enabled: !!msg.enabled });
+        broadcastLog(`[네이버] 파일 선택창 가로채기 ${msg.enabled ? 'ON' : 'OFF'}`, 'info');
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+    }
+
     // 사람처럼 드래그해서 한 줄을 선택한다.
     // ⚠️ Range 로 만든 선택은 에디터가 무시한다(굵게 0/7 이던 이유). 진짜 마우스로
     //    긋어야 에디터가 자기 선택 상태로 받아들인다.

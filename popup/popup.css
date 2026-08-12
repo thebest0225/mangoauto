@@ -1127,3 +1127,9 @@ button.badge.badge-on { cursor: default; }
   font-variant-numeric: tabular-nums; cursor: pointer;
 }
 #blogPanel .mini-select:focus-visible { outline: 2px solid rgba(120,190,255,.55); outline-offset: 1px; }
+
+#blogPanel .opt-row { display: flex; gap: 8px; margin-top: 8px; }
+#blogPanel .opt {
+  flex: 1; display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; font-size: 11px; opacity: .8; cursor: pointer;
+}

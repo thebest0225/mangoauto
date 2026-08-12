@@ -2155,13 +2155,22 @@ async function setFontSize(tabId, frameId, size) {
   await new Promise(r => setTimeout(r, 450));
 
   const menu = await sendFrame(tabId, frameId, { type: 'NAVER_MENU_OPTIONS' });
-  const nums = (menu.items || []).filter(i => /^\d{1,2}$/.test(i.txt.replace(/[^\d]/g, '').slice(0, 2)) || /^\d{1,2}/.test(i.txt));
+
+  // ⚠️ 네이버는 접근성용 숨은 텍스트를 겹쳐 넣어서 항목 글자가 두 번 나온다.
+  //    실제로 읽힌 값: '1111', '1313', '1515선택됨', '1919', '2424' …
+  //    그래서 '1919' === '19' 비교가 전부 실패했다(크기 0/7).
+  //    → 앞쪽 숫자만 떼서 비교한다. 그리고 '15글자 크기 변경' 은 드롭다운 버튼
+  //      자기 자신이므로 후보에서 제외한다(안 그러면 현재 크기를 다시 고른다).
   const want = String(size);
-  const hit = nums.find(i => i.txt.replace(/[^\d]/g, '') === want);
+  const nums = (menu.items || [])
+    .filter(i => !/글자\s*크기/.test(i.txt))
+    .map(i => ({ ...i, n: (i.txt.match(/^(\d{1,2})/) || [])[1] }))
+    .filter(i => i.n);
+  const hit = nums.find(i => i.n === want);
   if (!hit) {
     // 목록을 못 읽었으면 다시 눌러 닫는다 (열린 채로 두면 다음 클릭이 엉킨다)
     await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
-    return { ok: false, error: `크기 ${size} 항목을 못 찾음 (읽은 항목: ${nums.map(n => n.txt).join(',') || '없음'})` };
+    return { ok: false, error: `크기 ${size} 항목을 못 찾음 (읽은 숫자: ${nums.map(n => n.n).join(',') || '없음'})` };
   }
   await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: hit.x, y: hit.y });
   await new Promise(r => setTimeout(r, 350));
@@ -2202,25 +2211,87 @@ async function pickMangoPhoto(slotTags, usedIds) {
   return null;
 }
 
-async function photoToBase64(url) {
+// ─── 사진 내려받아 올릴 크기로 다듬기 ───
+//
+// 사진함 원본은 장당 1MB 를 넘는다(1,127KB 를 그대로 올리고 있었다). 네이버 본문에
+// 그 해상도가 필요하지도 않고, 업로드가 느려지고 실패 확률만 올라간다.
+//   fit    — 긴 변을 maxPx 로 줄인다 (가로세로 비율 유지)
+//   square — 가운데를 정사각형으로 잘라 maxPx 로 (목록에서 줄이 맞아 깔끔하다)
+//   none   — 원본 그대로
+async function photoToBase64(url, mode = 'fit', maxPx = 1280, quality = 0.86) {
   const r = await fetch(url.startsWith('http') ? url : MANGOHUB_BASE + url, { credentials: 'include' });
   if (!r.ok) throw new Error(`사진 내려받기 실패 ${r.status}`);
   const blob = await r.blob();
-  const dataUrl = await new Promise((res, rej) => {
+
+  const toB64 = (b) => new Promise((res, rej) => {
     const fr = new FileReader();
-    fr.onload = () => res(fr.result);
+    fr.onload = () => res(String(fr.result).split(',')[1]);
     fr.onerror = rej;
-    fr.readAsDataURL(blob);
+    fr.readAsDataURL(b);
   });
-  return { b64: String(dataUrl).split(',')[1], mime: blob.type || 'image/jpeg', size: blob.size };
+
+  if (mode === 'none') {
+    return { b64: await toB64(blob), mime: blob.type || 'image/jpeg', size: blob.size, note: '원본' };
+  }
+
+  try {
+    const bmp = await createImageBitmap(blob);
+    let sx = 0, sy = 0, sw = bmp.width, sh = bmp.height, dw, dh;
+    if (mode === 'square') {
+      const side = Math.min(bmp.width, bmp.height);
+      sx = Math.round((bmp.width - side) / 2);
+      sy = Math.round((bmp.height - side) / 2);
+      sw = sh = side;
+      dw = dh = Math.min(side, maxPx);
+    } else {
+      const scale = Math.min(1, maxPx / Math.max(bmp.width, bmp.height));
+      dw = Math.round(bmp.width * scale);
+      dh = Math.round(bmp.height * scale);
+    }
+    const canvas = new OffscreenCanvas(dw, dh);
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, dw, dh);
+    const out = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+    bmp.close();
+    return {
+      b64: await toB64(out), mime: 'image/jpeg', size: out.size,
+      note: `${bmp.width}x${bmp.height} → ${dw}x${dh}`,
+    };
+  } catch (e) {
+    // 리사이즈가 안 되면 원본으로라도 올린다
+    return { b64: await toB64(blob), mime: blob.type || 'image/jpeg', size: blob.size, note: '리사이즈 실패, 원본' };
+  }
 }
 
 // 슬롯 자리에 커서를 놓고 사진을 넣는다.
 async function attachSlotPhotos(tabId, frameId, photos) {
-  // ⚠️ 사진 툴바 버튼은 절대 누르지 않는다 — OS 파일 선택창이 떠서 브라우저가 멈춘다.
-  //    (1차 시도에서 그렇게 됐다.) 붙여넣기로 넣고, 안 되면 그냥 건너뛴다.
-  const probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
-  blogLog(`사진 업로더 점검 — file input ${probe.inputs?.length ?? 0}개 (버튼은 누르지 않습니다)`);
+  // ─── 업로더 확보 ───
+  // 네이버는 '사진' 버튼을 눌러야 input[type=file] 을 만든다. 그 버튼은 OS 파일창을
+  // 띄우지만, CDP 로 파일창 가로채기를 켜두면 창이 뜨지 않고 input 만 남는다.
+  // (사용자 관찰: '파일창이 열려 있을 때는 첨부가 잘 됐다' → 그때 input 이 있었던 것)
+  let probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
+  let intercepted = false;
+  if (!probe.inputs?.length) {
+    const ic = await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: true });
+    if (!ic?.ok) {
+      blogLog(`파일창 가로채기 실패 — ${ic?.error || ''}. 사진은 직접 넣어주세요`, 'warn');
+      return 0;
+    }
+    intercepted = true;
+    if (probe.button) {
+      blogLog('업로더를 띄웁니다 (파일창은 가로채서 뜨지 않습니다)');
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: probe.button.x, y: probe.button.y });
+      await new Promise(r => setTimeout(r, 1500));
+      probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
+    }
+    blogLog(`file input ${probe.inputs?.length ?? 0}개 확보`);
+    if (!probe.inputs?.length) {
+      await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: false });
+      blogLog('업로더를 못 만들었습니다. 사진은 직접 넣어주세요', 'warn');
+      return 0;
+    }
+  }
 
   const usedIds = new Set();
   let ok = 0;
@@ -2237,8 +2308,9 @@ async function attachSlotPhotos(tabId, frameId, photos) {
       await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: sel.x, y: sel.y });
       await new Promise(r => setTimeout(r, 350));
 
-      const img = await photoToBase64(pick.photo.url);
-      blogLog(`사진${slot.n}: ${pick.matched} 매칭 · ${Math.round(img.size / 1024)}KB 첨부 시도`);
+      const mode = $('#blogPhotoFit')?.value || 'fit';
+      const img = await photoToBase64(pick.photo.url, mode, mode === 'square' ? 1080 : 1280);
+      blogLog(`사진${slot.n}: ${pick.matched} 매칭 · ${img.note} · ${Math.round(img.size / 1024)}KB 첨부 시도`);
       const att = await sendFrame(tabId, frameId, {
         type: 'NAVER_ATTACH_IMAGES',
         images: [{ b64: img.b64, mime: img.mime, name: `mango_${pick.photo.id}.jpg` }],
@@ -2256,6 +2328,8 @@ async function attachSlotPhotos(tabId, frameId, photos) {
       blogLog(`사진${slot.n} 오류 — ${e.message}`, 'error');
     }
   }
+  // 가로채기를 끈다 — 켜둔 채로 두면 이후 사람이 사진을 넣으려 할 때 파일창이 안 뜬다
+  if (intercepted) await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: false });
   return ok;
 }
 

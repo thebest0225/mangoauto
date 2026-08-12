@@ -361,15 +361,25 @@
           <input type="checkbox" id="blogAutoPhoto" checked>
           <span>사진 자리에 망고 사진함에서 자동 첨부 (태그·계절 매칭, 덜 쓴 것 먼저)</span>
         </label>
-        <label class="chk-row">
-          <span style="opacity:.72">소제목 글자 크기</span>
-          <select id="blogHeadSize" class="mini-select">
-            <option value="">그대로</option>
-            <option value="16">16</option>
-            <option value="19" selected>19</option>
-            <option value="24">24</option>
-          </select>
-        </label>
+        <div class="opt-row">
+          <label class="opt">
+            <span>소제목 크기</span>
+            <select id="blogHeadSize" class="mini-select">
+              <option value="">그대로</option>
+              <option value="16">16</option>
+              <option value="19" selected>19</option>
+              <option value="24">24</option>
+            </select>
+          </label>
+          <label class="opt">
+            <span>사진 크기</span>
+            <select id="blogPhotoFit" class="mini-select">
+              <option value="fit" selected>가로 1280</option>
+              <option value="square">정사각 1080</option>
+              <option value="none">원본</option>
+            </select>
+          </label>
+        </div>
 
         <div id="blogStatus" class="blog-status"></div>
       </section>
