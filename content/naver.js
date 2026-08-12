@@ -794,6 +794,68 @@
             return;
           }
 
+          case 'NAVER_TABLE_CELLS': {
+            // 표의 모든 셀 좌표. Tab 으로 칸을 옮기는 게 안 먹혀서(첫 셀에 전부 들어갔다)
+            // 셀마다 직접 클릭해 넣는다.
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '표를 못 찾음' }); return; }
+            t.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(250);
+            const rows = Array.from(t.querySelectorAll('tr'));
+            const grid = rows.map((tr) => Array.from(tr.querySelectorAll('td,th')).map((td) => {
+              // 셀 안의 문단이 실제 입력 지점이다
+              const target = td.querySelector('[class*="paragraph"], [contenteditable]') || td;
+              const v = viewportRect(target);
+              return { x: Math.round(v.x + Math.min(14, v.w / 2)), y: Math.round(v.y + v.h / 2), w: Math.round(v.w), h: Math.round(v.h) };
+            }));
+            sendResponse({ ok: true, rows: grid.length, cols: grid[0] ? grid[0].length : 0, grid });
+            return;
+          }
+
+          case 'NAVER_TABLE_TEXT': {
+            // 표에 들어간 내용 검증용 — 셀별 글자수
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '표 없음' }); return; }
+            const cells = Array.from(t.querySelectorAll('td,th')).map((td) => (td.innerText || '').trim());
+            sendResponse({ ok: true, cells, filled: cells.filter(Boolean).length, total: cells.length });
+            return;
+          }
+
+          case 'NAVER_LINK_DIALOG': {
+            // 링크(oglink) 입력창 구조.
+            // ★핵심: 주소를 넣고 '돋보기(검색)' 를 눌러야 확인이 활성화된다.
+            //   그걸 안 눌러서 확인 클릭이 먹지 않았다(링크 카드 1/5).
+            const vis = (el) => el.getClientRects().length > 0;
+            const scope = document.querySelector('[class*="oglink"], [class*="link-layer"], [class*="se-popup"]') || document;
+            const input = Array.from(scope.querySelectorAll('input[type="text"], input[type="url"], input:not([type]), textarea')).filter(vis)[0]
+              || Array.from(document.querySelectorAll('input[type="text"], input[type="url"]')).filter(vis)
+                   .find((el) => /link|url|oglink|주소/i.test((el.className || '') + ' ' + (el.placeholder || '')));
+            if (!input) { sendResponse({ ok: false, error: '주소 입력칸 없음' }); return; }
+            const iv = viewportRect(input);
+
+            const btns = Array.from(scope.querySelectorAll('button')).filter(vis);
+            const pick = (re) => btns.find((b) =>
+              re.test((b.getAttribute('aria-label') || '') + ' ' + (b.className || '') + ' ' + (b.textContent || '').trim()));
+            const search  = pick(/검색|search|magnif|돋보기/i);
+            const confirm = pick(/확인|적용|추가|등록|완료/);
+            const rc = (el) => { if (!el) return null; const v = viewportRect(el); return { x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2), disabled: !!el.disabled }; };
+
+            sendResponse({
+              ok: true,
+              input: { x: Math.round(iv.x + Math.min(30, iv.w / 2)), y: Math.round(iv.y + iv.h / 2) },
+              search: rc(search), confirm: rc(confirm),
+              buttons: btns.slice(0, 8).map((b) => ({
+                cls: String(b.className || '').slice(0, 42),
+                aria: b.getAttribute('aria-label') || '',
+                txt: (b.textContent || '').trim().slice(0, 12),
+                disabled: !!b.disabled,
+              })),
+            });
+            return;
+          }
+
           case 'NAVER_STATUS':
             sendResponse({
               ok: true,

@@ -2175,10 +2175,32 @@ async function typeIntoArea(tabId, area, text) {
   if (!ins?.ok) { blogLog(`${area} 입력 실패 — ${ins?.error || ''}`, 'error'); return { ok: false, frameId }; }
 
   await new Promise(r => setTimeout(r, 500));
-  const chk = await sendFrame(tabId, frameId, { type: 'NAVER_STATUS' });
-  const got = area === '제목' ? chk.titleChars : chk.bodyChars;
-  blogLog(`${area} 입력 완료 — 에디터 글자수 ${got ?? '?'}`);
-  return { ok: true, frameId, chars: got };
+  let chk = await sendFrame(tabId, frameId, { type: 'NAVER_STATUS' });
+  let got = area === '제목' ? chk.titleChars : chk.bodyChars;
+
+  // ⚠️ 글자수 2 로 실패했는데 '완료' 로 찍힌 적이 있다. 넣으려던 길이와 비교해 검증한다.
+  const want = String(text).replace(/\s/g, '').length;
+  const enough = got >= Math.min(10, Math.ceil(want * 0.5));
+  if (!enough) {
+    blogLog(`${area} 입력이 부족합니다 (${got}자 / 넣으려던 ${want}자) — 다시 시도합니다`, 'warn');
+    // 제목은 남아 있는 글자를 지우고 다시 넣는다
+    if (area === '제목') {
+      await sendFrame(tabId, frameId, { type: 'NAVER_FOCUS', area, replace: true });
+      await new Promise(r => setTimeout(r, 200));
+      await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Backspace' });
+      await new Promise(r => setTimeout(r, 200));
+    }
+    await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: rect.x, y: rect.y });
+    await new Promise(r => setTimeout(r, 400));
+    await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
+    await new Promise(r => setTimeout(r, 600));
+    chk = await sendFrame(tabId, frameId, { type: 'NAVER_STATUS' });
+    got = area === '제목' ? chk.titleChars : chk.bodyChars;
+  }
+
+  const ok = got >= Math.min(10, Math.ceil(want * 0.5));
+  blogLog(`${area} ${ok ? '입력 완료' : '입력 실패'} — 에디터 글자수 ${got ?? '?'} (넣으려던 ${want}자)`, ok ? 'info' : 'error');
+  return { ok, frameId, chars: got };
 }
 
 // ─── 선택된 글자의 폰트 크기 바꾸기 ───
@@ -2349,7 +2371,18 @@ async function attachSlotPhotos(tabId, frameId, photos) {
 
         // ① 업로더 확보 — 사진마다 다시 (첫 업로드 뒤 input 이 사라진다)
         const up = await ensureUploader(tabId, frameId, button);
-        if (!up.inputs?.length) { blogLog(`사진${slot.n}: 업로더를 못 만들었습니다`, 'warn'); continue; }
+        if (!up.inputs?.length) {
+          blogLog(`사진${slot.n}: 업로더를 못 만들었습니다 (사진버튼 ${button ? `@(${button.x},${button.y})` : '좌표없음'})`, 'warn');
+          // 버튼 좌표를 다시 구해 한 번 더 (툴바가 다시 그려졌을 수 있다)
+          const re = await sendFrame(tabId, frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'image' });
+          if (re.ok) {
+            blogLog(`  사진 버튼 좌표 갱신 @(${re.x},${re.y}) — 재시도`);
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: re.x, y: re.y });
+            await new Promise(r => setTimeout(r, 1500));
+            const up2 = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
+            if (!up2.inputs?.length) { blogLog(`  여전히 업로더 없음 — 건너뜁니다`, 'warn'); continue; }
+          } else { continue; }
+        }
 
         // ② 자리표시 줄을 선택해 지운다 (줄 쪼개짐 방지)
         const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: marker });
@@ -2477,22 +2510,37 @@ async function insertTables(tabId, frameId, tables) {
       const after = (await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_COUNT' })).count || 0;
       if (after <= before) { await fallback('표가 삽입되지 않음'); continue; }
 
-      // ③ 첫 셀부터 Tab 으로 옮겨가며 채운다
-      const first = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
-      if (!first.ok) { blogLog(`  ${t.marker} 표는 만들었지만 셀을 못 찾음 — 직접 채워주세요`, 'warn'); continue; }
-      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: first.x, y: first.y });
-      await new Promise(r => setTimeout(r, 350));
-
-      const flat = t.rows.flat();
-      for (let i = 0; i < flat.length; i++) {
-        if (flat[i]) await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: flat[i] });
-        if (i < flat.length - 1) {
-          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
-          await new Promise(r => setTimeout(r, 90));
+      // ③ 셀마다 좌표를 받아 직접 클릭해 넣는다.
+      //    ⚠️ 전에는 첫 셀 클릭 후 Tab 으로 옮겼는데 Tab 이 셀 이동으로 먹지 않아
+      //    첫 셀에 표 내용이 전부 들어갔다(그런데 '완료' 로 로그가 찍혔다 — 검증이 없었다).
+      const cells = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_CELLS' });
+      if (!cells.ok || !cells.grid?.length) {
+        blogLog(`  ${t.marker} 표는 만들었지만 셀 좌표를 못 구함 — 직접 채워주세요`, 'warn');
+        continue;
+      }
+      if (cells.rows !== rows || cells.cols !== cols) {
+        blogLog(`  ${t.marker} 표 크기가 ${cells.rows}×${cells.cols} 로 만들어졌습니다(원하던 ${rows}×${cols}) — 있는 칸만 채웁니다`, 'warn');
+      }
+      for (let r = 0; r < Math.min(rows, cells.rows); r++) {
+        for (let c = 0; c < Math.min(cols, cells.cols); c++) {
+          const text = t.rows[r][c];
+          if (!text) continue;
+          const cell = cells.grid[r][c];
+          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: cell.x, y: cell.y });
+          await new Promise(x => setTimeout(x, 180));
+          await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
+          await new Promise(x => setTimeout(x, 120));
         }
       }
-      done++;
-      blogLog(`  ${t.marker} 표 ${rows}×${cols} 삽입·입력 완료`);
+      // ④ 실제로 칸마다 들어갔는지 확인한다
+      const vfy = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_TEXT' });
+      const want = t.rows.flat().filter(Boolean).length;
+      if (vfy.ok && vfy.filled >= Math.ceil(want * 0.8)) {
+        done++;
+        blogLog(`  ${t.marker} 표 ${cells.rows}×${cells.cols} — ${vfy.filled}/${vfy.total} 칸 채움`);
+      } else {
+        blogLog(`  ${t.marker} 표 입력 미흡 (${vfy.filled ?? '?'}/${vfy.total ?? '?'} 칸) — 확인해주세요`, 'warn');
+      }
     } catch (e) {
       await fallback(e.message);
     }
@@ -2527,26 +2575,40 @@ async function insertLinkCards(tabId, frameId, urls) {
       await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
       await new Promise(r => setTimeout(r, 700));
 
-      const inp = await sendFrame(tabId, frameId, { type: 'NAVER_LINK_INPUT' });
-      if (!inp.ok) {
-        console.log('[MangoAuto] 링크 입력칸 덤프', inp.dump);
+      const dlg = await sendFrame(tabId, frameId, { type: 'NAVER_LINK_DIALOG' });
+      if (!dlg.ok) {
+        console.log('[MangoAuto] 링크 창 덤프', dlg);
         await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
-        blogLog(`  링크 입력칸을 못 찾음 — ${inp.error}. 주소 글자로 둡니다`, 'warn');
-        // 지운 주소를 되돌린다
+        blogLog(`  링크 입력칸을 못 찾음 — ${dlg.error}. 주소 글자로 둡니다`, 'warn');
         await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: url });
         continue;
       }
-      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: inp.x, y: inp.y });
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: dlg.input.x, y: dlg.input.y });
       await new Promise(r => setTimeout(r, 300));
       await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: url });
-      await new Promise(r => setTimeout(r, 400));
-      if (inp.ok_btn) {
-        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: inp.ok_btn.x, y: inp.ok_btn.y });
+      await new Promise(r => setTimeout(r, 500));
+
+      // ★돋보기(검색)를 먼저 눌러야 확인이 활성화된다.
+      //   이걸 안 눌러서 확인 클릭이 먹지 않았다(링크 카드 1/5, 2/5).
+      if (dlg.search) {
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: dlg.search.x, y: dlg.search.y });
       } else {
+        // 돋보기를 못 찾으면 Enter 로 검색을 대신 시도한다
         await sendBg({ type: 'DEBUGGER_TRUSTED_ENTER', tabId });
       }
-      // 카드가 붙기까지 네이버가 대상 페이지를 읽어온다 — 넉넉히 기다린다
+      // 네이버가 대상 페이지를 읽어와 미리보기를 만드는 시간
       await new Promise(r => setTimeout(r, 2600));
+
+      // 검색 후 확인 버튼을 다시 찾는다 (그때 활성화되고 좌표도 바뀔 수 있다)
+      const dlg2 = await sendFrame(tabId, frameId, { type: 'NAVER_LINK_DIALOG' });
+      const okBtn = dlg2.ok ? dlg2.confirm : dlg.confirm;
+      if (okBtn && !okBtn.disabled) {
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: okBtn.x, y: okBtn.y });
+      } else {
+        if (okBtn?.disabled) blogLog(`  확인 버튼이 아직 비활성 — Enter 로 시도`, 'warn');
+        await sendBg({ type: 'DEBUGGER_TRUSTED_ENTER', tabId });
+      }
+      await new Promise(r => setTimeout(r, 1800));
 
       const after = (await sendFrame(tabId, frameId, { type: 'NAVER_OGLINK_COUNT' })).count || 0;
       if (after > before) { done++; blogLog(`  링크 카드 생성 (${url.slice(-12)})`); }
@@ -2645,18 +2707,21 @@ async function fillNaver() {
       blogLog(`표 ${n}/${p.tables.length}개 삽입`, n ? 'info' : 'warn');
     }
 
-    // ④ 링크 카드 — 맨 주소를 제목·설명·썸네일 있는 카드로
-    if (body.ok && $('#blogLinkCard')?.checked !== false && p.links?.length) {
-      blogLog(`링크 ${p.links.length}개를 카드로 변환 시도`);
-      const n = await insertLinkCards(tabId, body.frameId, p.links);
-      blogLog(`링크 카드 ${n}/${p.links.length}개`, n ? 'info' : 'warn');
-    }
-
-    // ⑤ 사진 — 초안이 지정한 자리에 망고 사진함에서 골라 넣는다
+    // ④ 사진 — 링크 작업보다 먼저 한다.
+    //    ⚠️ 전에는 링크 카드를 먼저 돌렸는데, 링크 창을 열고 닫는 과정에서 툴바·포커스
+    //    상태가 흐트러져 그 뒤 사진 업로더가 아예 안 만들어졌다('업로더를 못 만들었습니다').
+    //    사진이 링크보다 중요하므로 순서를 앞으로 옮겼다.
     if (body.ok && $('#blogAutoPhoto')?.checked && p.photos?.length) {
       const n = await attachSlotPhotos(tabId, body.frameId, p.photos);
       blogLog(`사진 ${n}/${p.photos.length}장 삽입`, n ? 'info' : 'warn');
       if (!n) blogLog('사진은 직접 넣어주세요. 자리표시 줄과 캡션은 그대로 남겨뒀습니다', 'warn');
+    }
+
+    // ⑤ 링크 카드 — 맨 주소를 제목·설명·썸네일 있는 카드로
+    if (body.ok && $('#blogLinkCard')?.checked !== false && p.links?.length) {
+      blogLog(`링크 ${p.links.length}개를 카드로 변환 시도`);
+      const n = await insertLinkCards(tabId, body.frameId, p.links);
+      blogLog(`링크 카드 ${n}/${p.links.length}개`, n ? 'info' : 'warn');
     }
 
     // ⑥ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
