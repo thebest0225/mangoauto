@@ -1828,8 +1828,9 @@ function naverizeDraft(md) {
 
   // 1) 썸네일 프롬프트 블록은 본문이 아니다 — 잘라서 따로 보관
   let thumb = '';
-  const ti = src.search(/^##\s*썸네일 프롬프트/m);
-  if (ti >= 0) { thumb = src.slice(ti).replace(/^##\s*썸네일 프롬프트\s*/m, '').trim(); src = src.slice(0, ti); }
+  // 앞 공백을 허용한다 — 루틴이 들여쓰면 못 잘라내고 썸네일 프롬프트가 본문에 섞인다
+  const ti = src.search(/^[ \t]*##\s*썸네일 프롬프트/m);
+  if (ti >= 0) { thumb = src.slice(ti).replace(/^[ \t]*##\s*썸네일 프롬프트\s*/m, '').trim(); src = src.slice(0, ti); }
 
   // 2) 맨 위 메타 두 줄
   const meta = {};
