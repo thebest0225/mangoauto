@@ -758,6 +758,42 @@
             return;
           }
 
+          case 'NAVER_LINK_INPUT': {
+            // 링크(oglink) 버튼을 누르면 주소 입력칸이 열린다. 그 칸과 확인 버튼 좌표.
+            const vis = (el) => el.getClientRects().length > 0;
+            const input = Array.from(document.querySelectorAll(
+              'input[type="text"], input[type="url"], input:not([type]), textarea'
+            )).filter(vis).find((el) => /link|url|oglink|주소/i.test(
+              (el.className || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '')
+            )) || Array.from(document.querySelectorAll('[class*="oglink"] input, [class*="link"] input')).filter(vis)[0];
+            if (!input) {
+              sendResponse({
+                ok: false, error: '링크 입력칸을 못 찾음',
+                dump: Array.from(document.querySelectorAll('input,textarea')).filter(vis).slice(0, 6).map((el) => ({
+                  tag: el.tagName, type: el.type || '', cls: String(el.className || '').slice(0, 45),
+                  ph: el.placeholder || '',
+                })),
+              });
+              return;
+            }
+            const v = viewportRect(input);
+            const btn = Array.from(document.querySelectorAll('[class*="oglink"] button, [class*="link"] button')).filter(vis)
+              .find((b) => /확인|검색|적용|추가/.test(b.textContent || ''));
+            const bv = btn ? viewportRect(btn) : null;
+            sendResponse({
+              ok: true,
+              x: Math.round(v.x + Math.min(30, v.w / 2)), y: Math.round(v.y + v.h / 2),
+              hint: describe(input),
+              ok_btn: bv ? { x: Math.round(bv.x + bv.w / 2), y: Math.round(bv.y + bv.h / 2) } : null,
+            });
+            return;
+          }
+
+          case 'NAVER_OGLINK_COUNT': {
+            sendResponse({ ok: true, count: document.querySelectorAll('[class*="oglink"], [class*="se-oglink"]').length });
+            return;
+          }
+
           case 'NAVER_STATUS':
             sendResponse({
               ok: true,

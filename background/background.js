@@ -824,7 +824,8 @@ async function handleMessage(msg, sender) {
     }
 
     case 'DEBUGGER_TRUSTED_ENTER': {
-      let tabId = sender?.tab?.id;
+      // 사이드패널에서 부를 때는 sender.tab 이 없으므로 msg.tabId 를 먼저 본다
+      let tabId = msg.tabId || sender?.tab?.id;
       if (!tabId) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         tabId = tab?.id;

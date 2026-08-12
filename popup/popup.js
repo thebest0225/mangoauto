@@ -1873,6 +1873,7 @@ function naverizeDraft(md) {
   const photos = [];
   const bolds = [];   // 소제목 — 붙여넣기 후에 '굵게'를 따로 적용할 대상
   const tables = [];  // 표 — 본문에는 자리표시만 넣고, 나중에 진짜 네이버 표로 만든다
+  const links = [];   // 맨 URL 줄 — 나중에 링크 카드로 바꾼다
 
   const pushText = (t) => text.push(t);
 
@@ -1940,9 +1941,11 @@ function naverizeDraft(md) {
       continue;
     }
 
-    // 맨 URL 만 있는 줄들 → 각각 독립 문단 (네이버가 링크 카드로 만든다)
+    // 맨 URL 만 있는 줄 — 링크 카드로 바꿀 자리다.
+    // 그냥 타이핑하면 주소 글자만 남고 카드(제목·설명·썸네일)가 안 붙는다.
+    // 그래서 URL 을 기록해두고, 나중에 툴바 '링크' 버튼으로 카드를 만든다.
     if (lines.every(l => /^https?:\/\/\S+$/.test(l))) {
-      for (const u of lines) { html.push(`<p>${ESC(u)}</p>`); pushText(u); }
+      for (const u of lines) { html.push(`<p>${ESC(u)}</p>`); pushText(u); links.push(u); }
       continue;
     }
 
@@ -1953,7 +1956,8 @@ function naverizeDraft(md) {
 
   // ★해시태그는 본문 맨 아래에 실제로 들어가야 한다. 클립보드에만 넣어두면
   //   사람이 또 붙여넣어야 하고, 네이버는 본문 끝 해시태그를 검색 자산으로 본다.
-  if (tagLine) { text.push(tagLine); html.push(`<p>${ESC(tagLine)}</p>`); }
+  // 해시태그 앞에 빈 줄을 두 줄 둔다 — 본문과 붙어 있으면 지저분하다
+  if (tagLine) { text.push('', tagLine); html.push('<p><br></p>', `<p>${ESC(tagLine)}</p>`); }
 
   const body = text.join('\n\n');
   return {
@@ -1963,6 +1967,7 @@ function naverizeDraft(md) {
     photos,
     bolds,
     tables,
+    links,
     meta,
     thumbPrompt: thumb,
     tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
@@ -2495,6 +2500,67 @@ async function insertTables(tabId, frameId, tables) {
   return done;
 }
 
+// ─── 맨 URL 을 링크 카드로 바꾸기 ───
+//
+// 그냥 타이핑하면 주소 글자만 남는다. 네이버가 자동으로 카드를 만들어주는 건 사람이
+// 주소를 붙여넣고 Enter 를 눌렀을 때뿐이고, CDP 로 타이핑한 건 그 흐름을 타지 않는다.
+// 그래서 툴바 '링크'(oglink) 버튼으로 카드를 만든다 — 제목·설명·썸네일이 같이 붙는다.
+// 실패하면 주소 글자를 그대로 남긴다(누르면 이동은 되니 내용을 잃지 않는다).
+async function insertLinkCards(tabId, frameId, urls) {
+  if (!urls?.length) return 0;
+  const btn = await sendFrame(tabId, frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'oglink' });
+  if (!btn.ok) { blogLog(`링크 버튼을 못 찾음 — ${btn.error}. 주소 글자로 둡니다`, 'warn'); return 0; }
+
+  let done = 0;
+  for (const url of urls) {
+    try {
+      // ① 그 주소 줄을 선택해 지운다
+      const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: url });
+      if (!sel.ok || !sel.drag) { blogLog(`  링크 줄을 못 찾음 (${url.slice(-12)})`, 'warn'); continue; }
+      await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
+      await new Promise(r => setTimeout(r, 130));
+      await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Backspace' });
+      await new Promise(r => setTimeout(r, 200));
+
+      // ② 링크 버튼 → 주소 입력칸
+      const before = (await sendFrame(tabId, frameId, { type: 'NAVER_OGLINK_COUNT' })).count || 0;
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
+      await new Promise(r => setTimeout(r, 700));
+
+      const inp = await sendFrame(tabId, frameId, { type: 'NAVER_LINK_INPUT' });
+      if (!inp.ok) {
+        console.log('[MangoAuto] 링크 입력칸 덤프', inp.dump);
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+        blogLog(`  링크 입력칸을 못 찾음 — ${inp.error}. 주소 글자로 둡니다`, 'warn');
+        // 지운 주소를 되돌린다
+        await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: url });
+        continue;
+      }
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: inp.x, y: inp.y });
+      await new Promise(r => setTimeout(r, 300));
+      await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: url });
+      await new Promise(r => setTimeout(r, 400));
+      if (inp.ok_btn) {
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: inp.ok_btn.x, y: inp.ok_btn.y });
+      } else {
+        await sendBg({ type: 'DEBUGGER_TRUSTED_ENTER', tabId });
+      }
+      // 카드가 붙기까지 네이버가 대상 페이지를 읽어온다 — 넉넉히 기다린다
+      await new Promise(r => setTimeout(r, 2600));
+
+      const after = (await sendFrame(tabId, frameId, { type: 'NAVER_OGLINK_COUNT' })).count || 0;
+      if (after > before) { done++; blogLog(`  링크 카드 생성 (${url.slice(-12)})`); }
+      else {
+        blogLog(`  링크 카드가 안 붙음 (${url.slice(-12)}) — 주소 글자로 되돌립니다`, 'warn');
+        await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: url });
+      }
+    } catch (e) {
+      blogLog(`  링크 처리 오류 — ${e.message}`, 'error');
+    }
+  }
+  return done;
+}
+
 // ─── 채우기 ───
 async function fillNaver() {
   if (!blogPicked) return;
@@ -2541,13 +2607,24 @@ async function fillNaver() {
           await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
           await new Promise(r => setTimeout(r, 120));
 
-          if (!sel.alreadyBold) {
+          // 한 번에 안 먹는 줄이 있다(첫 소제목이 자주 그렇다). 최대 3번 다시 잡아 시도한다.
+          let bolded = sel.alreadyBold;
+          for (let att = 0; att < 3 && !bolded; att++) {
+            if (att > 0) {
+              // 다시 선택부터 — 첫 시도에서 선택이 풀렸을 수 있다
+              const re = await sendFrame(tabId, body.frameId, { type: 'NAVER_SELECT_LINE', text: line });
+              if (re.ok && re.drag) {
+                await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...re.drag });
+                await new Promise(r => setTimeout(r, 180));
+              }
+            }
             await sendBg({ type: 'NAVER_CDP_BOLD', tabId });
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise(r => setTimeout(r, 260));
+            const chk = await sendFrame(tabId, body.frameId, { type: 'NAVER_BOLD_CHECK', text: line });
+            bolded = !!chk.bold;
           }
-          const chk = await sendFrame(tabId, body.frameId, { type: 'NAVER_BOLD_CHECK', text: line });
-          if (chk.bold) done++;
-          else blogLog(`  굵게 안 먹음 (${line.slice(0, 20)})`, 'warn');
+          if (bolded) done++;
+          else blogLog(`  굵게 안 먹음 (${line.slice(0, 20)}) — 3번 시도`, 'warn');
 
           // 폰트 크기 — 선택이 살아 있는 동안 툴바 드롭다운으로 바꾼다
           if (wantSize) {
@@ -2568,14 +2645,21 @@ async function fillNaver() {
       blogLog(`표 ${n}/${p.tables.length}개 삽입`, n ? 'info' : 'warn');
     }
 
-    // ④ 사진 — 초안이 지정한 자리에 망고 사진함에서 골라 넣는다
+    // ④ 링크 카드 — 맨 주소를 제목·설명·썸네일 있는 카드로
+    if (body.ok && $('#blogLinkCard')?.checked !== false && p.links?.length) {
+      blogLog(`링크 ${p.links.length}개를 카드로 변환 시도`);
+      const n = await insertLinkCards(tabId, body.frameId, p.links);
+      blogLog(`링크 카드 ${n}/${p.links.length}개`, n ? 'info' : 'warn');
+    }
+
+    // ⑤ 사진 — 초안이 지정한 자리에 망고 사진함에서 골라 넣는다
     if (body.ok && $('#blogAutoPhoto')?.checked && p.photos?.length) {
       const n = await attachSlotPhotos(tabId, body.frameId, p.photos);
       blogLog(`사진 ${n}/${p.photos.length}장 삽입`, n ? 'info' : 'warn');
       if (!n) blogLog('사진은 직접 넣어주세요. 자리표시 줄과 캡션은 그대로 남겨뒀습니다', 'warn');
     }
 
-    // ⑤ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
+    // ⑥ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
     let title = { ok: false };
     if (blogPicked.title) {
       title = await typeIntoArea(tabId, '제목', blogPicked.title);
