@@ -279,18 +279,40 @@
     return { ok: false, how: 'needCdp', label, reason: `${label}: paste/execCommand 둘 다 막힘` };
   }
 
-  // ─── 이미지: 숨은 file input 에 DataTransfer 로 밀어넣기 ───
+  // ─── 이미지 넣기 ───
+  //
+  // ⚠️ 사진 툴바 버튼은 절대 누르지 않는다. 그 버튼은 OS 파일 선택창을 띄우고,
+  //    그러면 브라우저가 멈춰서 사람이 직접 닫아야 한다(1차 시도에서 그렇게 됐다).
+  //
+  // 1순위: 클립보드 붙여넣기. 에디터가 이미지 붙여넣기를 직접 처리해 커서 위치에 넣는다.
+  // 2순위: 이미 열려 있는 숨은 file input 에 DataTransfer 로 밀어넣기 (없으면 포기).
   async function attachImages(files) {
+    const el = document.activeElement && document.activeElement !== document.body
+      ? document.activeElement : (findBody() || document.body);
+
+    // 1순위 — 이미지 붙여넣기
+    try {
+      const dt = new DataTransfer();
+      for (const f of files) dt.items.add(f);
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      await sleep(1800);
+      if (document.querySelectorAll('.se-component.se-image').length > (window.__mangoImgBefore ?? 0)) {
+        return { ok: true, how: 'paste', count: files.length };
+      }
+    } catch (_) {}
+
+    // 2순위 — 이미 있는 file input
     const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
-    if (!inputs.length) return { ok: false, reason: 'file input 을 못 찾음 (사진 버튼을 한 번 눌러 업로더를 띄운 뒤 다시 시도)' };
-    // 이미지 받는 input 우선
     const target = inputs.find((i) => (i.accept || '').includes('image')) || inputs[0];
+    if (!target) {
+      return { ok: false, reason: '붙여넣기가 막히고 file input 도 없음 (사진은 직접 넣어주세요)' };
+    }
     try {
       const dt = new DataTransfer();
       for (const f of files) dt.items.add(f);
       target.files = dt.files;
       target.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ok: true, count: files.length };
+      return { ok: true, how: 'file-input', count: files.length };
     } catch (e) {
       return { ok: false, reason: String(e.message || e) };
     }
@@ -389,10 +411,11 @@
               const bin = Uint8Array.from(atob(im.b64), (c) => c.charCodeAt(0));
               files.push(new File([bin], im.name, { type: im.mime || 'image/jpeg' }));
             }
-            const before = document.querySelectorAll('.se-component.se-image, .se-image img').length;
+            const before = document.querySelectorAll('.se-component.se-image').length;
+            window.__mangoImgBefore = before;
             const r = await attachImages(files);
             await sleep(2500);   // 업로드·삽입까지 시간이 걸린다
-            const after = document.querySelectorAll('.se-component.se-image, .se-image img').length;
+            const after = document.querySelectorAll('.se-component.se-image').length;
             sendResponse({ ...r, before, after, inserted: after - before });
             return;
           }
@@ -506,17 +529,33 @@
             const hit = findLineNode(target);
             if (!hit) { sendResponse({ ok: false, error: '그 줄을 못 찾음' }); return; }
             try {
+              const pe = hit.parentElement;
+              // ⚠️ 반드시 화면으로 끌어와야 한다. 이걸 안 해서 좌표가 화면 밖(음수/과대)이 되고
+              //    클릭이 엉뚱한 자리에 떨어져 사진이 글 맨 끝에 붙었다.
+              (pe || hit.parentNode).scrollIntoView({ block: 'center', behavior: 'instant' });
+              await sleep(180);
+
               const r = document.createRange();
               r.selectNodeContents(hit);
               const sel = window.getSelection();
               sel.removeAllRanges();
               sel.addRange(r);
-              const p = hit.parentElement;
-              const v = viewportRect(p || hit.parentNode);
+
+              // 드래그 선택용 시작/끝 좌표 — 사람처럼 긋기 위해 글자 범위의 양 끝을 준다
+              const rects = Array.from(r.getClientRects()).filter((b) => b.width > 0 && b.height > 0);
+              const off = viewportRect(pe || hit.parentNode);
+              const base = (pe || hit.parentNode).getBoundingClientRect();
+              const dx = off.x - base.left, dy = off.y - base.top;   // 프레임 오프셋
+              const first = rects[0], last = rects[rects.length - 1];
+
               sendResponse({
                 ok: true,
-                alreadyBold: !!(p && p.closest('b,strong')),
-                x: Math.round(v.x + 12), y: Math.round(v.y + v.h / 2),
+                alreadyBold: !!(pe && pe.closest('b,strong')),
+                x: Math.round(off.x + 12), y: Math.round(off.y + off.h / 2),
+                drag: (first && last) ? {
+                  x1: Math.round(first.left + dx + 1), y1: Math.round(first.top + dy + first.height / 2),
+                  x2: Math.round(last.right + dx - 1), y2: Math.round(last.top + dy + last.height / 2),
+                } : null,
               });
             } catch (e) { sendResponse({ ok: false, error: String(e.message || e) }); }
             return;
@@ -564,7 +603,7 @@
               // 제목 문단을 뺀 모든 문단을 합쳐서 잰다.
               bodyChars: bodyParagraphs().reduce((n, p) => n + textLen(p), 0),
               paragraphs: bodyParagraphs().length,
-              images: document.querySelectorAll('.se-component.se-image, .se-image img').length,
+              images: document.querySelectorAll('.se-component.se-image').length,
             });
             return;
 

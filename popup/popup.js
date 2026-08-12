@@ -1864,9 +1864,11 @@ function naverizeDraft(md) {
     if (pm) {
       const capLine = (lines[1] || '').replace(/^캡션\s*[:：]\s*/, '').trim();
       photos.push({ n: Number(pm[1]), tags: pm[2].trim(), caption: capLine });
-      // 자리를 눈에 보이게 남긴다 — 사진을 넣고 이 줄만 지우면 된다
-      const marker = `[사진${pm[1]} · ${pm[2].trim()}] 캡션: ${capLine}`;
-      html.push(`<p><strong>${ESC(marker)}</strong></p>`);
+      // 자리표시는 '캡션만' 남긴다. 사진이 그 자리에 들어가면
+      // 이미지 + 캡션 줄이 되어 그대로 캡션처럼 읽힌다.
+      const marker = capLine || `[사진${pm[1]}]`;
+      photos[photos.length - 1].marker = marker;
+      html.push(`<p>${ESC(marker)}</p>`);
       pushText(marker);
       continue;
     }
@@ -1914,6 +1916,10 @@ function naverizeDraft(md) {
     html.push('<p>' + lines.map(inlineMd).join('<br>') + '</p>');
     pushText(lines.join('\n'));
   }
+
+  // ★해시태그는 본문 맨 아래에 실제로 들어가야 한다. 클립보드에만 넣어두면
+  //   사람이 또 붙여넣어야 하고, 네이버는 본문 끝 해시태그를 검색 자산으로 본다.
+  if (tagLine) { text.push(tagLine); html.push(`<p>${ESC(tagLine)}</p>`); }
 
   const body = text.join('\n\n');
   return {
@@ -2184,19 +2190,15 @@ async function photoToBase64(url) {
 
 // 슬롯 자리에 커서를 놓고 사진을 넣는다.
 async function attachSlotPhotos(tabId, frameId, photos) {
+  // ⚠️ 사진 툴바 버튼은 절대 누르지 않는다 — OS 파일 선택창이 떠서 브라우저가 멈춘다.
+  //    (1차 시도에서 그렇게 됐다.) 붙여넣기로 넣고, 안 되면 그냥 건너뛴다.
   const probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
-  if (probe.ok && !probe.inputs?.length) {
-    blogLog(`사진 업로더(file input)가 아직 없습니다${probe.button ? ' — 사진 버튼을 먼저 눌러 띄웁니다' : ''}`, 'warn');
-    if (probe.button) {
-      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: probe.button.x, y: probe.button.y });
-      await new Promise(r => setTimeout(r, 1200));
-    }
-  }
+  blogLog(`사진 업로더 점검 — file input ${probe.inputs?.length ?? 0}개 (버튼은 누르지 않습니다)`);
 
   const usedIds = new Set();
   let ok = 0;
   for (const slot of photos) {
-    const marker = `[사진${slot.n} · ${slot.tags}] 캡션: ${slot.caption}`;
+    const marker = slot.marker || slot.caption || `[사진${slot.n}]`;
     try {
       const pick = await pickMangoPhoto(slot.tags, usedIds);
       if (!pick) { blogLog(`사진${slot.n}: 사진함에서 맞는 사진을 못 찾음`, 'warn'); continue; }
@@ -2263,18 +2265,23 @@ async function fillNaver() {
       // (선택은 content script 가 잡아두고, CDP 키는 현재 선택에 작용한다)
       const remain = f.ok ? (f.missed || []) : p.bolds;
       if (remain.length) {
-        blogLog(`남은 소제목 ${remain.length}개에 CDP 굵게 시도`);
+        blogLog(`남은 소제목 ${remain.length}개 — 드래그 선택 후 Ctrl+B 로 재시도`);
         let done = 0;
         for (const line of remain) {
           const sel = await sendFrame(tabId, body.frameId, { type: 'NAVER_SELECT_LINE', text: line });
-          if (!sel.ok) { blogLog(`  건너뜀 (${line}) — ${sel.error}`, 'warn'); continue; }
+          if (!sel.ok) { blogLog(`  건너뜀 (${line.slice(0, 20)}) — ${sel.error}`, 'warn'); continue; }
           if (sel.alreadyBold) { done++; continue; }
+          if (!sel.drag) { blogLog(`  좌표 없음 (${line.slice(0, 20)})`, 'warn'); continue; }
+          // ⚠️ Range 로 만든 선택은 에디터가 무시한다. 진짜 마우스로 그어야 한다.
+          await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
+          await new Promise(r => setTimeout(r, 120));
           await sendBg({ type: 'NAVER_CDP_BOLD', tabId });
-          await new Promise(r => setTimeout(r, 160));
+          await new Promise(r => setTimeout(r, 200));
           const chk = await sendFrame(tabId, body.frameId, { type: 'NAVER_BOLD_CHECK', text: line });
           if (chk.bold) done++;
+          else blogLog(`  안 먹음 (${line.slice(0, 20)})`, 'warn');
         }
-        blogLog(`CDP 굵게 ${done}/${remain.length}개 성공`, done ? 'info' : 'warn');
+        blogLog(`드래그+Ctrl+B 굵게 ${done}/${remain.length}개 성공`, done ? 'info' : 'warn');
       }
     }
 

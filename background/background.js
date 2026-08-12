@@ -431,6 +431,31 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: m };
       }
 
+    // 사람처럼 드래그해서 한 줄을 선택한다.
+    // ⚠️ Range 로 만든 선택은 에디터가 무시한다(굵게 0/7 이던 이유). 진짜 마우스로
+    //    긋어야 에디터가 자기 선택 상태로 받아들인다.
+    case 'NAVER_CDP_SELECT':
+      try {
+        if (!msg.tabId) return { ok: false, error: 'tabId 없음' };
+        await ensureDebuggerAttached(msg.tabId);
+        const t = { tabId: msg.tabId };
+        const send = (p) => chrome.debugger.sendCommand(t, 'Input.dispatchMouseEvent', p);
+        await send({ type: 'mouseMoved', x: msg.x1, y: msg.y1, button: 'none', buttons: 0 });
+        await _delay(_rand(20, 45));
+        await send({ type: 'mousePressed', x: msg.x1, y: msg.y1, button: 'left', buttons: 1, clickCount: 1 });
+        await _delay(_rand(30, 60));
+        // 중간을 한 번 거쳐 간다 (한 번에 점프하면 선택이 안 잡히는 경우가 있다)
+        await send({ type: 'mouseMoved', x: Math.round((msg.x1 + msg.x2) / 2), y: Math.round((msg.y1 + msg.y2) / 2), button: 'left', buttons: 1 });
+        await _delay(_rand(20, 40));
+        await send({ type: 'mouseMoved', x: msg.x2, y: msg.y2, button: 'left', buttons: 1 });
+        await _delay(_rand(30, 55));
+        await send({ type: 'mouseReleased', x: msg.x2, y: msg.y2, button: 'left', buttons: 0, clickCount: 1 });
+        await _delay(_rand(40, 80));
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+
     // 선택된 글자에 진짜 Ctrl+B. execCommand('bold') 가 에디터에 막힐 때 쓴다.
     // 선택은 content script 가 미리 잡아둔다 — CDP 키는 현재 선택에 작용한다.
     case 'NAVER_CDP_BOLD':
