@@ -173,11 +173,23 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
       return report;
     }
 
-    const wr = await fetch(`${BW_BASE}/api/work?status=generated`, { credentials: 'include' });
-    if (!wr.ok) { report.error = `블로그라이터 응답 ${wr.status}`; return report; }
-    const items = ((await wr.json()).items || [])
-      .filter(it => it.target === 'naver' || it.destination_id === 'naver_mango');
+    // 대상 두 종류 —
+    //  ① generated : 아직 발행 표시가 안 된 초안
+    //  ② published 인데 published_url 이 빈 것 : 예약발행으로 '표시만' 해둔 것.
+    //     이게 예약발행 처리의 핵심이다. 사람은 누른 시각만 남기고, 주소는 여기서 채운다.
+    const isNaver = (it) => it.target === 'naver' || it.destination_id === 'naver_mango';
+    const items = [];
+    for (const st of ['generated', 'published']) {
+      const wr = await fetch(`${BW_BASE}/api/work?status=${st}`, { credentials: 'include' });
+      if (!wr.ok) { report.error = `블로그라이터 응답 ${wr.status}`; return report; }
+      for (const it of ((await wr.json()).items || [])) {
+        if (!isNaver(it)) continue;
+        if (st === 'published' && it.published_url) continue;   // 이미 주소가 있으면 볼 일 없다
+        items.push({ ...it, _backfill: st === 'published' });
+      }
+    }
     report.drafts = items.length;
+    report.backfill = items.filter(i => i._backfill).length;
 
     for (const it of items) {
       let best = null, bestScore = 0;
@@ -190,6 +202,7 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
         id: it.id, draftTitle: it.title, postTitle: best.title,
         url: `https://blog.naver.com/${NAVER_BLOG_ID}/${best.logNo}`,
         score: Math.round(bestScore * 100) / 100,
+        backfill: !!it._backfill,
       };
       if (bestScore >= minScore) {
         if (apply) {
@@ -200,7 +213,9 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
               id: it.id, target: it.target || 'naver',
               destination_id: it.destination_id || 'naver_mango',
               title: it.title, status: 'published',
-              published_url: row.url, publish_mode: 'scheduled',
+              published_url: row.url,
+              publish_mode: it.publish_mode || 'scheduled',
+              note: it._backfill ? `${it.note || '예약발행'} → 주소 확인됨` : (it.note ?? undefined),
             }),
           });
           row.applied = up.ok;
@@ -212,9 +227,9 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
     }
 
     const n = report.matched.length;
-    broadcastLog(`[네이버 대조] 발행글 ${report.posts}건 · 초안 ${report.drafts}건 → ${n}건 발행완료 처리` +
+    broadcastLog(`[네이버 대조] 발행글 ${report.posts}건 · 대상 ${report.drafts}건(주소대기 ${report.backfill}건) → ${n}건 처리` +
                  (report.unsure.length ? ` (애매 ${report.unsure.length}건은 그대로 둠)` : ''), n ? 'info' : 'info');
-    for (const m of report.matched) broadcastLog(`  ✓ ${m.draftTitle.slice(0, 28)} → ${m.url} (유사도 ${m.score})`, 'info');
+    for (const m of report.matched) broadcastLog(`  ✓${m.backfill ? '[주소채움]' : ''} ${m.draftTitle.slice(0, 26)} → ${m.url} (유사도 ${m.score})`, 'info');
     for (const m of report.unsure) broadcastLog(`  ? ${m.draftTitle.slice(0, 28)} ~ ${m.postTitle.slice(0, 28)} (유사도 ${m.score}) — 수동 확인`, 'warn');
     return report;
   } catch (e) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "description": "Grok/Flow 영상 자동화 + 네이버 블로그 초안 채우기 (MangoHub 연동)",
   "permissions": [
     "cookies",

@@ -1757,10 +1757,16 @@ function renderBlogList() {
     card.querySelector('.blog-card-title').textContent = it.title || '(제목 없음)';
     if (done) {
       // 발행완료 목록은 기록 보관용 — 누르면 그 글을 새 탭에서 연다
-      card.title = it.published_url || '주소 미기록';
+      const waiting = !it.published_url;
+      if (waiting) {
+        // 예약발행으로 표시만 해둔 것. 자동 대조가 주소를 채울 때까지 이렇게 보인다.
+        card.querySelector('.blog-card-meta .tag').textContent = '주소 대기';
+        card.querySelector('.blog-card-meta .tag').classList.add('tag-wait');
+      }
+      card.title = it.published_url || (it.note || '주소 대기 — 자동 대조가 채웁니다');
       card.addEventListener('click', () => {
         if (it.published_url) chrome.tabs.create({ url: it.published_url, active: true });
-        else blogLog('이 글은 주소가 기록되지 않았습니다', 'warn');
+        else blogLog(`주소 대기 중입니다. ${it.note || ''}`.trim(), 'warn');
       });
     } else {
       card.addEventListener('click', () => pickBlogDraft(it.id));
@@ -2578,10 +2584,12 @@ async function markPublished() {
     blogLog(`주소 형식을 못 알아봤습니다 — blog.naver.com/mangoabba/223… 형태로 넣어주세요`, 'warn');
     return;
   }
-  if (!norm) {
-    blogLog('발행 주소를 못 찾았습니다. 발행한 글을 탭에서 열어두거나 주소를 직접 넣어주세요', 'warn');
-    return;
-  }
+
+  // ★예약발행 대응: 주소가 없어도 '표시한 시각' 으로 저장해 목록에서 내린다.
+  //   예약을 걸면 그 시점에 글 주소가 아직 없다. 주소가 생긴 뒤에는 3시간마다 도는
+  //   자동 대조가 알아서 채운다(그때까지 발행완료 목록에 '주소 대기' 로 보인다).
+  const scheduled = !norm;
+  const stamp = new Date().toLocaleString('ko-KR', { hour12: false });
 
   try {
     const r = await fetch(BLOGWRITE_BASE + '/api/work', {
@@ -2594,13 +2602,19 @@ async function markPublished() {
         destination_id: blogPicked.destinationId,
         title: blogPicked.title,
         status: 'published',
-        published_url: norm,
-        publish_mode: 'manual',
+        published_url: norm || null,
+        publish_mode: scheduled ? 'scheduled' : 'manual',
+        note: scheduled ? `예약발행 · ${stamp} 에 발행완료 표시 (주소는 자동 대조로 채움)` : `${stamp} 발행`,
       }),
     });
     if (!r.ok) throw new Error(`서버 응답 ${r.status}`);
-    blogLog(`발행 완료로 표시했습니다 — ${norm}`);
-    blogStatus('발행 완료로 기록했습니다', 'ok');
+    if (scheduled) {
+      blogLog(`예약발행으로 저장했습니다 — ${stamp}. 주소는 발행된 뒤 자동 대조가 채웁니다`);
+      blogStatus('예약발행으로 기록했습니다 (주소 대기)', 'ok');
+    } else {
+      blogLog(`발행 완료로 표시했습니다 — ${norm}`);
+      blogStatus('발행 완료로 기록했습니다', 'ok');
+    }
     if (input) input.value = '';
     blogPicked = null;
     $('#blogDetail').style.display = 'none';
@@ -2683,8 +2697,8 @@ function bindBlogEvents() {
     const r = await sendBg({ type: 'NAVER_MATCH_PUBLISHED' });
     if (!r) { blogLog('대조 실패 (응답 없음)', 'error'); return; }
     if (r.error) { blogLog(`대조 실패 — ${r.error} (시도: ${r.tried || '-'})`, 'error'); return; }
-    blogLog(`발행글 ${r.posts}건 · 초안 ${r.drafts}건 → ${r.matched.length}건 발행완료 처리`);
-    for (const m of r.matched) blogLog(`  ✓ ${m.draftTitle.slice(0, 26)} → ${m.url}`);
+    blogLog(`발행글 ${r.posts}건 · 대상 ${r.drafts}건(주소대기 ${r.backfill ?? 0}건) → ${r.matched.length}건 처리`);
+    for (const m of r.matched) blogLog(`  ✓${m.backfill ? '[주소채움]' : ''} ${m.draftTitle.slice(0, 24)} → ${m.url}`);
     for (const m of r.unsure) blogLog(`  ? ${m.draftTitle.slice(0, 26)} ~ ${m.postTitle.slice(0, 26)} (유사도 ${m.score})`, 'warn');
     if (r.matched.length) await loadBlogDrafts();
   });

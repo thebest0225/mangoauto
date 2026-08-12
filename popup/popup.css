@@ -1144,3 +1144,4 @@ button.badge.badge-on { cursor: default; }
 #blogPanel .mini-input:focus-visible { outline: 2px solid rgba(120,190,255,.5); outline-offset: 1px; }
 #blogPanel .blog-card.done { opacity: .72; }
 #blogPanel .blog-card-meta .tag-done { background: rgba(255,255,255,.12); }
+#blogPanel .blog-card-meta .tag-wait { background: rgba(255,200,90,.18); color: #ffd27f; }
