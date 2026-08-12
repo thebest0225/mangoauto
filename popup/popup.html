@@ -74,14 +74,15 @@
       <div class="unsupported-links">
         <a href="#" class="unsupported-link" data-url="https://grok.com/">Grok Imagine</a>
         <a href="#" class="unsupported-link" data-url="https://labs.google/fx/tools/flow">Google Flow</a>
+        <a href="#" class="unsupported-link" data-url="https://blog.naver.com/mangoabba?Redirect=Write">네이버 블로그 글쓰기</a>
       </div>
     </div>
 
     <!-- Main Content (hidden when unsupported) -->
     <div id="mainContent">
 
-    <!-- Platform Tabs -->
-    <div class="platform-tabs segmented">
+    <!-- Platform Tabs (영상제작 탭 전용 — 블로그 탭에서는 숨는다) -->
+    <div class="platform-tabs segmented" id="platformTabs">
       <button class="ptab active" data-platform="grok">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M8 12l2.5 2.5L16 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Grok</span>
@@ -96,7 +97,11 @@
     <nav class="main-tabs">
       <button class="mtab active" data-tab="workspace">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.5"/></svg>
-        <span>작업공간</span>
+        <span>영상제작</span>
+      </button>
+      <button class="mtab" data-tab="blog">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 4h9l5 5v11a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M13 4v6h6M8 14h8M8 17h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>블로그</span>
       </button>
       <button class="mtab" data-tab="settings">
         <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 01-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5v.2a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3h.1a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5h.1a1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8v.1a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
@@ -287,6 +292,76 @@
           <div id="logContainer" class="log-container"></div>
         </div>
       </section>
+    </div>
+
+    <!-- ═══════ BLOG TAB ═══════ -->
+    <!-- 블로그라이터(write.mangois.love)에 모인 네이버 초안을 골라 네이버 글쓰기에 채운다.
+         발행은 하지 않는다 — 채우기까지만 하고 검토·발행은 사람이 한다. -->
+    <div id="blogPanel" class="tab-panel hidden">
+
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">네이버 초안</div>
+          <div class="section-actions">
+            <span id="blogCount" class="badge-muted">—</span>
+            <button id="blogRefresh" class="btn-ghost btn-xs" title="블로그라이터에서 다시 불러오기">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 12a8 8 0 10-3 6.2M20 5v5h-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="blog-filter segmented segmented-sm">
+          <button class="btab active" data-scope="naver">네이버용</button>
+          <button class="btab" data-scope="all">전체 초안</button>
+        </div>
+
+        <div id="blogList" class="blog-list">
+          <div class="blog-empty">불러오는 중…</div>
+        </div>
+      </section>
+
+      <section class="section" id="blogDetail" style="display:none">
+        <div class="section-head">
+          <div class="section-title">선택한 글</div>
+          <button id="blogClear" class="btn-ghost btn-xs">해제</button>
+        </div>
+
+        <div class="blog-picked">
+          <div id="blogPickedTitle" class="blog-picked-title"></div>
+          <div id="blogPickedMeta" class="blog-picked-meta"></div>
+        </div>
+
+        <div class="blog-actions">
+          <button id="blogOpenWrite" class="btn-secondary btn-block">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            네이버 글쓰기 열기
+          </button>
+          <button id="blogFill" class="btn-primary btn-block">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            제목·본문 채우기
+          </button>
+        </div>
+
+        <div class="blog-sub-actions">
+          <button id="blogCopyBody" class="btn-ghost btn-xs">본문 복사</button>
+          <button id="blogCopyTags" class="btn-ghost btn-xs">해시태그 복사</button>
+          <button id="blogSaveImages" class="btn-ghost btn-xs">이미지 내려받기</button>
+          <button id="blogDiagnose" class="btn-ghost btn-xs" title="에디터 구조를 뽑아 콘솔에 출력">진단</button>
+        </div>
+
+        <label class="chk-row">
+          <input type="checkbox" id="blogKeepFormat" checked>
+          <span>서식 유지해서 넣기 (볼드·구분선). 깨지면 끄고 다시 시도</span>
+        </label>
+
+        <div id="blogStatus" class="blog-status"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><div class="section-title">진행 로그</div></div>
+        <div id="blogLog" class="log-container log-sm"></div>
+      </section>
+
     </div>
 
     <!-- ═══════ SETTINGS TAB ═══════ -->

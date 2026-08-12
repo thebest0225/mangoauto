@@ -23,6 +23,7 @@ const SUPPORTED_PATTERNS = [
   { pattern: /^https:\/\/grok\.com/,                   platform: 'grok' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/video-fx/, platform: 'flow' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/flow/,     platform: 'flow' },
+  { pattern: /^https:\/\/blog\.naver\.com/,            platform: 'naver' },
 ];
 
 function detectPlatform(url) {
@@ -43,30 +44,52 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents();
 });
 
+// ─── 탭 패널 동기화 ───
+// 블로그 탭은 현재 페이지가 뭐든 열려야 한다 (초안을 먼저 고르고 그 다음 네이버를 여는 순서니까).
+// 그래서 '지원 안 하는 페이지' 안내는 mainContent 전체를 숨기지 않고 영상제작 탭에서만 띄운다.
+let currentMainTab = 'workspace';
+let videoPlatformDetected = false;
+let pageIsNaver = false;
+
+function syncMainTab() {
+  const noticeOn = currentMainTab === 'workspace' && !videoPlatformDetected;
+  $('#unsupportedNotice').classList.toggle('hidden', !noticeOn);
+  $('#mainContent').classList.remove('hidden');
+  $('#platformTabs').classList.toggle('hidden', currentMainTab !== 'workspace' || noticeOn);
+  $('#workspacePanel').classList.toggle('hidden', currentMainTab !== 'workspace' || noticeOn);
+  $('#blogPanel').classList.toggle('hidden', currentMainTab !== 'blog');
+  $('#settingsPanel').classList.toggle('hidden', currentMainTab !== 'settings');
+  $$('.mtab').forEach(t => t.classList.toggle('active', t.dataset.tab === currentMainTab));
+}
+
+function selectMainTab(name) {
+  currentMainTab = name;
+  syncMainTab();
+  if (name === 'blog' && !blogItems.length) loadBlogDrafts();
+}
+
 // ─── Check current tab and show unsupported notice if needed ───
 async function checkCurrentTab() {
+  let detected = null;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const url = tab?.url || '';
-    const detected = detectPlatform(url);
-
-    if (detected) {
-      // Supported page - auto-select platform tab
-      $('#unsupportedNotice').classList.add('hidden');
-      $('#mainContent').classList.remove('hidden');
-      currentPlatform = detected;
-      $$('.ptab').forEach(t => t.classList.toggle('active', t.dataset.platform === detected));
-      updateModeAvailability();
-    } else {
-      // Unsupported page - show notice
-      $('#unsupportedNotice').classList.remove('hidden');
-      $('#mainContent').classList.add('hidden');
-    }
+    detected = detectPlatform(tab?.url || '');
   } catch {
-    // Can't detect tab (e.g. chrome:// pages) - show notice
-    $('#unsupportedNotice').classList.remove('hidden');
-    $('#mainContent').classList.add('hidden');
+    detected = null;  // chrome:// 등
   }
+
+  pageIsNaver = detected === 'naver';
+  videoPlatformDetected = !!detected && !pageIsNaver;
+
+  if (videoPlatformDetected) {
+    currentPlatform = detected;
+    $$('.ptab').forEach(t => t.classList.toggle('active', t.dataset.platform === detected));
+    updateModeAvailability();
+  }
+
+  // 네이버에 있으면 블로그 탭으로 자동 이동 (설정 탭 보는 중이면 방해하지 않는다)
+  if (pageIsNaver && currentMainTab === 'workspace') selectMainTab('blog');
+  else syncMainTab();
 }
 
 // ─── Tab change listener (update when user switches tabs or navigates) ───
@@ -341,15 +364,9 @@ function bindEvents() {
     });
   });
 
-  // Main tabs (workspace / settings) — 검토 탭 제거됨
+  // Main tabs (영상제작 / 블로그 / 설정)
   $$('.mtab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      $$('.mtab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const target = tab.dataset.tab;
-      $('#workspacePanel').classList.toggle('hidden', target !== 'workspace');
-      $('#settingsPanel').classList.toggle('hidden', target !== 'settings');
-    });
+    tab.addEventListener('click', () => selectMainTab(tab.dataset.tab));
   });
 
   // Source tabs (mangohub / standalone)
@@ -1650,3 +1667,363 @@ function renderReviewList() {
     });
   });
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  블로그 탭 — 블로그라이터 네이버 초안 → 네이버 글쓰기 채우기
+// ═══════════════════════════════════════════════════════════════
+//
+// 흐름: 초안 목록(write.mangois.love) → 하나 고름 → 네이버 글쓰기 열기 →
+//       제목·본문 채우기 → (선택) 이미지 첨부 → 사람이 검토하고 발행.
+//
+// ⚠️ 발행은 절대 자동으로 하지 않는다. 네이버는 자동 발행 패턴을 계정 제재 사유로 본다.
+// ⚠️ 초안 이미지가 KIE 임시 CDN(tempfile.aiquickdraw.com)이면 며칠 뒤 사라진다.
+//    그래서 채울 때 그 자리에서 바이트로 내려받아 네이버에 올린다 (핫링크 금지 원칙과 같은 이유).
+
+const BLOGWRITE_BASE = 'https://write.mangois.love';
+const NAVER_WRITE_URL = 'https://blog.naver.com/mangoabba?Redirect=Write';
+
+let blogItems = [];
+let blogPicked = null;      // { id, title, html, article }
+let blogScope = 'naver';
+
+function blogLog(msg, level = 'info') {
+  const box = $('#blogLog');
+  if (!box) return;
+  const line = document.createElement('div');
+  line.className = 'log-line log-' + level;
+  const t = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+  line.textContent = `[${t}] ${msg}`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function blogStatus(msg, level = 'info') {
+  const el = $('#blogStatus');
+  if (el) { el.textContent = msg || ''; el.className = 'blog-status ' + (msg ? 'st-' + level : ''); }
+}
+
+async function bwFetch(path) {
+  const r = await fetch(BLOGWRITE_BASE + path, { credentials: 'include' });
+  if (r.status === 401 || r.status === 403) {
+    throw new Error('블로그라이터 로그인이 필요합니다 — write.mangois.love 에 먼저 로그인하세요');
+  }
+  if (!r.ok) throw new Error(`블로그라이터 응답 ${r.status}`);
+  return r.json();
+}
+
+// ─── 목록 ───
+async function loadBlogDrafts() {
+  const list = $('#blogList');
+  list.innerHTML = '<div class="blog-empty">불러오는 중…</div>';
+  try {
+    const j = await bwFetch('/api/work?status=generated');
+    blogItems = (j.items || []).filter(it => {
+      if (blogScope !== 'naver') return true;
+      return it.target === 'naver' || it.destination_id === 'naver_mango';
+    });
+    renderBlogList();
+    $('#blogCount').textContent = `${blogItems.length}건`;
+    blogLog(`초안 ${blogItems.length}건 불러옴 (${blogScope === 'naver' ? '네이버용' : '전체'})`);
+  } catch (e) {
+    list.innerHTML = `<div class="blog-empty err">${e.message}</div>`;
+    $('#blogCount').textContent = '—';
+    blogLog(e.message, 'error');
+  }
+}
+
+function renderBlogList() {
+  const list = $('#blogList');
+  if (!blogItems.length) {
+    list.innerHTML = `<div class="blog-empty">${blogScope === 'naver'
+      ? '네이버용 초안이 없습니다. 루틴이 매일 하나씩 만듭니다.'
+      : '대기 중인 초안이 없습니다.'}</div>`;
+    return;
+  }
+  list.innerHTML = '';
+  for (const it of blogItems) {
+    const card = document.createElement('button');
+    card.className = 'blog-card' + (blogPicked?.id === it.id ? ' picked' : '');
+    const when = it.created_at ? new Date(it.created_at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' }) : '';
+    const isNaver = it.target === 'naver' || it.destination_id === 'naver_mango';
+    card.innerHTML = `
+      <div class="blog-card-title"></div>
+      <div class="blog-card-meta">
+        <span class="tag ${isNaver ? 'tag-naver' : ''}">${isNaver ? '네이버' : (it.target || '기타')}</span>
+        <span>${when}</span>
+      </div>`;
+    card.querySelector('.blog-card-title').textContent = it.title || '(제목 없음)';
+    card.addEventListener('click', () => pickBlogDraft(it.id));
+    list.appendChild(card);
+  }
+}
+
+// ─── 선택 ───
+async function pickBlogDraft(id) {
+  blogStatus('');
+  try {
+    const w = await bwFetch('/api/work/' + encodeURIComponent(id));
+    let article = {};
+    try { article = JSON.parse(w.article_json || '{}'); } catch (_) {}
+    blogPicked = { id: w.id, title: w.title || article.title || '', html: w.html || '', article };
+    blogPicked.parsed = naverize(blogPicked.html, article);
+
+    $('#blogDetail').style.display = '';
+    $('#blogPickedTitle').textContent = blogPicked.title;
+    const p = blogPicked.parsed;
+    $('#blogPickedMeta').textContent =
+      `본문 ${p.charCount.toLocaleString()}자 · 이미지 ${p.images.length}장 · 해시태그 ${p.tags.length}개`;
+    renderBlogList();
+    blogLog(`선택: ${blogPicked.title}`);
+    if (p.charCount > 2600) blogLog(`본문이 ${p.charCount}자입니다. 네이버 권장은 1,500~2,500자 — 길면 줄이세요.`, 'warn');
+    if (!p.images.length) blogLog('이미지가 없습니다. 망고 사진함에서 2~4장 골라 직접 넣으세요.', 'warn');
+  } catch (e) {
+    blogLog(e.message, 'error');
+    blogStatus(e.message, 'error');
+  }
+}
+
+// ─── 워드프레스 HTML → 네이버용 텍스트/간이 HTML ───
+// 원본 html 은 인라인 스타일이 잔뜩 붙어 있어서 네이버에 그대로 붙이면 깨진다.
+// 그래서 블록 단위로 뜯어 텍스트를 뽑고, 서식은 볼드·구분선만 남긴 최소 HTML 로 다시 만든다.
+function naverize(html, article) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+
+  const images = Array.from(doc.querySelectorAll('img'))
+    .map(im => ({
+      src: im.getAttribute('src') || '',
+      alt: im.getAttribute('alt') || '',
+      caption: (im.closest('figure')?.querySelector('figcaption')?.textContent || '').trim(),
+    }))
+    .filter(x => /^https?:\/\//.test(x.src));
+
+  doc.querySelectorAll('script,style,noscript,iframe,img,figure').forEach(n => n.remove());
+
+  // 링크 처리. 네이버는 붙여넣은 맨 URL 을 자동으로 링크 카드로 바꿔주므로 URL 을 살려야 한다.
+  //
+  // 워드프레스 관련글 카드는 <a><div><div>제목</div></div></a> 구조라서 <a> 안이 전부
+  // div 다. div 는 블록 목록에 없으니 그냥 걷으면 URL 과 제목이 통째로 사라진다.
+  // → 카드형 링크는 <p>URL</p> 로 갈아끼워 네이버가 카드로 만들게 한다.
+  //   (카드 안 텍스트는 아이콘 이모지·"글 보기" 같은 껍데기라 버린다. 유도문은 바로 위 h4 가 이미 담당한다.)
+  const BLOCK = 'h1,h2,h3,h4,h5,p,li,blockquote,hr,pre,tr,dt,dd';
+
+  doc.querySelectorAll('a[href]').forEach(a => {
+    const href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//.test(href)) return;
+    const style = a.getAttribute('style') || '';
+    const isCard = !!a.querySelector('div,p,h1,h2,h3,h4,h5,table') || /display\s*:\s*block/i.test(style);
+    const label = a.textContent.replace(/\s+/g, ' ').trim();
+    if (isCard) {
+      const p = doc.createElement('p');
+      p.textContent = href;
+      a.replaceWith(p);
+      return;
+    }
+    // 블록 밖에 떠 있는 링크(하단 CTA 버튼 등)는 그냥 걷으면 유실된다 → 문단으로 승격
+    if (!a.closest(BLOCK)) {
+      const p = doc.createElement('p');
+      p.textContent = (label ? label + '\n' : '') + href;
+      a.replaceWith(p);
+      return;
+    }
+    if (!label.includes(href)) a.textContent = `${label}\n${href}`;
+  });
+
+  const lines = [];
+  // 초안 html 은 <body> 없는 조각이다. 브라우저 DOMParser 는 body 로 감싸주지만
+  // 감싸주지 않는 구현도 있어서 비어 있으면 document 를 그대로 순회한다.
+  const root = (doc.body && doc.body.children.length) ? doc.body : doc;
+  root.querySelectorAll(BLOCK).forEach(el => {
+    if (el.tagName !== 'TR' && el.querySelector(BLOCK)) return;   // 컨테이너는 건너뛴다
+    if (el.tagName === 'HR') { lines.push('', '———', ''); return; }
+    if (el.tagName === 'TR') {
+      const cells = Array.from(el.querySelectorAll('td,th')).map(c => c.textContent.replace(/\s+/g, ' ').trim());
+      if (cells.some(Boolean)) lines.push(cells.join(' | '));
+      return;
+    }
+    const t = el.textContent.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    if (!t) return;
+    // 워드프레스 전용 줄은 네이버에 필요 없다 (연관 검색어는 해시태그가 대신한다)
+    if (/^최종 업데이트[:：]/.test(t)) return;
+    if (/^연관 검색어[:：]/.test(t)) return;
+    if (/^(출처|참고자료)[:：]?$/.test(t)) return;
+    if (/^H[1-5]$/.test(el.tagName)) { lines.push('', t, ''); return; }
+    if (el.tagName === 'LI') { lines.push('· ' + t); return; }
+    if (el.tagName === 'BLOCKQUOTE') { lines.push('', '“' + t + '”', ''); return; }
+    lines.push(t);
+  });
+
+  // 빈 줄 3개 이상은 2개로
+  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
+  const tags = Array.isArray(article?.tags) ? article.tags.filter(Boolean) : [];
+  const tagLine = tags.map(t => '#' + String(t).replace(/^#/, '').replace(/\s+/g, '')).join(' ');
+
+  // 서식 유지용 최소 HTML — 소제목은 볼드 단락으로 (네이버 에디터에 h2 개념이 약하다)
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const htmlOut = lines.map(l => {
+    if (l === '———') return '<p>———</p>';
+    if (!l.trim()) return '<p><br></p>';
+    return '<p>' + esc(l).replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+
+  return { text, html: htmlOut, images, tags, tagLine, charCount: text.replace(/\s/g, '').length };
+}
+
+// ─── 네이버 글쓰기 탭 확보 ───
+async function ensureNaverTab() {
+  const tabs = await chrome.tabs.query({ url: 'https://blog.naver.com/*' });
+  const writing = tabs.find(t => /PostWriteForm|Redirect=Write/i.test(t.url || ''));
+  if (writing) { await chrome.tabs.update(writing.id, { active: true }); return writing.id; }
+  if (tabs.length) { await chrome.tabs.update(tabs[0].id, { active: true, url: NAVER_WRITE_URL }); return tabs[0].id; }
+  const t = await chrome.tabs.create({ url: NAVER_WRITE_URL, active: true });
+  return t.id;
+}
+
+// 여러 프레임이 응답하므로 전체 프레임에 보내고 에디터를 가진 프레임의 응답만 쓴다.
+function sendToNaver(tabId, msg) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, msg, (res) => {
+      if (chrome.runtime.lastError) return resolve({ ok: false, error: chrome.runtime.lastError.message });
+      resolve(res || { ok: false, error: '응답 없음' });
+    });
+  });
+}
+
+// ─── 채우기 ───
+async function fillNaver() {
+  if (!blogPicked) return;
+  const btn = $('#blogFill');
+  btn.disabled = true;
+  blogStatus('채우는 중…');
+  try {
+    const tabId = await ensureNaverTab();
+    // 에디터가 뜰 때까지 기다린다 (네이버 글쓰기는 로딩이 느리다)
+    let ready = false;
+    for (let i = 0; i < 20; i++) {
+      const p = await sendToNaver(tabId, { type: 'NAVER_PING' });
+      if (p.ok && p.hasEditor) { ready = true; break; }
+      await new Promise(r => setTimeout(r, 700));
+    }
+    if (!ready) throw new Error('네이버 에디터를 못 찾았습니다. 글쓰기 화면이 완전히 열린 뒤 다시 눌러주세요');
+
+    const keep = $('#blogKeepFormat').checked;
+    const p = blogPicked.parsed;
+    const res = await sendToNaver(tabId, {
+      type: 'NAVER_FILL',
+      title: blogPicked.title,
+      bodyText: p.text,
+      bodyHtml: keep ? p.html : null,
+    });
+
+    for (const r of (res.results || [])) {
+      blogLog(r.ok ? `${r.label} 채움 (${r.how})` : `${r.label} 실패 — ${r.reason}`, r.ok ? 'info' : 'warn');
+    }
+
+    if (res.needCdp) {
+      blogLog('합성 입력이 막혔습니다. CDP 신뢰 입력으로 재시도합니다 (노란 디버깅 배너가 뜹니다)', 'warn');
+      for (const area of res.cdpPending || []) {
+        await sendToNaver(tabId, { type: 'NAVER_FOCUS', area, replace: area === '제목' });
+        const text = area === '제목' ? blogPicked.title : p.text;
+        const c = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
+        blogLog(c?.ok ? `${area} CDP 입력 완료` : `${area} CDP 입력 실패 — ${c?.error || '알 수 없음'}`, c?.ok ? 'info' : 'error');
+      }
+    }
+
+    const st = await sendToNaver(tabId, { type: 'NAVER_STATUS' });
+    if (st.ok) blogLog(`현재 에디터: 제목 ${st.titleChars}자 / 본문 ${st.bodyChars}자`);
+
+    if (st.ok && st.bodyChars > 100) {
+      blogStatus('채웠습니다. 사진 넣고 검토한 뒤 직접 발행하세요', 'ok');
+      await navigator.clipboard.writeText(p.tagLine).catch(() => {});
+      blogLog('해시태그를 클립보드에 넣어뒀습니다 — 본문 맨 아래에 붙여넣으세요');
+    } else {
+      blogStatus('본문이 안 들어갔습니다. 진단을 눌러 구조를 뽑아주세요', 'error');
+    }
+  } catch (e) {
+    blogLog(e.message, 'error');
+    blogStatus(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ─── 이미지 내려받기 (임시 CDN 이 죽기 전에 확보) ───
+async function saveBlogImages() {
+  if (!blogPicked) return;
+  const imgs = blogPicked.parsed.images;
+  if (!imgs.length) { blogLog('내려받을 이미지가 없습니다', 'warn'); return; }
+  let ok = 0, dead = 0;
+  for (let i = 0; i < imgs.length; i++) {
+    const url = imgs[i].src;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) { dead++; blogLog(`이미지 ${i + 1} 죽은 링크 (${r.status}) — ${url.slice(0, 60)}`, 'error'); continue; }
+      const blob = await r.blob();
+      const ext = (blob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      const name = `naver/${blogPicked.id}_${i + 1}.${ext}`;
+      const dataUrl = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(blob);
+      });
+      await chrome.downloads.download({ url: dataUrl, filename: name, saveAs: false });
+      ok++;
+    } catch (e) {
+      dead++;
+      blogLog(`이미지 ${i + 1} 실패 — ${e.message}`, 'error');
+    }
+  }
+  blogLog(`이미지 ${ok}장 내려받음${dead ? `, ${dead}장 실패` : ''} (다운로드 폴더 naver/)`);
+  if (dead) blogLog('임시 CDN 링크가 만료된 것입니다. 초안을 오래 두면 이렇게 됩니다.', 'warn');
+}
+
+// ─── 진단 ───
+async function diagnoseNaver() {
+  try {
+    const tabId = await ensureNaverTab();
+    const r = await sendToNaver(tabId, { type: 'NAVER_DIAGNOSE' });
+    if (!r.ok) { blogLog('진단 실패 — ' + (r.error || '에디터 없음'), 'error'); return; }
+    console.log('[MangoAuto] 네이버 에디터 진단', r.info);
+    blogLog(`진단: contenteditable ${r.info.editableCount}개, 제목 ${r.info.titleFound ? 'O' : 'X'}, 본문 ${r.info.bodyFound ? 'O' : 'X'}, file input ${r.info.fileInputs.length}개`);
+    await navigator.clipboard.writeText(JSON.stringify(r.info, null, 2)).catch(() => {});
+    blogLog('상세 구조를 클립보드에 복사했습니다 (콘솔에도 출력)');
+  } catch (e) {
+    blogLog(e.message, 'error');
+  }
+}
+
+function bindBlogEvents() {
+  $('#blogRefresh')?.addEventListener('click', loadBlogDrafts);
+  $$('.btab').forEach(t => t.addEventListener('click', () => {
+    $$('.btab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    blogScope = t.dataset.scope;
+    loadBlogDrafts();
+  }));
+  $('#blogClear')?.addEventListener('click', () => {
+    blogPicked = null;
+    $('#blogDetail').style.display = 'none';
+    blogStatus('');
+    renderBlogList();
+  });
+  $('#blogOpenWrite')?.addEventListener('click', async () => {
+    await ensureNaverTab();
+    blogLog('네이버 글쓰기를 열었습니다. 화면이 다 뜨면 채우기를 누르세요');
+  });
+  $('#blogFill')?.addEventListener('click', fillNaver);
+  $('#blogCopyBody')?.addEventListener('click', async () => {
+    if (!blogPicked) return;
+    await navigator.clipboard.writeText(blogPicked.parsed.text);
+    blogLog('본문을 클립보드에 복사했습니다 (에디터에서 Ctrl+V)');
+  });
+  $('#blogCopyTags')?.addEventListener('click', async () => {
+    if (!blogPicked) return;
+    await navigator.clipboard.writeText(blogPicked.parsed.tagLine);
+    blogLog('해시태그를 복사했습니다');
+  });
+  $('#blogSaveImages')?.addEventListener('click', saveBlogImages);
+  $('#blogDiagnose')?.addEventListener('click', diagnoseNaver);
+}
+
+document.addEventListener('DOMContentLoaded', bindBlogEvents);

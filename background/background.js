@@ -401,6 +401,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function handleMessage(msg, sender) {
   switch (msg.type) {
+    // ── 네이버 에디터 CDP 신뢰 입력 ──
+    // 합성 paste / execCommand 가 둘 다 막힐 때만 쓴다. 포커스는 content script 가
+    // 미리 잡아두므로 focused element 로 그대로 들어간다.
+    // Input.insertText 는 사람이 IME 로 확정 입력한 것과 같은 경로다.
+    case 'NAVER_CDP_TEXT':
+      try {
+        if (!msg.tabId) return { ok: false, error: 'tabId 없음' };
+        await ensureDebuggerAttached(msg.tabId);
+        const target = { tabId: msg.tabId };
+        // 한 번에 다 넣으면 에디터가 렌더를 못 따라오는 경우가 있어 줄 단위로 넣고
+        // 줄바꿈은 신뢰 Enter 로 만든다 (insertText 는 개행을 문단으로 안 바꾼다).
+        const lines = String(msg.text || '').split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i]) {
+            await chrome.debugger.sendCommand(target, 'Input.insertText', { text: lines[i] });
+            await _delay(_rand(12, 30));
+          }
+          if (i < lines.length - 1) {
+            await trustedEnterKey(msg.tabId);
+            await _delay(_rand(20, 45));
+          }
+        }
+        broadcastLog(`[네이버] CDP 입력 완료 (${lines.length}줄)`, 'info');
+        return { ok: true, lines: lines.length };
+      } catch (e) {
+        const m = String(e && e.message || e);
+        broadcastLog(`[네이버] CDP 입력 실패: ${m}`, 'error');
+        return { ok: false, error: m };
+      }
+
     // ── MangoHub API Proxy ──
     case 'API_CHECK_AUTH':
       return { loggedIn: await MangoHubAPI.checkAuth() };

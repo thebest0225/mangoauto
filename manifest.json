@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "1.7.40",
-  "description": "Automate image/video generation on Grok and Flow with MangoHub integration",
+  "version": "1.8.0",
+  "description": "Grok/Flow 영상 자동화 + 네이버 블로그 초안 채우기 (MangoHub 연동)",
   "permissions": [
     "cookies",
     "downloads",
@@ -24,7 +24,12 @@
     "https://*.googleapis.com/*",
     "https://*.googleusercontent.com/*",
     "https://*.mangois.love/*",
-    "https://api.kie.ai/*"
+    "https://api.kie.ai/*",
+    "https://blog.naver.com/*",
+    "https://*.naver.com/*",
+    "https://*.aiquickdraw.com/*",
+    "https://oguonline.com/*",
+    "https://*.oguonline.com/*"
   ],
   "background": {
     "service_worker": "background/background.js"
@@ -67,6 +72,15 @@
       ],
       "js": ["lib/utils.js", "content/shared-dom.js", "content/flow.js"],
       "run_at": "document_idle"
+    },
+    {
+      "//": "네이버 글쓰기. SmartEditor 는 #mainFrame iframe 안에서 돌기 때문에 all_frames 필수.",
+      "matches": [
+        "https://blog.naver.com/*"
+      ],
+      "js": ["content/naver.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [

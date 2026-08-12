@@ -1019,3 +1019,87 @@ button.badge.badge-on { cursor: default; }
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ═══════ 블로그 탭 ═══════ */
+/* #blogPanel 로 스코프를 묶어 다른 패널 스타일과 충돌하지 않게 한다. */
+
+#blogPanel .section { margin-bottom: 14px; }
+#blogPanel .section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; gap: 8px;
+}
+#blogPanel .section-title { font-size: 12px; font-weight: 700; letter-spacing: -.2px; opacity: .85; }
+#blogPanel .section-actions { display: flex; align-items: center; gap: 6px; }
+
+#blogPanel .badge-muted {
+  font-size: 11px; padding: 2px 7px; border-radius: 999px;
+  background: rgba(255,255,255,.07); opacity: .7;
+}
+
+#blogPanel .btn-ghost {
+  background: transparent; border: 1px solid rgba(255,255,255,.14);
+  color: inherit; border-radius: 8px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px;
+  transition: all .18s cubic-bezier(.16,1,.3,1);
+}
+#blogPanel .btn-ghost:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.28); }
+#blogPanel .btn-ghost:active { transform: scale(.97); }
+#blogPanel .btn-xs { font-size: 11px; padding: 4px 9px; min-height: 26px; }
+#blogPanel .btn-xs svg { width: 13px; height: 13px; }
+
+#blogPanel .btn-secondary {
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
+  color: inherit; border-radius: 10px; cursor: pointer; font-size: 12.5px;
+  padding: 9px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  transition: all .18s cubic-bezier(.16,1,.3,1);
+}
+#blogPanel .btn-secondary:hover { background: rgba(255,255,255,.14); }
+#blogPanel .btn-secondary:active { transform: scale(.98); }
+#blogPanel .btn-secondary svg, #blogPanel .btn-primary svg { width: 15px; height: 15px; }
+#blogPanel .btn-block { width: 100%; }
+#blogPanel .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+#blogPanel .blog-filter { margin-bottom: 8px; }
+
+#blogPanel .blog-list { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+#blogPanel .blog-empty { font-size: 11.5px; opacity: .55; padding: 14px 4px; text-align: center; line-height: 1.6; }
+#blogPanel .blog-empty.err { color: #ff8a8a; opacity: .9; }
+
+#blogPanel .blog-card {
+  width: 100%; text-align: left; cursor: pointer;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.09);
+  border-radius: 10px; padding: 9px 10px; color: inherit;
+  transition: all .18s cubic-bezier(.16,1,.3,1);
+}
+#blogPanel .blog-card:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.2); }
+#blogPanel .blog-card.picked { border-color: rgba(120,190,255,.55); background: rgba(120,190,255,.1); }
+#blogPanel .blog-card-title {
+  font-size: 12px; line-height: 1.45; font-weight: 600; word-break: keep-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+#blogPanel .blog-card-meta { display: flex; gap: 6px; align-items: center; margin-top: 5px; font-size: 10.5px; opacity: .6; }
+#blogPanel .blog-card-meta .tag { padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.1); }
+#blogPanel .blog-card-meta .tag-naver { background: rgba(60,200,110,.18); color: #7fe0a4; }
+
+#blogPanel .blog-picked {
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px; padding: 10px; margin-bottom: 9px;
+}
+#blogPanel .blog-picked-title { font-size: 12.5px; font-weight: 700; line-height: 1.5; word-break: keep-all; }
+#blogPanel .blog-picked-meta { font-size: 10.5px; opacity: .6; margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+#blogPanel .blog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
+#blogPanel .blog-sub-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
+
+#blogPanel .chk-row {
+  display: flex; align-items: flex-start; gap: 7px; font-size: 11px;
+  opacity: .72; line-height: 1.5; cursor: pointer; word-break: keep-all;
+}
+#blogPanel .chk-row input { margin-top: 1px; flex-shrink: 0; }
+
+#blogPanel .blog-status { font-size: 11.5px; margin-top: 9px; line-height: 1.55; word-break: keep-all; }
+#blogPanel .blog-status.st-ok { color: #7fe0a4; }
+#blogPanel .blog-status.st-error { color: #ff8a8a; }
+#blogPanel .blog-status.st-info { opacity: .7; }
+
+#blogPanel .log-sm { max-height: 130px; font-size: 10.5px; }
