@@ -2906,6 +2906,46 @@ async function markPublished() {
   }
 }
 
+// ─── 초안 삭제 ───
+// 마음에 안 드는 초안을 목록에서 치운다. 한 번 더 누르면 실제로 삭제한다
+// (되돌릴 수 없으니 실수로 한 번 누른 걸로는 안 지운다).
+let _delArmed = null;
+async function deleteBlogDraft() {
+  if (!blogPicked) return;
+  const btn = $('#blogDelete');
+  if (_delArmed !== blogPicked.id) {
+    _delArmed = blogPicked.id;
+    if (btn) btn.textContent = '정말 삭제?';
+    blogStatus('한 번 더 누르면 삭제됩니다 (되돌릴 수 없음)', 'error');
+    setTimeout(() => {
+      if (_delArmed === blogPicked?.id) { _delArmed = null; if (btn) btn.textContent = '삭제'; blogStatus(''); }
+    }, 5000);
+    return;
+  }
+  _delArmed = null;
+  if (btn) { btn.textContent = '삭제'; btn.disabled = true; }
+  const title = blogPicked.title;
+  try {
+    const r = await fetch(BLOGWRITE_BASE + '/api/work/delete', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: blogPicked.id }),
+    });
+    if (!r.ok) throw new Error(`서버 응답 ${r.status}`);
+    blogLog(`삭제했습니다 — ${title.slice(0, 34)}`);
+    blogStatus('삭제했습니다', 'ok');
+    blogPicked = null;
+    $('#blogDetail').style.display = 'none';
+    renderPhotoSlots([]);
+    await loadBlogDrafts();
+  } catch (e) {
+    blogLog('삭제 실패 — ' + e.message, 'error');
+    blogStatus('삭제 실패 — ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ─── 진단 ───
 // 프레임마다 구조를 뽑는다. 에디터가 바뀌어 셀렉터가 어긋날 때 이걸 보고 고친다.
 async function diagnoseNaver() {
@@ -3041,6 +3081,7 @@ function bindBlogEvents() {
   });
   $('#blogSaveImages')?.addEventListener('click', saveBlogImages);
   $('#blogMarkPublished')?.addEventListener('click', markPublished);
+  $('#blogDelete')?.addEventListener('click', deleteBlogDraft);
   $('#blogDiagnose')?.addEventListener('click', diagnoseNaver);
 }
 
