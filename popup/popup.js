@@ -2558,16 +2558,24 @@ async function insertTables(tabId, frameId, tables) {
       }
       // 표 행이 모자라 못 들어간 줄은 표 바로 아래에 글자로 남긴다. 자료를 잃지 않는다.
       if (cells.rows < rows) {
-        const left = t.rows.slice(cells.rows).map(r => r.join(' | ')).filter(Boolean);
+        // ⚠️ 전에는 마지막 셀을 클릭하고 Escape 로 표를 빠져나오려 했는데 안 나가서
+        //    남은 줄이 전부 그 셀 안에 쳐박혔다(화면으로 확인). 표 '다음 문단' 을 직접 찾아 쓴다.
+        const head = t.rows[0];
+        const left = t.rows.slice(cells.rows).filter(r => r.some(Boolean));
         if (left.length) {
-          blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래에 글자로 남깁니다`, 'warn');
-          const lastCell = cells.grid[cells.rows - 1][cells.cols - 1];
-          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: lastCell.x, y: lastCell.y });
-          await new Promise(x => setTimeout(x, 200));
-          // 표 밖으로 나와 아래 문단에 쓴다
-          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
-          await new Promise(x => setTimeout(x, 200));
-          await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: '\n' + left.join('\n') });
+          const after = await sendFrame(tabId, frameId, { type: 'NAVER_AFTER_TABLE' });
+          if (!after.ok) {
+            blogLog(`  표에 안 들어간 ${left.length}줄을 넣을 자리를 못 찾았습니다 — 직접 넣어주세요`, 'error');
+            console.log('[MangoAuto] 표에 못 넣은 줄', left);
+          } else {
+            blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래에 불릿으로 남깁니다`, 'warn');
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: after.x, y: after.y });
+            await new Promise(x => setTimeout(x, 250));
+            // 'a | b | c' 로 뭉치지 않고 '항목 — 값 / 값' 으로 읽히게 쓴다
+            const lines = left.map(r => '· ' + r[0] + ' — ' + r.slice(1)
+              .map((v, i) => (head[i + 1] ? head[i + 1] + ': ' : '') + v).filter(Boolean).join(' / '));
+            await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: lines.join('\n') });
+          }
         }
       }
     } catch (e) {
@@ -2969,6 +2977,20 @@ async function diagnoseNaver() {
     if (bodyPick) {
       const fi = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_FILE_INPUT' });
       blogLog(`file input ${fi.inputs?.length ?? 0}개 · 사진버튼 ${fi.button ? fi.button.hint + ` @(${fi.button.x},${fi.button.y})` : '못 찾음'}`);
+      // 표 크기 피커 구조 — 5×3 을 요청했는데 3×3 이 만들어지는 원인을 찾는다
+      const tbtn = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'table' });
+      if (tbtn.ok) {
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: tbtn.x, y: tbtn.y });
+        await new Promise(r => setTimeout(r, 700));
+        const pd = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_PICKER_DUMP' });
+        console.log('[MangoAuto] 표 크기 피커 구조', pd);
+        for (const p of (pd.pools || [])) blogLog(`표피커: ${p.sel} → ${p.n}개, ${p.grid}`);
+        if (!pd.pools?.length) blogLog('표 크기 피커를 못 찾았습니다 (콘솔의 layers 확인)', 'warn');
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+        await new Promise(r => setTimeout(r, 300));
+      } else {
+        blogLog('표 버튼을 못 찾음', 'warn');
+      }
       const sb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_STYLE_BTN' });
       if (sb.ok) {
         blogLog(`문단 스타일 버튼 발견 — ${sb.hint} "${sb.txt}" @(${sb.x},${sb.y})`);

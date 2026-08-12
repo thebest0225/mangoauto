@@ -758,6 +758,66 @@
             return;
           }
 
+          case 'NAVER_TABLE_PICKER_DUMP': {
+            // 표 버튼을 누른 뒤 열린 크기 피커의 실제 구조를 뽑는다.
+            // 세 번 추측해서 세 번 틀렸다(5×3 요청 → 3×3 생성). 이제 눈으로 본다.
+            const vis = (el) => el.getClientRects().length > 0;
+            const cand = [
+              '[class*="table"] [class*="cell"]', '[class*="table"] td', '[class*="grid"] [class*="cell"]',
+              '[class*="table-select"] *', '[class*="table"] li', '[class*="table"] div',
+              '[class*="layer"] [class*="cell"]', '[class*="popup"] td',
+            ];
+            const report = [];
+            for (const sel of cand) {
+              const got = Array.from(document.querySelectorAll(sel)).filter(vis);
+              if (!got.length) continue;
+              const rects = got.map((e) => e.getBoundingClientRect());
+              const lefts = [...new Set(rects.map((b) => Math.round(b.left / 4) * 4))].length;
+              const tops  = [...new Set(rects.map((b) => Math.round(b.top / 4) * 4))].length;
+              report.push({
+                sel, n: got.length, grid: `${tops}행 × ${lefts}열`,
+                sample: got.slice(0, 4).map((e) => ({
+                  tag: e.tagName, cls: String(e.className || '').slice(0, 50),
+                  row: e.getAttribute('data-row') || e.dataset?.row || '',
+                  col: e.getAttribute('data-col') || e.dataset?.col || '',
+                  w: Math.round(e.getBoundingClientRect().width),
+                  h: Math.round(e.getBoundingClientRect().height),
+                  txt: (e.textContent || '').trim().slice(0, 10),
+                })),
+              });
+            }
+            // 피커 컨테이너 자체도
+            const layers = Array.from(document.querySelectorAll('[class*="table"]')).filter(vis)
+              .slice(0, 6).map((e) => ({ tag: e.tagName, cls: String(e.className || '').slice(0, 60),
+                w: Math.round(e.getBoundingClientRect().width), h: Math.round(e.getBoundingClientRect().height) }));
+            sendResponse({ ok: true, pools: report, layers });
+            return;
+          }
+
+          case 'NAVER_AFTER_TABLE': {
+            // 표 '바로 다음' 문단 좌표. 폴백 글자가 셀 안으로 들어가는 걸 막는다.
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '표 없음' }); return; }
+            // 표를 담은 컴포넌트의 다음 형제에서 문단을 찾는다
+            let node = t.closest('[class*="se-component"]') || t;
+            let para = null, guard = 0;
+            while (node && guard++ < 6) {
+              node = node.nextElementSibling;
+              if (!node) break;
+              para = node.querySelector('.se-text-paragraph, [class*="paragraph"]')
+                  || (node.matches('.se-text-paragraph, [class*="paragraph"]') ? node : null);
+              if (para && para.getClientRects().length) break;
+              para = null;
+            }
+            if (!para) { sendResponse({ ok: false, error: '표 다음 문단 없음' }); return; }
+            para.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(180);
+            const v = viewportRect(para);
+            sendResponse({ ok: true, x: Math.round(v.x + 12), y: Math.round(v.y + v.h / 2) });
+            return;
+          }
+
           case 'NAVER_TABLE_COUNT': {
             sendResponse({ ok: true, count: document.querySelectorAll('[class*="se-table"], table').length });
             return;
