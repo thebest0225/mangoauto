@@ -595,6 +595,57 @@
             return;
           }
 
+          case 'NAVER_TOOLBAR_BTN': {
+            // 툴바 버튼을 aria-label 또는 클래스 조각으로 찾아 좌표를 준다.
+            // 진단으로 확인된 이름 — image / horizontal-line / quotation / table,
+            // 폰트 크기는 클래스에 'font-size' 가 들어간다(aria 는 title-font-size 처럼 문맥에 따라 바뀐다).
+            const name = String(msg.name || '');
+            const vis = (el) => el.getClientRects().length > 0;
+            const pool = Array.from(document.querySelectorAll('[class*="toolbar"] button')).filter(vis);
+            const hit = pool.find((el) => (el.getAttribute('aria-label') || '') === name)
+                     || pool.find((el) => String(el.className).includes(name))
+                     || pool.find((el) => (el.getAttribute('aria-label') || '').includes(name));
+            if (!hit) { sendResponse({ ok: false, error: `툴바 버튼 '${name}' 없음` }); return; }
+            const v = viewportRect(hit);
+            sendResponse({
+              ok: true,
+              x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+              hint: describe(hit), label: (hit.getAttribute('aria-label') || ''),
+              txt: (hit.textContent || '').trim().slice(0, 20),
+            });
+            return;
+          }
+
+          case 'NAVER_MENU_OPTIONS': {
+            // 방금 열린 드롭다운의 항목들. 폰트 크기 목록을 읽어 원하는 값의 좌표를 찾는다.
+            const vis = (el) => el.getClientRects().length > 0 && el.offsetWidth > 0;
+            const items = Array.from(document.querySelectorAll(
+              '[class*="font-size"] li, [class*="font-size"] button, [class*="option-list"] li, ' +
+              '[class*="toolbar"] [role="option"], [class*="select-list"] li, [class*="dropdown"] li'
+            )).filter(vis);
+            sendResponse({
+              ok: true,
+              items: items.slice(0, 30).map((el) => {
+                const v = viewportRect(el);
+                return {
+                  txt: (el.textContent || '').trim().slice(0, 14),
+                  cls: String(el.className || '').slice(0, 50),
+                  x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+                };
+              }),
+            });
+            return;
+          }
+
+          case 'NAVER_DIVIDERS': {
+            // 진짜 구분선 컴포넌트 개수 (삽입 성공 검증용)
+            sendResponse({
+              ok: true,
+              count: document.querySelectorAll('[class*="horizontalLine"], .se-component[class*="horizontal"]').length,
+            });
+            return;
+          }
+
           case 'NAVER_STATUS':
             sendResponse({
               ok: true,

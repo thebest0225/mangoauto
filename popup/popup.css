@@ -1120,3 +1120,10 @@ button.badge.badge-on { cursor: default; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 #blogPanel .blog-slot-copy { flex-shrink: 0; }
+
+#blogPanel .mini-select {
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.16);
+  color: inherit; border-radius: 7px; font-size: 11px; padding: 3px 6px;
+  font-variant-numeric: tabular-nums; cursor: pointer;
+}
+#blogPanel .mini-select:focus-visible { outline: 2px solid rgba(120,190,255,.55); outline-offset: 1px; }

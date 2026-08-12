@@ -2141,6 +2141,33 @@ async function typeIntoArea(tabId, area, text) {
   return { ok: true, frameId, chars: got };
 }
 
+// ─── 선택된 글자의 폰트 크기 바꾸기 ───
+//
+// 진단으로 확인한 구조: 툴바에 se-font-size-code-toolbar-button 이 있고,
+// 텍스트가 "32글자 크기 변경" 처럼 현재 크기를 담고 있다. 누르면 크기 목록이 열린다.
+// 그래서 ① 버튼 좌표를 받아 클릭 → ② 열린 목록에서 원하는 숫자를 찾아 클릭 한다.
+// (목록 항목은 열기 전에는 화면에 없어서 진단에서 options 가 비어 있었다)
+async function setFontSize(tabId, frameId, size) {
+  const btn = await sendFrame(tabId, frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'font-size' });
+  if (!btn.ok) return { ok: false, error: btn.error };
+
+  await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
+  await new Promise(r => setTimeout(r, 450));
+
+  const menu = await sendFrame(tabId, frameId, { type: 'NAVER_MENU_OPTIONS' });
+  const nums = (menu.items || []).filter(i => /^\d{1,2}$/.test(i.txt.replace(/[^\d]/g, '').slice(0, 2)) || /^\d{1,2}/.test(i.txt));
+  const want = String(size);
+  const hit = nums.find(i => i.txt.replace(/[^\d]/g, '') === want);
+  if (!hit) {
+    // 목록을 못 읽었으면 다시 눌러 닫는다 (열린 채로 두면 다음 클릭이 엉킨다)
+    await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: btn.x, y: btn.y });
+    return { ok: false, error: `크기 ${size} 항목을 못 찾음 (읽은 항목: ${nums.map(n => n.txt).join(',') || '없음'})` };
+  }
+  await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: hit.x, y: hit.y });
+  await new Promise(r => setTimeout(r, 350));
+  return { ok: true, picked: hit.txt };
+}
+
 // ─── 망고 사진함에서 슬롯 태그에 맞는 사진 고르기 ───
 //
 // 초안이 '[사진1 · walk+summer]' 로 태그를 지정해뒀다. walk 는 주제 태그, summer 는 계절이다.
@@ -2267,21 +2294,34 @@ async function fillNaver() {
       if (remain.length) {
         blogLog(`남은 소제목 ${remain.length}개 — 드래그 선택 후 Ctrl+B 로 재시도`);
         let done = 0;
+        const wantSize = $('#blogHeadSize')?.value || '';
+        let sized = 0;
         for (const line of remain) {
           const sel = await sendFrame(tabId, body.frameId, { type: 'NAVER_SELECT_LINE', text: line });
           if (!sel.ok) { blogLog(`  건너뜀 (${line.slice(0, 20)}) — ${sel.error}`, 'warn'); continue; }
-          if (sel.alreadyBold) { done++; continue; }
           if (!sel.drag) { blogLog(`  좌표 없음 (${line.slice(0, 20)})`, 'warn'); continue; }
+
           // ⚠️ Range 로 만든 선택은 에디터가 무시한다. 진짜 마우스로 그어야 한다.
           await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
           await new Promise(r => setTimeout(r, 120));
-          await sendBg({ type: 'NAVER_CDP_BOLD', tabId });
-          await new Promise(r => setTimeout(r, 200));
+
+          if (!sel.alreadyBold) {
+            await sendBg({ type: 'NAVER_CDP_BOLD', tabId });
+            await new Promise(r => setTimeout(r, 200));
+          }
           const chk = await sendFrame(tabId, body.frameId, { type: 'NAVER_BOLD_CHECK', text: line });
           if (chk.bold) done++;
-          else blogLog(`  안 먹음 (${line.slice(0, 20)})`, 'warn');
+          else blogLog(`  굵게 안 먹음 (${line.slice(0, 20)})`, 'warn');
+
+          // 폰트 크기 — 선택이 살아 있는 동안 툴바 드롭다운으로 바꾼다
+          if (wantSize) {
+            const fs = await setFontSize(tabId, body.frameId, wantSize);
+            if (fs.ok) sized++;
+            else if (sized === 0) blogLog(`  크기 실패 — ${fs.error}`, 'warn');
+          }
         }
         blogLog(`드래그+Ctrl+B 굵게 ${done}/${remain.length}개 성공`, done ? 'info' : 'warn');
+        if (wantSize) blogLog(`소제목 크기 ${wantSize} 적용 ${sized}/${remain.length}개`, sized ? 'info' : 'warn');
       }
     }
 
