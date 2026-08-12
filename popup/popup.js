@@ -2361,7 +2361,16 @@ async function attachSlotPhotos(tabId, frameId, photos) {
         fetch(`${MANGOHUB_BASE}/api/mango-photos/${pick.photo.id}/used`, { method: 'POST', credentials: 'include' }).catch(() => {});
 
         // ④ 캡션 — 이미지를 클릭해 선택하면 '사진 설명을 입력하세요' 칸이 나타난다
-        if (wantCaption && slot.caption) {
+        //
+        // ★캡션 출처: 기본은 '사진함 캡션' 이다.
+        //   초안은 어떤 사진이 뽑힐지 모르고 캡션을 쓰므로 사진과 안 맞는 일이 생긴다.
+        //   사진함 캡션은 그 사진을 보고 붙인 것이고, 상황을 안 가리는 아이캐치형이라
+        //   ('출발해 김기사~', '이 얼굴 보고 거절할 수 있나') 어느 글에 넣어도 어울린다.
+        const capSrc = $('#blogCapSource')?.value || 'photo';
+        const caption = capSrc === 'draft'
+          ? (slot.caption || pick.photo.caption || '')
+          : (pick.photo.caption || slot.caption || '');
+        if (wantCaption && caption) {
           const ir = await sendFrame(tabId, frameId, { type: 'NAVER_IMAGE_RECT' });
           if (ir.ok) {
             await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: ir.x, y: ir.y });
@@ -2373,8 +2382,9 @@ async function attachSlotPhotos(tabId, frameId, photos) {
           } else {
             await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: cr.x, y: cr.y });
             await new Promise(r => setTimeout(r, 350));
-            const ins = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: slot.caption });
-            blogLog(ins?.ok ? `  사진${slot.n} 캡션 입력: ${slot.caption}` : `  사진${slot.n} 캡션 실패 — ${ins?.error || ''}`,
+            const ins = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: caption });
+            blogLog(ins?.ok ? `  사진${slot.n} 캡션(${capSrc === 'draft' ? '초안' : '사진함'}): ${caption}`
+                            : `  사진${slot.n} 캡션 실패 — ${ins?.error || ''}`,
                     ins?.ok ? 'info' : 'warn');
             // 캡션 편집에서 빠져나온다 (다음 작업이 캡션 안으로 들어가지 않게)
             await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
