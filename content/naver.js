@@ -117,6 +117,41 @@
     return { x, y, w: r.width, h: r.height };
   }
 
+  // ─── 편집 문서 전체 컨테이너 ───
+  // ⚠️ 굵게가 0개였던 이유. findBody() 는 '첫 문단' 하나를 가리키는데(입력 후 15자),
+  //    타이핑한 189줄은 그 문단의 형제로 쌓인다. 첫 문단 안에서만 소제목을 찾으니
+  //    당연히 하나도 못 찾았다. → 모든 .se-text-paragraph 를 담는 공통 조상을 쓴다.
+  function editorRoot() {
+    const ps = document.querySelectorAll('.se-text-paragraph');
+    if (ps.length > 1) {
+      let root = ps[0].parentElement;
+      let guard = 0;
+      while (root && guard++ < 12 && root.querySelectorAll('.se-text-paragraph').length < ps.length) {
+        root = root.parentElement;
+      }
+      if (root) return root;
+    }
+    const b = findBody();
+    return (b && b.closest('[contenteditable="true"]')) || document.body;
+  }
+
+  // 제목 문단을 제외한 본문 문단들
+  function bodyParagraphs() {
+    return Array.from(document.querySelectorAll('.se-text-paragraph')).filter((p) => !p.closest(TITLE_HINT));
+  }
+
+  // 문단 전체에서 그 한 줄에 해당하는 텍스트 노드를 찾는다
+  function findLineNode(text) {
+    const target = String(text || '').trim();
+    if (!target) return null;
+    const walker = document.createTreeWalker(editorRoot(), NodeFilter.SHOW_TEXT, null);
+    let n;
+    while ((n = walker.nextNode())) {
+      if ((n.nodeValue || '').trim() === target) return n;
+    }
+    return null;
+  }
+
   const describe = (el) => !el ? '' :
     (el.tagName.toLowerCase() + (el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : '')).slice(0, 60);
 
@@ -354,7 +389,44 @@
               const bin = Uint8Array.from(atob(im.b64), (c) => c.charCodeAt(0));
               files.push(new File([bin], im.name, { type: im.mime || 'image/jpeg' }));
             }
-            sendResponse(await attachImages(files));
+            const before = document.querySelectorAll('.se-component.se-image, .se-image img').length;
+            const r = await attachImages(files);
+            await sleep(2500);   // 업로드·삽입까지 시간이 걸린다
+            const after = document.querySelectorAll('.se-component.se-image, .se-image img').length;
+            sendResponse({ ...r, before, after, inserted: after - before });
+            return;
+          }
+
+          case 'NAVER_FILE_INPUT': {
+            // 사진 업로더의 숨은 file input 이 있는지, 사진 버튼 좌표는 어디인지.
+            const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+            const btn = document.querySelector(
+              '.se-toolbar button[class*="image"], .se-image-toolbar-button, ' +
+              'button[data-name="image"], button[title*="사진"], [class*="toolbar"] [class*="image"]'
+            );
+            const v = btn ? viewportRect(btn) : null;
+            sendResponse({
+              ok: true,
+              inputs: inputs.map((i) => ({ accept: i.accept || '', id: i.id || '', cls: String(i.className || '').slice(0, 60) })),
+              button: v ? { x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2), hint: describe(btn) } : null,
+            });
+            return;
+          }
+
+          case 'NAVER_DELETE_LINE': {
+            // 사진을 넣은 뒤 자리표시 줄을 지운다. 선택해두고 CDP Delete 를 쏘는 방식이라
+            // 여기서는 선택만 하고 좌표를 돌려준다.
+            const hit = findLineNode(msg.text);
+            if (!hit) { sendResponse({ ok: false, error: '그 줄 없음' }); return; }
+            try {
+              const para = hit.parentElement && hit.parentElement.closest('.se-text-paragraph');
+              const r = document.createRange();
+              r.selectNodeContents(para || hit);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(r);
+              sendResponse({ ok: true });
+            } catch (e) { sendResponse({ ok: false, error: String(e.message || e) }); }
             return;
           }
 
@@ -388,9 +460,8 @@
             const want = new Set((msg.bolds || []).map((s) => s.trim()).filter(Boolean));
             if (!want.size) { sendResponse({ ok: true, applied: 0, missed: [] }); return; }
 
-            const root = (findBody() && findBody().closest('[contenteditable="true"]')) || document.body;
             const hits = [];
-            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            const walker = document.createTreeWalker(editorRoot(), NodeFilter.SHOW_TEXT, null);
             let n;
             while ((n = walker.nextNode())) {
               const t = (n.nodeValue || '').trim();
@@ -432,12 +503,7 @@
             // 여기서 그 줄을 '선택' 만 해두면 CDP 가 진짜 Ctrl+B 를 쏜다.
             const target = String(msg.text || '').trim();
             if (!target) { sendResponse({ ok: false, error: '빈 문자열' }); return; }
-            const root = (findBody() && findBody().closest('[contenteditable="true"]')) || document.body;
-            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-            let n, hit = null;
-            while ((n = walker.nextNode())) {
-              if ((n.nodeValue || '').trim() === target) { hit = n; break; }
-            }
+            const hit = findLineNode(target);
             if (!hit) { sendResponse({ ok: false, error: '그 줄을 못 찾음' }); return; }
             try {
               const r = document.createRange();
@@ -458,18 +524,35 @@
 
           case 'NAVER_BOLD_CHECK': {
             // CDP Ctrl+B 후 실제로 굵어졌는지 확인
-            const target = String(msg.text || '').trim();
-            const root = (findBody() && findBody().closest('[contenteditable="true"]')) || document.body;
-            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-            let n, bold = false;
-            while ((n = walker.nextNode())) {
-              if ((n.nodeValue || '').trim() === target) {
-                const p = n.parentElement;
-                bold = !!(p && (p.closest('b,strong') || /^(bold|[6-9]00)$/i.test(getComputedStyle(p).fontWeight)));
-                break;
-              }
-            }
-            sendResponse({ ok: true, bold });
+            const hit = findLineNode(msg.text);
+            const pe = hit && hit.parentElement;
+            const bold = !!(pe && (pe.closest('b,strong') || /^(bold|[6-9]00)$/i.test(getComputedStyle(pe).fontWeight)));
+            sendResponse({ ok: true, bold, found: !!hit });
+            return;
+          }
+
+          case 'NAVER_TOOLBAR': {
+            // 툴바 컨트롤 구조를 뽑는다. 폰트 크기·구분선은 툴바를 눌러야 하는데
+            // 구조를 모르면 좌표를 찍을 수 없다. 이 출력을 보고 구현한다.
+            const grab = (sel) => Array.from(document.querySelectorAll(sel)).slice(0, 14).map((el) => {
+              const v = viewportRect(el);
+              return {
+                tag: el.tagName.toLowerCase(),
+                cls: String(el.className || '').slice(0, 70),
+                txt: (el.textContent || '').trim().slice(0, 18),
+                aria: el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-name') || '',
+                x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+                w: Math.round(v.w), h: Math.round(v.h),
+              };
+            });
+            sendResponse({
+              ok: true,
+              toolbars: grab('[class*="toolbar"]').slice(0, 4),
+              buttons: grab('[class*="toolbar"] button'),
+              // 폰트 크기 후보 — select / 드롭다운 버튼 / 목록
+              fontSize: grab('[class*="font-size"], [class*="fontSize"], select[class*="size"]'),
+              options: grab('[class*="font-size"] li, [class*="fontSize"] li, [class*="size"] [role="option"]'),
+            });
             return;
           }
 
@@ -477,7 +560,11 @@
             sendResponse({
               ok: true,
               titleChars: textLen(findTitle()),
-              bodyChars: textLen(findBody()),
+              // findBody() 는 첫 문단만 가리킨다(입력 후 15자로 나왔던 이유).
+              // 제목 문단을 뺀 모든 문단을 합쳐서 잰다.
+              bodyChars: bodyParagraphs().reduce((n, p) => n + textLen(p), 0),
+              paragraphs: bodyParagraphs().length,
+              images: document.querySelectorAll('.se-component.se-image, .se-image img').length,
             });
             return;
 

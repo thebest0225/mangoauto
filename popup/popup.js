@@ -2135,6 +2135,101 @@ async function typeIntoArea(tabId, area, text) {
   return { ok: true, frameId, chars: got };
 }
 
+// ─── 망고 사진함에서 슬롯 태그에 맞는 사진 고르기 ───
+//
+// 초안이 '[사진1 · walk+summer]' 로 태그를 지정해뒀다. walk 는 주제 태그, summer 는 계절이다.
+// 덜 쓴 사진부터 고른다 — 같은 사진이 여러 글에 반복되면 티가 난다.
+const PHOTO_TAGS = ['walk','water','travel','treat','home','health','gear','face','sleep','car','cafe','friend'];
+const SEASONS = ['spring','summer','fall','winter'];
+
+async function pickMangoPhoto(slotTags, usedIds) {
+  const parts = String(slotTags || '').split(/[+,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+  const tags = parts.filter(t => PHOTO_TAGS.includes(t));
+  const season = parts.find(t => SEASONS.includes(t)) || '';
+
+  // 태그+계절 → 태그만 → 아무거나. 조건을 풀어가며 찾는다.
+  const tries = [
+    { tag: tags.join(','), season },
+    { tag: tags.join(','), season: '' },
+    { tag: '', season: '' },
+  ];
+  for (const t of tries) {
+    const qs = new URLSearchParams({ order: 'least_used', limit: '40' });
+    if (t.tag) qs.set('tag', t.tag);
+    if (t.season) qs.set('season', t.season);
+    const r = await fetch(`${MANGOHUB_BASE}/api/mango-photos?${qs}`, { credentials: 'include' });
+    if (r.status === 401) throw new Error('망고허브 로그인이 필요합니다');
+    if (!r.ok) continue;
+    const j = await r.json();
+    const fresh = (j.photos || []).filter(p => !usedIds.has(p.id));
+    if (fresh.length) {
+      return { photo: fresh[0], matched: t.tag ? (t.season ? '태그+계절' : '태그') : '조건없음' };
+    }
+  }
+  return null;
+}
+
+async function photoToBase64(url) {
+  const r = await fetch(url.startsWith('http') ? url : MANGOHUB_BASE + url, { credentials: 'include' });
+  if (!r.ok) throw new Error(`사진 내려받기 실패 ${r.status}`);
+  const blob = await r.blob();
+  const dataUrl = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(blob);
+  });
+  return { b64: String(dataUrl).split(',')[1], mime: blob.type || 'image/jpeg', size: blob.size };
+}
+
+// 슬롯 자리에 커서를 놓고 사진을 넣는다.
+async function attachSlotPhotos(tabId, frameId, photos) {
+  const probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
+  if (probe.ok && !probe.inputs?.length) {
+    blogLog(`사진 업로더(file input)가 아직 없습니다${probe.button ? ' — 사진 버튼을 먼저 눌러 띄웁니다' : ''}`, 'warn');
+    if (probe.button) {
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: probe.button.x, y: probe.button.y });
+      await new Promise(r => setTimeout(r, 1200));
+    }
+  }
+
+  const usedIds = new Set();
+  let ok = 0;
+  for (const slot of photos) {
+    const marker = `[사진${slot.n} · ${slot.tags}] 캡션: ${slot.caption}`;
+    try {
+      const pick = await pickMangoPhoto(slot.tags, usedIds);
+      if (!pick) { blogLog(`사진${slot.n}: 사진함에서 맞는 사진을 못 찾음`, 'warn'); continue; }
+      usedIds.add(pick.photo.id);
+
+      // 자리표시 줄에 커서를 놓는다 (그 위치에 사진이 들어간다)
+      const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: marker });
+      if (!sel.ok) { blogLog(`사진${slot.n}: 자리표시 줄을 못 찾음 — ${sel.error}`, 'warn'); continue; }
+      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: sel.x, y: sel.y });
+      await new Promise(r => setTimeout(r, 350));
+
+      const img = await photoToBase64(pick.photo.url);
+      blogLog(`사진${slot.n}: ${pick.matched} 매칭 · ${Math.round(img.size / 1024)}KB 첨부 시도`);
+      const att = await sendFrame(tabId, frameId, {
+        type: 'NAVER_ATTACH_IMAGES',
+        images: [{ b64: img.b64, mime: img.mime, name: `mango_${pick.photo.id}.jpg` }],
+      });
+
+      if (att.ok && att.inserted > 0) {
+        ok++;
+        blogLog(`사진${slot.n} 삽입됨 (에디터 이미지 ${att.before}→${att.after})`);
+        // 사진함 사용 횟수 올리기 — 같은 사진 반복을 막는다
+        fetch(`${MANGOHUB_BASE}/api/mango-photos/${pick.photo.id}/used`, { method: 'POST', credentials: 'include' }).catch(() => {});
+      } else {
+        blogLog(`사진${slot.n} 삽입 실패 — ${att.reason || att.error || '이미지 수 변화 없음'}`, 'warn');
+      }
+    } catch (e) {
+      blogLog(`사진${slot.n} 오류 — ${e.message}`, 'error');
+    }
+  }
+  return ok;
+}
+
 // ─── 채우기 ───
 async function fillNaver() {
   if (!blogPicked) return;
@@ -2183,7 +2278,14 @@ async function fillNaver() {
       }
     }
 
-    // ③ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
+    // ③ 사진 — 초안이 지정한 자리에 망고 사진함에서 골라 넣는다
+    if (body.ok && $('#blogAutoPhoto')?.checked && p.photos?.length) {
+      const n = await attachSlotPhotos(tabId, body.frameId, p.photos);
+      blogLog(`사진 ${n}/${p.photos.length}장 삽입`, n ? 'info' : 'warn');
+      if (!n) blogLog('사진은 직접 넣어주세요. 자리표시 줄과 캡션은 그대로 남겨뒀습니다', 'warn');
+    }
+
+    // ④ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
     let title = { ok: false };
     if (blogPicked.title) {
       title = await typeIntoArea(tabId, '제목', blogPicked.title);
@@ -2259,6 +2361,16 @@ async function diagnoseNaver() {
     for (const area of ['제목', '본문']) {
       const pick = await pickFrameFor(tabId, area);
       blogLog(pick ? `→ ${area} 은 프레임 ${pick.frameId}` : `→ ${area} 을 가진 프레임이 없음`, pick ? 'info' : 'error');
+    }
+    // 사진 업로더·툴바 구조도 같이 뽑는다 (사진 자동첨부·폰트크기 구현에 필요)
+    const bodyPick = await pickFrameFor(tabId, '본문');
+    if (bodyPick) {
+      const fi = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_FILE_INPUT' });
+      blogLog(`file input ${fi.inputs?.length ?? 0}개 · 사진버튼 ${fi.button ? fi.button.hint + ` @(${fi.button.x},${fi.button.y})` : '못 찾음'}`);
+      const tb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TOOLBAR' });
+      console.log('[MangoAuto] 툴바 구조', tb);
+      blogLog(`툴바 버튼 ${tb.buttons?.length ?? 0}개 · 폰트크기 컨트롤 ${tb.fontSize?.length ?? 0}개 (콘솔 참고)`);
+      dump.push({ fileInput: fi, toolbar: tb });
     }
     await navigator.clipboard.writeText(JSON.stringify(dump, null, 2)).catch(() => {});
     blogLog('상세 구조를 클립보드에 복사했습니다 (콘솔에도 출력)');
