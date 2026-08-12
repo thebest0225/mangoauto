@@ -2973,6 +2973,7 @@ async function diagnoseNaver() {
       blogLog(pick ? `→ ${area} 은 프레임 ${pick.frameId}` : `→ ${area} 을 가진 프레임이 없음`, pick ? 'info' : 'error');
     }
     // 사진 업로더·툴바 구조도 같이 뽑는다 (사진 자동첨부·폰트크기 구현에 필요)
+    const extra = {};
     const bodyPick = await pickFrameFor(tabId, '본문');
     if (bodyPick) {
       const fi = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_FILE_INPUT' });
@@ -2983,9 +2984,30 @@ async function diagnoseNaver() {
         await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: tbtn.x, y: tbtn.y });
         await new Promise(r => setTimeout(r, 700));
         const pd = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_PICKER_DUMP' });
-        console.log('[MangoAuto] 표 크기 피커 구조', pd);
+        console.log('[MangoAuto] 표 버튼 누른 직후', pd);
         for (const p of (pd.pools || [])) blogLog(`표피커: ${p.sel} → ${p.n}개, ${p.grid}`);
-        if (!pd.pools?.length) blogLog('표 크기 피커를 못 찾았습니다 (콘솔의 layers 확인)', 'warn');
+        if (!pd.pools?.length) blogLog('크기 피커가 없습니다 — 표가 바로 삽입되는 구조로 보입니다', 'warn');
+        extra.tablePicker = pd;
+
+        // 표가 바로 삽입됐는지 보고, 삽입됐으면 첫 셀을 클릭해 행·열 추가 UI 를 뽑는다
+        const cnt = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_COUNT' });
+        blogLog(`표 버튼 누른 뒤 표 개수: ${cnt.count ?? '?'}`);
+        if ((cnt.count || 0) > 0) {
+          const fc = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
+          if (fc.ok) {
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: fc.x, y: fc.y });
+            await new Promise(r => setTimeout(r, 600));
+          }
+          const tui = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TABLE_UI' });
+          console.log('[MangoAuto] 표 안 커서 상태 UI', tui);
+          blogLog(`삽입된 표: ${tui.tableRows}행 × ${tui.tableCols}열 (${tui.tableCls})`);
+          blogLog(`행·열 조작 후보 ${tui.addish?.length ?? 0}개 / 핸들 ${tui.handles?.length ?? 0}개 — 콘솔 확인`);
+          extra.tableUI = tui;
+          // 진단으로 넣은 표는 지운다
+          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+          await new Promise(r => setTimeout(r, 200));
+          blogLog('※ 진단이 표를 하나 넣었습니다 — Ctrl+Z 로 되돌리세요', 'warn');
+        }
         await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
         await new Promise(r => setTimeout(r, 300));
       } else {
@@ -2997,6 +3019,7 @@ async function diagnoseNaver() {
         await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: sb.x, y: sb.y });
         await new Promise(r => setTimeout(r, 500));
         const so = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_STYLE_OPTIONS' });
+        extra.styleOptions = so;
         blogLog(`문단 스타일 항목 ${so.items?.length ?? 0}개: ${(so.items||[]).map(i=>i.txt).join(' / ')}`);
         console.log('[MangoAuto] 문단 스타일 항목', so.items);
         await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
@@ -3009,7 +3032,9 @@ async function diagnoseNaver() {
       const tb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TOOLBAR' });
       console.log('[MangoAuto] 툴바 구조', tb);
       blogLog(`툴바 버튼 ${tb.buttons?.length ?? 0}개 · 폰트크기 컨트롤 ${tb.fontSize?.length ?? 0}개 (콘솔 참고)`);
-      dump.push({ fileInput: fi, toolbar: tb });
+      const so2 = extra.styleOptions || null;
+      dump.push({ fileInput: fi, toolbar: tb, tablePicker: extra.tablePicker || null,
+                  tableUI: extra.tableUI || null, styleOptions: so2 });
     }
     await navigator.clipboard.writeText(JSON.stringify(dump, null, 2)).catch(() => {});
     blogLog('상세 구조를 클립보드에 복사했습니다 (콘솔에도 출력)');

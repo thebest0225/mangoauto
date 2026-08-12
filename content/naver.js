@@ -818,6 +818,37 @@
             return;
           }
 
+          case 'NAVER_TABLE_UI': {
+            // 표 안에 커서가 있을 때 나타나는 컨트롤들. SmartEditor 는 크기 피커 없이
+            // 기본 표를 바로 넣고, 표를 클릭하면 행·열 추가 UI 가 뜨는 구조로 보인다.
+            const vis = (el) => el.getClientRects().length > 0;
+            const grab = (sel) => Array.from(document.querySelectorAll(sel)).filter(vis).slice(0, 24).map((el) => {
+              const v = viewportRect(el);
+              return {
+                tag: el.tagName.toLowerCase(),
+                cls: String(el.className || '').slice(0, 62),
+                aria: el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-name') || '',
+                txt: (el.textContent || '').trim().slice(0, 14),
+                x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+                w: Math.round(v.w), h: Math.round(v.h),
+              };
+            });
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            sendResponse({
+              ok: true,
+              tableCount: tabs.length,
+              tableRows: t ? t.querySelectorAll('tr').length : 0,
+              tableCols: t ? (t.querySelector('tr') ? t.querySelector('tr').querySelectorAll('td,th').length : 0) : 0,
+              tableCls: t ? String(t.className || '').slice(0, 70) : '',
+              // 행·열 조작 후보
+              addish: grab('button[class*="add"], button[class*="row"], button[class*="col"], [class*="table"] button, [class*="table-toolbar"] *[role="button"]'),
+              handles: grab('[class*="se-table"] [class*="handle"], [class*="se-table"] [class*="btn"], [class*="se-cell"] button'),
+              anyTableEl: grab('[class*="se-table"]'),
+            });
+            return;
+          }
+
           case 'NAVER_TABLE_COUNT': {
             sendResponse({ ok: true, count: document.querySelectorAll('[class*="se-table"], table').length });
             return;
