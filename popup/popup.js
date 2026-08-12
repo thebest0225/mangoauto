@@ -2499,16 +2499,31 @@ async function insertTables(tabId, frameId, tables) {
 
       const pick = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_PICKER', rows, cols });
       if (!pick.ok) {
-        console.log('[MangoAuto] 표 피커 덤프', pick.dump);
+        blogLog(`  피커 격자 ${pick.gridRows ?? '?'}행 × ${pick.gridCols ?? '?'}열 — ${pick.error}`, 'warn');
         await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
         await fallback(pick.error);
         continue;
       }
+      blogLog(`  피커 격자 ${pick.gridRows}×${pick.gridCols} 에서 ${rows}×${cols} 선택`);
       await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: pick.x, y: pick.y });
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 900));
 
       const after = (await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_COUNT' })).count || 0;
       if (after <= before) { await fallback('표가 삽입되지 않음'); continue; }
+
+      // ⚠️ 5×3 을 요청했는데 3×3 이 만들어져 나머지 행이 한 칸에 뭉친 적이 있다.
+      //    행이 부족하면 마지막 셀에서 Tab 을 쳐서 행을 늘린다(네이버 기본 동작).
+      for (let guard = 0; guard < 8; guard++) {
+        const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
+        if (!st.ok || st.rows >= rows) break;
+        blogLog(`  행 ${st.rows}/${rows} — 마지막 셀에서 Tab 으로 행 추가`);
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
+        await new Promise(r => setTimeout(r, 200));
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
+        await new Promise(r => setTimeout(r, 350));
+        const st2 = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
+        if (!st2.ok || st2.rows <= st.rows) { blogLog(`  행 추가가 안 됩니다 (${st.rows}행에서 멈춤)`, 'warn'); break; }
+      }
 
       // ③ 셀마다 좌표를 받아 직접 클릭해 넣는다.
       //    ⚠️ 전에는 첫 셀 클릭 후 Tab 으로 옮겼는데 Tab 이 셀 이동으로 먹지 않아
@@ -2540,6 +2555,20 @@ async function insertTables(tabId, frameId, tables) {
         blogLog(`  ${t.marker} 표 ${cells.rows}×${cells.cols} — ${vfy.filled}/${vfy.total} 칸 채움`);
       } else {
         blogLog(`  ${t.marker} 표 입력 미흡 (${vfy.filled ?? '?'}/${vfy.total ?? '?'} 칸) — 확인해주세요`, 'warn');
+      }
+      // 표 행이 모자라 못 들어간 줄은 표 바로 아래에 글자로 남긴다. 자료를 잃지 않는다.
+      if (cells.rows < rows) {
+        const left = t.rows.slice(cells.rows).map(r => r.join(' | ')).filter(Boolean);
+        if (left.length) {
+          blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래에 글자로 남깁니다`, 'warn');
+          const lastCell = cells.grid[cells.rows - 1][cells.cols - 1];
+          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: lastCell.x, y: lastCell.y });
+          await new Promise(x => setTimeout(x, 200));
+          // 표 밖으로 나와 아래 문단에 쓴다
+          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+          await new Promise(x => setTimeout(x, 200));
+          await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: '\n' + left.join('\n') });
+        }
       }
     } catch (e) {
       await fallback(e.message);
@@ -2900,6 +2929,21 @@ async function diagnoseNaver() {
     if (bodyPick) {
       const fi = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_FILE_INPUT' });
       blogLog(`file input ${fi.inputs?.length ?? 0}개 · 사진버튼 ${fi.button ? fi.button.hint + ` @(${fi.button.x},${fi.button.y})` : '못 찾음'}`);
+      const sb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_STYLE_BTN' });
+      if (sb.ok) {
+        blogLog(`문단 스타일 버튼 발견 — ${sb.hint} "${sb.txt}" @(${sb.x},${sb.y})`);
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: sb.x, y: sb.y });
+        await new Promise(r => setTimeout(r, 500));
+        const so = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_STYLE_OPTIONS' });
+        blogLog(`문단 스타일 항목 ${so.items?.length ?? 0}개: ${(so.items||[]).map(i=>i.txt).join(' / ')}`);
+        console.log('[MangoAuto] 문단 스타일 항목', so.items);
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+      } else {
+        console.log('[MangoAuto] 문단 스타일 버튼 덤프', sb.dump);
+        blogLog(`문단 스타일 버튼을 못 찾음 — 콘솔의 버튼 목록 확인`, 'warn');
+      }
+      const hc = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_HEADING_COUNT' });
+      blogLog(`현재 heading 태그 ${hc.h ?? '?'}개`);
       const tb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TOOLBAR' });
       console.log('[MangoAuto] 툴바 구조', tb);
       blogLog(`툴바 버튼 ${tb.buttons?.length ?? 0}개 · 폰트크기 컨트롤 ${tb.fontSize?.length ?? 0}개 (콘솔 참고)`);

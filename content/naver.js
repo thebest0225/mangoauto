@@ -690,8 +690,10 @@
           }
 
           case 'NAVER_TABLE_PICKER': {
-            // 표 버튼을 누르면 '몇 행 몇 열' 격자 피커가 열린다.
-            // 원하는 크기의 셀 좌표를 찾아 준다. 구조를 모르면 못 찍으므로 덤프도 같이 준다.
+            // 표 크기 피커. 격자에서 원하는 행×열 칸을 찍어야 한다.
+            // ⚠️ 전에는 '한 행에 몇 칸인지'를 첫 행 top 으로만 세서 5×3 을 요청했는데
+            //    3×3 이 만들어졌다(닛폰·토요타·롯데가 2행에 뭉쳤다).
+            //    → 셀들의 left/top 을 각각 모아 실제 격자 크기를 기하학적으로 계산한다.
             const want = { r: Math.max(1, msg.rows | 0), c: Math.max(1, msg.cols | 0) };
             const vis = (el) => el.getClientRects().length > 0;
             const pools = [
@@ -703,35 +705,56 @@
             ];
             let cells = [];
             for (const sel of pools) {
-              cells = Array.from(document.querySelectorAll(sel)).filter(vis);
+              const got = Array.from(document.querySelectorAll(sel)).filter(vis);
+              if (got.length > cells.length) cells = got;
               if (cells.length >= want.r * want.c) break;
             }
-            const dump = cells.slice(0, 6).map((el) => ({
-              cls: String(el.className || '').slice(0, 50),
-              row: el.getAttribute('data-row') || el.dataset?.row || '',
-              col: el.getAttribute('data-col') || el.dataset?.col || '',
-            }));
-            if (!cells.length) { sendResponse({ ok: false, error: '표 크기 피커를 못 찾음', dump }); return; }
+            if (!cells.length) { sendResponse({ ok: false, error: '표 크기 피커를 못 찾음' }); return; }
 
-            // 1순위: data-row/data-col 속성으로 정확히 찾기
-            let hit = cells.find((el) => {
-              const r = +(el.getAttribute('data-row') || el.dataset?.row || 0);
-              const c = +(el.getAttribute('data-col') || el.dataset?.col || 0);
-              return r === want.r && c === want.c;
+            const rnd = (n) => Math.round(n / 4) * 4;   // 1~2px 흔들림 흡수
+            const info = cells.map((el) => {
+              const b = el.getBoundingClientRect();
+              return { el, l: rnd(b.left), t: rnd(b.top),
+                       r: +(el.getAttribute('data-row') || el.dataset?.row || 0),
+                       c: +(el.getAttribute('data-col') || el.dataset?.col || 0) };
             });
-            // 2순위: 격자가 순서대로 놓였다고 보고 좌표로 역산 (열 수를 화면 위치로 추정)
-            if (!hit) {
-              const tops = [...new Set(cells.map((el) => Math.round(el.getBoundingClientRect().top)))].sort((a, b) => a - b);
-              const perRow = cells.filter((el) => Math.round(el.getBoundingClientRect().top) === tops[0]).length;
-              const idx = (want.r - 1) * perRow + (want.c - 1);
-              if (perRow && idx < cells.length) hit = cells[idx];
+            const lefts = [...new Set(info.map((x) => x.l))].sort((a, b) => a - b);
+            const tops  = [...new Set(info.map((x) => x.t))].sort((a, b) => a - b);
+
+            // 1순위: data-row/col 속성
+            let hit = info.find((x) => x.r === want.r && x.c === want.c);
+            // 2순위: 격자 좌표로 정확히 찾기 (행=top 순서, 열=left 순서)
+            if (!hit && want.r <= tops.length && want.c <= lefts.length) {
+              const T = tops[want.r - 1], L = lefts[want.c - 1];
+              hit = info.find((x) => x.t === T && x.l === L);
             }
-            if (!hit) { sendResponse({ ok: false, error: `${want.r}x${want.c} 셀을 못 찾음 (후보 ${cells.length}개)`, dump }); return; }
-            const v = viewportRect(hit);
+            if (!hit) {
+              sendResponse({ ok: false, error: `${want.r}x${want.c} 칸 없음 (피커 격자 ${tops.length}행 × ${lefts.length}열)`,
+                             gridRows: tops.length, gridCols: lefts.length });
+              return;
+            }
+            const v = viewportRect(hit.el);
             sendResponse({
-              ok: true, count: cells.length, dump,
+              ok: true, count: cells.length, gridRows: tops.length, gridCols: lefts.length,
               x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
             });
+            return;
+          }
+
+          case 'NAVER_TABLE_ADDROW': {
+            // 표 행이 부족할 때. 마지막 셀에 커서를 놓고 Tab 을 치면 네이버가 행을 추가한다.
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '표 없음' }); return; }
+            const cells = t.querySelectorAll('td,th');
+            const last = cells[cells.length - 1];
+            if (!last) { sendResponse({ ok: false, error: '셀 없음' }); return; }
+            last.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(180);
+            const target = last.querySelector('[class*="paragraph"], [contenteditable]') || last;
+            const v = viewportRect(target);
+            sendResponse({ ok: true, rows: t.querySelectorAll('tr').length,
+                           x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2) });
             return;
           }
 
@@ -853,6 +876,52 @@
                 disabled: !!b.disabled,
               })),
             });
+            return;
+          }
+
+          case 'NAVER_STYLE_BTN': {
+            // 툴바의 문단 스타일 선택기('본문 ▾'). 여기서 제목1/제목2 를 고르면
+            // 발행된 HTML 에 진짜 heading 이 들어간다(굵게+19pt 는 heading 이 아니다).
+            const vis = (el) => el.getClientRects().length > 0;
+            const pool = Array.from(document.querySelectorAll('[class*="toolbar"] button')).filter(vis);
+            const hit = pool.find((b) => /본문|제목|스타일|헤딩|heading|paragraph-style|text-style/.test(
+              (b.textContent || '') + ' ' + (b.className || '') + ' ' + (b.getAttribute('aria-label') || '')));
+            if (!hit) {
+              sendResponse({ ok: false, error: '문단 스타일 버튼 없음',
+                dump: pool.slice(0, 12).map((b) => ({ cls: String(b.className||'').slice(0,44),
+                  aria: b.getAttribute('aria-label')||'', txt: (b.textContent||'').trim().slice(0,14) })) });
+              return;
+            }
+            const v = viewportRect(hit);
+            sendResponse({ ok: true, x: Math.round(v.x + v.w/2), y: Math.round(v.y + v.h/2),
+                           hint: describe(hit), txt: (hit.textContent||'').trim().slice(0,16) });
+            return;
+          }
+
+          case 'NAVER_STYLE_OPTIONS': {
+            // 스타일 드롭다운을 연 뒤 항목들. '제목1' 같은 걸 찾아 클릭한다.
+            const vis = (el) => el.getClientRects().length > 0 && el.offsetWidth > 0;
+            const items = Array.from(document.querySelectorAll(
+              '[class*="text-style"] li, [class*="paragraph-style"] li, [class*="style"] li, ' +
+              '[class*="toolbar"] [role="option"], [class*="option-list"] li, [class*="dropdown"] li'
+            )).filter(vis);
+            sendResponse({
+              ok: true,
+              items: items.slice(0, 20).map((el) => {
+                const v = viewportRect(el);
+                return { txt: (el.textContent || '').trim().slice(0, 16),
+                         cls: String(el.className || '').slice(0, 44),
+                         x: Math.round(v.x + v.w/2), y: Math.round(v.y + v.h/2) };
+              }),
+            });
+            return;
+          }
+
+          case 'NAVER_HEADING_COUNT': {
+            // 발행 전에도 확인 가능한 heading 개수 (진짜 제목 구조가 들어갔는지)
+            sendResponse({ ok: true,
+              h: document.querySelectorAll('h1,h2,h3,h4').length,
+              se: document.querySelectorAll('[class*="se-section-quotation"], [class*="heading"]').length });
             return;
           }
 
