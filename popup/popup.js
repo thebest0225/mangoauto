@@ -2253,10 +2253,12 @@ async function photoToBase64(url, mode = 'fit', maxPx = 1280, quality = 0.86) {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, dw, dh);
     const out = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+    // ⚠️ close() 뒤에는 width/height 가 0 이 된다 — 로그가 '0x0 → 960x1280' 으로 나온 이유
+    const ow = bmp.width, oh = bmp.height;
     bmp.close();
     return {
       b64: await toB64(out), mime: 'image/jpeg', size: out.size,
-      note: `${bmp.width}x${bmp.height} → ${dw}x${dh}`,
+      note: `${ow}x${oh} → ${dw}x${dh}`,
     };
   } catch (e) {
     // 리사이즈가 안 되면 원본으로라도 올린다
@@ -2264,72 +2266,108 @@ async function photoToBase64(url, mode = 'fit', maxPx = 1280, quality = 0.86) {
   }
 }
 
-// 슬롯 자리에 커서를 놓고 사진을 넣는다.
-async function attachSlotPhotos(tabId, frameId, photos) {
-  // ─── 업로더 확보 ───
-  // 네이버는 '사진' 버튼을 눌러야 input[type=file] 을 만든다. 그 버튼은 OS 파일창을
-  // 띄우지만, CDP 로 파일창 가로채기를 켜두면 창이 뜨지 않고 input 만 남는다.
-  // (사용자 관찰: '파일창이 열려 있을 때는 첨부가 잘 됐다' → 그때 input 이 있었던 것)
+// ─── 슬롯 자리에 사진 넣고, 캡션은 네이버 사진설명 칸에 ───
+//
+// 사용자 화면에서 확인된 두 가지를 반영했다 —
+//  · 사진2 실패: 첫 업로드 뒤 네이버가 file input 을 치워버린다.
+//    → 사진마다 업로더를 다시 확보한다(가로채기가 켜져 있으니 파일창은 안 뜬다).
+//  · 캡션이 '잔' / '디밭 뛰고…' 로 쪼개짐: 자리표시 줄 가운데에 커서를 놓고 사진을
+//    넣어 그 줄이 갈라졌다. → 자리표시 줄을 '지우고' 사진을 넣은 뒤, 이미지를 선택하면
+//    나타나는 '사진 설명을 입력하세요' 칸에 캡션을 넣는다. 그게 네이버가 캡션으로
+//    인식하는 자리이고, 캡션도 검색 대상 텍스트가 된다.
+async function ensureUploader(tabId, frameId, button) {
   let probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
-  let intercepted = false;
-  if (!probe.inputs?.length) {
-    const ic = await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: true });
-    if (!ic?.ok) {
-      blogLog(`파일창 가로채기 실패 — ${ic?.error || ''}. 사진은 직접 넣어주세요`, 'warn');
-      return 0;
-    }
-    intercepted = true;
-    if (probe.button) {
-      blogLog('업로더를 띄웁니다 (파일창은 가로채서 뜨지 않습니다)');
-      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: probe.button.x, y: probe.button.y });
-      await new Promise(r => setTimeout(r, 1500));
-      probe = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
-    }
-    blogLog(`file input ${probe.inputs?.length ?? 0}개 확보`);
-    if (!probe.inputs?.length) {
-      await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: false });
-      blogLog('업로더를 못 만들었습니다. 사진은 직접 넣어주세요', 'warn');
-      return 0;
-    }
+  if (probe.inputs?.length) return probe;
+  if (!button) return probe;
+  await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: button.x, y: button.y });
+  await new Promise(r => setTimeout(r, 1400));
+  return await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
+}
+
+async function attachSlotPhotos(tabId, frameId, photos) {
+  const first = await sendFrame(tabId, frameId, { type: 'NAVER_FILE_INPUT' });
+  const button = first.button;
+
+  const ic = await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: true });
+  if (!ic?.ok) {
+    blogLog(`파일창 가로채기 실패 — ${ic?.error || ''}. 사진은 직접 넣어주세요`, 'warn');
+    return 0;
   }
 
   const usedIds = new Set();
+  const mode = $('#blogPhotoFit')?.value || 'fit';
+  const wantCaption = $('#blogPhotoCaption')?.checked !== false;
   let ok = 0;
-  for (const slot of photos) {
-    const marker = slot.marker || slot.caption || `[사진${slot.n}]`;
-    try {
-      const pick = await pickMangoPhoto(slot.tags, usedIds);
-      if (!pick) { blogLog(`사진${slot.n}: 사진함에서 맞는 사진을 못 찾음`, 'warn'); continue; }
-      usedIds.add(pick.photo.id);
 
-      // 자리표시 줄에 커서를 놓는다 (그 위치에 사진이 들어간다)
-      const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: marker });
-      if (!sel.ok) { blogLog(`사진${slot.n}: 자리표시 줄을 못 찾음 — ${sel.error}`, 'warn'); continue; }
-      await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: sel.x, y: sel.y });
-      await new Promise(r => setTimeout(r, 350));
+  try {
+    for (const slot of photos) {
+      const marker = slot.marker || slot.caption || `[사진${slot.n}]`;
+      try {
+        const pick = await pickMangoPhoto(slot.tags, usedIds);
+        if (!pick) { blogLog(`사진${slot.n}: 사진함에서 맞는 사진을 못 찾음`, 'warn'); continue; }
+        usedIds.add(pick.photo.id);
 
-      const mode = $('#blogPhotoFit')?.value || 'fit';
-      const img = await photoToBase64(pick.photo.url, mode, mode === 'square' ? 1080 : 1280);
-      blogLog(`사진${slot.n}: ${pick.matched} 매칭 · ${img.note} · ${Math.round(img.size / 1024)}KB 첨부 시도`);
-      const att = await sendFrame(tabId, frameId, {
-        type: 'NAVER_ATTACH_IMAGES',
-        images: [{ b64: img.b64, mime: img.mime, name: `mango_${pick.photo.id}.jpg` }],
-      });
+        // ① 업로더 확보 — 사진마다 다시 (첫 업로드 뒤 input 이 사라진다)
+        const up = await ensureUploader(tabId, frameId, button);
+        if (!up.inputs?.length) { blogLog(`사진${slot.n}: 업로더를 못 만들었습니다`, 'warn'); continue; }
 
-      if (att.ok && att.inserted > 0) {
+        // ② 자리표시 줄을 선택해 지운다 (줄 쪼개짐 방지)
+        const sel = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: marker });
+        if (!sel.ok) { blogLog(`사진${slot.n}: 자리표시 줄을 못 찾음 — ${sel.error}`, 'warn'); continue; }
+        if (sel.drag) {
+          await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
+          await new Promise(r => setTimeout(r, 140));
+          await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Backspace' });
+          await new Promise(r => setTimeout(r, 220));
+        } else {
+          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: sel.x, y: sel.y });
+          await new Promise(r => setTimeout(r, 250));
+        }
+
+        // ③ 사진 넣기
+        const img = await photoToBase64(pick.photo.url, mode, mode === 'square' ? 1080 : 1280);
+        blogLog(`사진${slot.n}: ${pick.matched} 매칭 · ${img.note} · ${Math.round(img.size / 1024)}KB 첨부 시도`);
+        const att = await sendFrame(tabId, frameId, {
+          type: 'NAVER_ATTACH_IMAGES',
+          images: [{ b64: img.b64, mime: img.mime, name: `mango_${pick.photo.id}.jpg` }],
+        });
+        if (!(att.ok && att.inserted > 0)) {
+          blogLog(`사진${slot.n} 삽입 실패 — ${att.reason || att.error || '이미지 수 변화 없음'}`, 'warn');
+          continue;
+        }
         ok++;
         blogLog(`사진${slot.n} 삽입됨 (에디터 이미지 ${att.before}→${att.after})`);
-        // 사진함 사용 횟수 올리기 — 같은 사진 반복을 막는다
         fetch(`${MANGOHUB_BASE}/api/mango-photos/${pick.photo.id}/used`, { method: 'POST', credentials: 'include' }).catch(() => {});
-      } else {
-        blogLog(`사진${slot.n} 삽입 실패 — ${att.reason || att.error || '이미지 수 변화 없음'}`, 'warn');
+
+        // ④ 캡션 — 이미지를 클릭해 선택하면 '사진 설명을 입력하세요' 칸이 나타난다
+        if (wantCaption && slot.caption) {
+          const ir = await sendFrame(tabId, frameId, { type: 'NAVER_IMAGE_RECT' });
+          if (ir.ok) {
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: ir.x, y: ir.y });
+            await new Promise(r => setTimeout(r, 500));
+          }
+          const cr = await sendFrame(tabId, frameId, { type: 'NAVER_CAPTION_RECT' });
+          if (!cr.ok) {
+            blogLog(`  사진${slot.n} 캡션 칸을 못 찾음 — ${cr.error}`, 'warn');
+          } else {
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: cr.x, y: cr.y });
+            await new Promise(r => setTimeout(r, 350));
+            const ins = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: slot.caption });
+            blogLog(ins?.ok ? `  사진${slot.n} 캡션 입력: ${slot.caption}` : `  사진${slot.n} 캡션 실패 — ${ins?.error || ''}`,
+                    ins?.ok ? 'info' : 'warn');
+            // 캡션 편집에서 빠져나온다 (다음 작업이 캡션 안으로 들어가지 않게)
+            await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Escape' });
+            await new Promise(r => setTimeout(r, 250));
+          }
+        }
+      } catch (e) {
+        blogLog(`사진${slot.n} 오류 — ${e.message}`, 'error');
       }
-    } catch (e) {
-      blogLog(`사진${slot.n} 오류 — ${e.message}`, 'error');
     }
+  } finally {
+    // 켜둔 채로 두면 사람이 사진을 넣을 때 파일창이 안 뜬다
+    await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: false });
   }
-  // 가로채기를 끈다 — 켜둔 채로 두면 이후 사람이 사진을 넣으려 할 때 파일창이 안 뜬다
-  if (intercepted) await sendBg({ type: 'NAVER_FILECHOOSER', tabId, enabled: false });
   return ok;
 }
 

@@ -646,6 +646,49 @@
             return;
           }
 
+          case 'NAVER_IMAGE_RECT': {
+            // 마지막에 삽입된 이미지 컴포넌트 좌표. 클릭해서 선택하면 캡션 칸이 나타난다.
+            const comps = document.querySelectorAll('.se-component.se-image');
+            const comp = comps[comps.length - 1];
+            if (!comp) { sendResponse({ ok: false, error: '이미지 컴포넌트 없음' }); return; }
+            comp.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(200);
+            const v = viewportRect(comp);
+            sendResponse({
+              ok: true, count: comps.length,
+              x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+            });
+            return;
+          }
+
+          case 'NAVER_CAPTION_RECT': {
+            // 사진 설명(캡션) 입력 칸. 이미지를 선택하면 '사진 설명을 입력하세요' 가 뜬다.
+            // ★캡션을 본문 텍스트로 넣으면 안 된다 — 그 줄에 커서를 놓고 사진을 넣어서
+            //   '잔' / '디밭 뛰고…' 로 줄이 쪼개졌다(사용자 화면에서 확인).
+            const comps = document.querySelectorAll('.se-component.se-image');
+            const comp = comps[comps.length - 1];
+            let cap = comp && comp.querySelector(
+              '[class*="caption"] .se-text-paragraph, [class*="caption"] [contenteditable], [class*="caption"]'
+            );
+            if (!cap) {
+              cap = Array.from(document.querySelectorAll('[class*="caption"], .se-text-paragraph'))
+                .find((el) => /사진\s*설명을?\s*입력/.test(el.textContent || '') && el.getClientRects().length);
+            }
+            if (!cap || !cap.getClientRects().length) {
+              sendResponse({ ok: false, error: '캡션 칸을 못 찾음 (이미지를 먼저 선택해야 나타난다)' });
+              return;
+            }
+            cap.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(180);
+            const v = viewportRect(cap);
+            sendResponse({
+              ok: true,
+              x: Math.round(v.x + Math.min(30, v.w / 2)), y: Math.round(v.y + v.h / 2),
+              hint: describe(cap), txt: (cap.textContent || '').trim().slice(0, 24),
+            });
+            return;
+          }
+
           case 'NAVER_STATUS':
             sendResponse({
               ok: true,

@@ -431,6 +431,28 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: m };
       }
 
+    // 특수 키 하나 — 선택된 줄을 지울 때(Backspace) 쓴다.
+    case 'NAVER_CDP_KEY':
+      try {
+        if (!msg.tabId) return { ok: false, error: 'tabId 없음' };
+        await ensureDebuggerAttached(msg.tabId);
+        const MAP = {
+          Backspace: { windowsVirtualKeyCode: 8,  code: 'Backspace', key: 'Backspace' },
+          Delete:    { windowsVirtualKeyCode: 46, code: 'Delete',    key: 'Delete' },
+          Escape:    { windowsVirtualKeyCode: 27, code: 'Escape',    key: 'Escape' },
+        };
+        const k = MAP[msg.key];
+        if (!k) return { ok: false, error: '모르는 키: ' + msg.key };
+        const t = { tabId: msg.tabId };
+        await chrome.debugger.sendCommand(t, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', nativeVirtualKeyCode: k.windowsVirtualKeyCode, ...k });
+        await _delay(_rand(20, 45));
+        await chrome.debugger.sendCommand(t, 'Input.dispatchKeyEvent', { type: 'keyUp', nativeVirtualKeyCode: k.windowsVirtualKeyCode, ...k });
+        await _delay(_rand(25, 55));
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+
     // ─── 파일 선택창 가로채기 ───
     // 네이버는 '사진' 버튼을 눌러야 input[type=file] 을 만든다. 그런데 그 버튼은
     // OS 파일 대화상자를 띄워 브라우저를 멈춘다(1차 시도에서 겪음).
