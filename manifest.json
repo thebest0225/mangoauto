@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "description": "Grok/Flow 영상 자동화 + 네이버 블로그 초안 채우기 (MangoHub 연동)",
   "permissions": [
     "cookies",
@@ -29,7 +29,8 @@
     "https://*.naver.com/*",
     "https://*.aiquickdraw.com/*",
     "https://oguonline.com/*",
-    "https://*.oguonline.com/*"
+    "https://*.oguonline.com/*",
+    "https://rss.blog.naver.com/*"
   ],
   "background": {
     "service_worker": "background/background.js"
@@ -46,15 +47,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://grok.com/*"],
-      "js": ["content/grok_dedupe.js"],
+      "matches": [
+        "https://grok.com/*"
+      ],
+      "js": [
+        "content/grok_dedupe.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
     },
     {
-      "matches": ["https://grok.com/*"],
-      "js": ["lib/utils.js", "content/shared-dom.js", "content/grok.js"],
+      "matches": [
+        "https://grok.com/*"
+      ],
+      "js": [
+        "lib/utils.js",
+        "content/shared-dom.js",
+        "content/grok.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -62,7 +73,11 @@
         "https://labs.google/fx/tools/video-fx*",
         "https://labs.google/fx/*/tools/video-fx*"
       ],
-      "js": ["lib/utils.js", "content/shared-dom.js", "content/flow.js"],
+      "js": [
+        "lib/utils.js",
+        "content/shared-dom.js",
+        "content/flow.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -70,7 +85,11 @@
         "https://labs.google/fx/tools/flow*",
         "https://labs.google/fx/*/tools/flow*"
       ],
-      "js": ["lib/utils.js", "content/shared-dom.js", "content/flow.js"],
+      "js": [
+        "lib/utils.js",
+        "content/shared-dom.js",
+        "content/flow.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -78,15 +97,21 @@
       "matches": [
         "https://blog.naver.com/*"
       ],
-      "js": ["content/naver.js"],
+      "js": [
+        "content/naver.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["content/inject.js"],
-      "matches": ["https://labs.google/*"]
+      "resources": [
+        "content/inject.js"
+      ],
+      "matches": [
+        "https://labs.google/*"
+      ]
     }
   ],
   "icons": {

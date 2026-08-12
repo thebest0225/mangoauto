@@ -2677,6 +2677,17 @@ function renderPhotoSlots(photos) {
 
 function bindBlogEvents() {
   $('#blogRefresh')?.addEventListener('click', loadBlogDrafts);
+  $('#blogMatchPub')?.addEventListener('click', async () => {
+    // 예약발행 대응 — 3시간마다 자동으로도 돌지만 지금 바로 확인하고 싶을 때
+    blogLog('네이버 발행글과 초안을 대조합니다…');
+    const r = await sendBg({ type: 'NAVER_MATCH_PUBLISHED' });
+    if (!r) { blogLog('대조 실패 (응답 없음)', 'error'); return; }
+    if (r.error) { blogLog(`대조 실패 — ${r.error} (시도: ${r.tried || '-'})`, 'error'); return; }
+    blogLog(`발행글 ${r.posts}건 · 초안 ${r.drafts}건 → ${r.matched.length}건 발행완료 처리`);
+    for (const m of r.matched) blogLog(`  ✓ ${m.draftTitle.slice(0, 26)} → ${m.url}`);
+    for (const m of r.unsure) blogLog(`  ? ${m.draftTitle.slice(0, 26)} ~ ${m.postTitle.slice(0, 26)} (유사도 ${m.score})`, 'warn');
+    if (r.matched.length) await loadBlogDrafts();
+  });
   $$('.btab').forEach(t => t.addEventListener('click', () => {
     $$('.btab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');

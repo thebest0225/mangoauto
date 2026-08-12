@@ -65,12 +65,178 @@ const _reuploadBlobCache = new Map();
 // ─── Side Panel: open on icon click ───
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
+// ═══════════════════════════════════════════════════════════════
+//  네이버 발행글 자동 대조 (예약발행 대응)
+// ═══════════════════════════════════════════════════════════════
+//
+// 문제: 예약발행을 걸면 그 시점에 글 주소가 없다. 그래서 확장이 채운 직후에는
+//       '발행 완료' 로 표시할 수가 없고, 초안이 계속 목록에 남는다.
+//
+// 해결: 몇 시간마다 사장님 블로그의 최근 글 목록을 읽어 초안 제목과 대조하고,
+//       확실히 일치하는 것만 자동으로 발행 완료 처리한다.
+//
+// ⚠️ 이건 '사장님 브라우저가 사장님 본인 블로그를 읽는' 것이다. 서버에서 긁지 않는다.
+//    (blog.naver.com·rss.blog.naver.com 은 robots.txt 로 크롤러를 전부 차단한다.
+//     서버가 대신 하려면 네이버 개발자센터에서 '검색' API 권한을 켜야 한다.)
+
+const NAVER_BLOG_ID = 'mangoabba';
+const BW_BASE = 'https://write.mangois.love';
+
+const _normTitle = (t) => String(t || '')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&[a-z]+;|&#\d+;/gi, '')
+  .replace(/[\s\u3000]+/g, '')
+  .replace(/[｜|\-–—~!?.,·:;'"“”‘’()\[\]{}]/g, '')
+  .toLowerCase();
+
+// 두 제목의 유사도 (문자 2-gram 자카드). 제목이 조금 손질돼도 잡히게.
+function _titleSim(a, b) {
+  const A = _normTitle(a), B = _normTitle(b);
+  if (!A || !B) return 0;
+  if (A === B) return 1;
+  const gram = (s) => { const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; };
+  const ga = gram(A), gb = gram(B);
+  let inter = 0;
+  for (const x of ga) if (gb.has(x)) inter++;
+  return inter / (ga.size + gb.size - inter);
+}
+
+// 최근 발행글 목록. 소스를 순서대로 시도하고 되는 것을 쓴다.
+// (네이버가 구조를 바꿀 수 있으므로 어느 소스가 먹었는지 로그로 남긴다)
+async function fetchNaverPostList() {
+  const out = [];
+  const tried = [];
+
+  // ① 블로그 UI 가 쓰는 JSON (있으면 가장 안정적)
+  try {
+    const r = await fetch(`https://blog.naver.com/api/blogs/${NAVER_BLOG_ID}/post-list?categoryNo=0&itemCount=30&page=1`, { credentials: 'include' });
+    tried.push(`json:${r.status}`);
+    if (r.ok) {
+      const j = await r.json();
+      const arr = j?.result?.items || j?.items || j?.postList || [];
+      for (const it of arr) {
+        const logNo = it.logNo || it.postId || it.no;
+        const title = it.titleWithInspectMessage || it.title || it.postTitle;
+        if (logNo && title) out.push({ logNo: String(logNo), title, src: 'json' });
+      }
+    }
+  } catch (e) { tried.push('json:err'); }
+
+  // ② RSS (구조가 단순하고 잘 안 바뀐다)
+  if (!out.length) {
+    try {
+      const r = await fetch(`https://rss.blog.naver.com/${NAVER_BLOG_ID}.xml`, { credentials: 'include' });
+      tried.push(`rss:${r.status}`);
+      if (r.ok) {
+        const xml = await r.text();
+        for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+          const b = m[1];
+          const link = (b.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
+          const title = (b.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/) || [])[1] || '';
+          const logNo = (link.match(/(\d{6,})/) || [])[1];
+          if (logNo && title) out.push({ logNo, title: title.trim(), src: 'rss' });
+        }
+      }
+    } catch (e) { tried.push('rss:err'); }
+  }
+
+  // ③ 목록 페이지 HTML (마지막 수단)
+  if (!out.length) {
+    try {
+      const r = await fetch(`https://blog.naver.com/PostList.naver?blogId=${NAVER_BLOG_ID}&currentPage=1`, { credentials: 'include' });
+      tried.push(`html:${r.status}`);
+      if (r.ok) {
+        const html = await r.text();
+        const seen = new Set();
+        for (const m of html.matchAll(/logNo=(\d{6,})[^>]*>\s*([^<]{4,80})</g)) {
+          if (seen.has(m[1])) continue;
+          seen.add(m[1]);
+          out.push({ logNo: m[1], title: m[2].trim(), src: 'html' });
+        }
+      }
+    } catch (e) { tried.push('html:err'); }
+  }
+
+  return { posts: out, tried };
+}
+
+// 초안 ↔ 발행글 대조. 확실한 것만 자동 처리한다.
+async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) {
+  const report = { posts: 0, drafts: 0, matched: [], unsure: [], tried: '', error: '' };
+  try {
+    const { posts, tried } = await fetchNaverPostList();
+    report.tried = tried.join(' ');
+    report.posts = posts.length;
+    if (!posts.length) {
+      report.error = '발행글 목록을 못 읽었습니다 (네이버 로그인 상태를 확인하세요)';
+      broadcastLog(`[네이버 대조] ${report.error} — 시도: ${report.tried}`, 'warn');
+      return report;
+    }
+
+    const wr = await fetch(`${BW_BASE}/api/work?status=generated`, { credentials: 'include' });
+    if (!wr.ok) { report.error = `블로그라이터 응답 ${wr.status}`; return report; }
+    const items = ((await wr.json()).items || [])
+      .filter(it => it.target === 'naver' || it.destination_id === 'naver_mango');
+    report.drafts = items.length;
+
+    for (const it of items) {
+      let best = null, bestScore = 0;
+      for (const p of posts) {
+        const sc = _titleSim(it.title, p.title);
+        if (sc > bestScore) { bestScore = sc; best = p; }
+      }
+      if (!best) continue;
+      const row = {
+        id: it.id, draftTitle: it.title, postTitle: best.title,
+        url: `https://blog.naver.com/${NAVER_BLOG_ID}/${best.logNo}`,
+        score: Math.round(bestScore * 100) / 100,
+      };
+      if (bestScore >= minScore) {
+        if (apply) {
+          const up = await fetch(`${BW_BASE}/api/work`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: it.id, target: it.target || 'naver',
+              destination_id: it.destination_id || 'naver_mango',
+              title: it.title, status: 'published',
+              published_url: row.url, publish_mode: 'scheduled',
+            }),
+          });
+          row.applied = up.ok;
+        }
+        report.matched.push(row);
+      } else if (bestScore >= 0.5) {
+        report.unsure.push(row);
+      }
+    }
+
+    const n = report.matched.length;
+    broadcastLog(`[네이버 대조] 발행글 ${report.posts}건 · 초안 ${report.drafts}건 → ${n}건 발행완료 처리` +
+                 (report.unsure.length ? ` (애매 ${report.unsure.length}건은 그대로 둠)` : ''), n ? 'info' : 'info');
+    for (const m of report.matched) broadcastLog(`  ✓ ${m.draftTitle.slice(0, 28)} → ${m.url} (유사도 ${m.score})`, 'info');
+    for (const m of report.unsure) broadcastLog(`  ? ${m.draftTitle.slice(0, 28)} ~ ${m.postTitle.slice(0, 28)} (유사도 ${m.score}) — 수동 확인`, 'warn');
+    return report;
+  } catch (e) {
+    report.error = String(e && e.message || e);
+    broadcastLog(`[네이버 대조] 오류 — ${report.error}`, 'error');
+    return report;
+  }
+}
+
+// 3시간마다 알아서 대조한다. 브라우저가 켜져 있는 동안만 돈다.
+chrome.alarms.create('naverMatch', { periodInMinutes: 180, delayInMinutes: 3 });
+
 // ─── Keepalive + Watchdog via chrome.alarms ───
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 });
 let _lastStateChange = Date.now();
 let _lastWatchdogGenId = -1;  // 세대 ID 추적 (상태 이름 대신)
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'naverMatch') {
+    await matchPublishedNaverPosts({});
+    return;
+  }
   if (alarm.name === 'keepalive') {
     // Watchdog: GENERATING/DOWNLOADING/UPLOADING 상태가 너무 오래 지속되면 에러 처리
     const state = sm.state;
@@ -514,6 +680,9 @@ async function handleMessage(msg, sender) {
       } catch (e) {
         return { ok: false, error: String(e && e.message || e) };
       }
+
+    case 'NAVER_MATCH_PUBLISHED':
+      return await matchPublishedNaverPosts({ apply: msg.apply !== false });
 
     // 네이버 작업이 끝나면 디버거를 뗀다 — 노란 배너를 계속 띄워두지 않는다.
     case 'NAVER_CDP_DONE':
