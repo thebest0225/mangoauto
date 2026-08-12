@@ -431,6 +431,23 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: m };
       }
 
+    // 선택된 글자에 진짜 Ctrl+B. execCommand('bold') 가 에디터에 막힐 때 쓴다.
+    // 선택은 content script 가 미리 잡아둔다 — CDP 키는 현재 선택에 작용한다.
+    case 'NAVER_CDP_BOLD':
+      try {
+        if (!msg.tabId) return { ok: false, error: 'tabId 없음' };
+        await ensureDebuggerAttached(msg.tabId);
+        const t = { tabId: msg.tabId };
+        const B = { windowsVirtualKeyCode: 66, nativeVirtualKeyCode: 66, code: 'KeyB', key: 'b', modifiers: 2 };
+        await chrome.debugger.sendCommand(t, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...B });
+        await _delay(_rand(20, 45));
+        await chrome.debugger.sendCommand(t, 'Input.dispatchKeyEvent', { type: 'keyUp', ...B });
+        await _delay(_rand(25, 55));
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+
     // 네이버 작업이 끝나면 디버거를 뗀다 — 노란 배너를 계속 띄워두지 않는다.
     case 'NAVER_CDP_DONE':
       if (msg.tabId) await detachDebuggerSafe(msg.tabId);

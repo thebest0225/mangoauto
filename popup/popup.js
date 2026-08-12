@@ -2045,92 +2045,94 @@ async function ensureNaverTab() {
 // 겸사겸사 매니페스트 content_scripts 에 의존하지 않고 그 자리에서 주입한다 —
 // 확장을 새로고침한 뒤 열려 있던 탭에는 content script 가 안 들어가서, 페이지를 다시
 // 불러야 하는 함정이 있었다. 주입하면 그럴 필요가 없다.
-let naverFrameId = null;
+// ⚠️ 2차 시도에서 알아낸 것: 제목과 본문이 서로 다른 iframe 에 있다.
+//    (콘솔에 '준비됨' 이 top / iframe / iframe 세 번 찍혔고 그중 하나만 editor=true)
+//    프레임을 하나만 골라 그 안에서 둘 다 찾으려 하면 한쪽은 반드시 못 찾는다.
+//    → 스크립트를 모든 프레임에 넣고, 제목·본문 프레임을 각각 따로 확정한다.
+let naverFrames = [];      // 스크립트가 들어간 frameId 목록
+let naverFrameId = null;   // 본문 프레임 (STATUS·FORMAT 기본 대상)
+let naverTitleFrameId = null;
 
-async function findNaverFrame(tabId) {
-  const probe = await chrome.scripting.executeScript({
+async function injectNaver(tabId) {
+  const r = await chrome.scripting.executeScript({
     target: { tabId, allFrames: true },
-    func: () => {
-      const vis = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
-      const eds = Array.from(document.querySelectorAll('[contenteditable="true"]')).filter(vis);
-      return { url: location.href.slice(0, 110), n: eds.length };
-    },
-  });
-
-  const frames = probe.filter(f => f && f.result).map(f => ({ id: f.frameId, ...f.result }));
-  for (const f of frames) blogLog(`프레임 ${f.id}: 입력영역 ${f.n}개 · ${f.url}`);
-
-  const best = frames.filter(f => f.n > 0).sort((a, b) => b.n - a.n)[0];
-  if (!best) return null;
-
-  // 그 프레임에만 스크립트를 넣는다 (naver.js 안에 중복 로드 가드가 있다)
-  await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [best.id] },
     files: ['content/naver.js'],
   });
-  naverFrameId = best.id;
-  blogLog(`에디터 프레임 확정: ${best.id} (입력영역 ${best.n}개)`);
-  return best.id;
+  naverFrames = r.map(x => x.frameId);
+  blogLog(`프레임 ${naverFrames.length}개에 주입 (${naverFrames.join(', ')})`);
+  return naverFrames;
 }
 
-// 확정된 프레임에만 메시지를 보낸다.
-function sendToNaver(tabId, msg) {
+// 한 프레임에만 보낸다.
+function sendFrame(tabId, frameId, msg) {
   return new Promise((resolve) => {
-    const opts = naverFrameId != null ? { frameId: naverFrameId } : undefined;
-    chrome.tabs.sendMessage(tabId, msg, opts, (res) => {
+    chrome.tabs.sendMessage(tabId, msg, { frameId }, (res) => {
       if (chrome.runtime.lastError) return resolve({ ok: false, error: chrome.runtime.lastError.message });
       resolve(res || { ok: false, error: '응답 없음' });
     });
   });
 }
 
-// ─── 제목 채우기 (CDP 진짜 클릭) ───
-//
-// 제목은 에디터가 포커스를 스스로 관리해서 합성 이벤트·Range 로는 커서가 안 들어간다.
-// 좌표를 구해 CDP 로 진짜 클릭을 쏘고 Input.insertText 로 넣는다.
-// 에디터는 iframe 안이므로 iframe 의 화면 위치를 더해 최상위 뷰포트 좌표로 환산한다.
-async function fillNaverTitle(tabId, title) {
-  try {
-    const r = await sendToNaver(tabId, { type: 'NAVER_RECT', area: '제목' });
-    if (!r.ok) { blogLog('제목 영역을 못 찾음 — ' + (r.error || ''), 'warn'); return false; }
-
-    // iframe 오프셋. 에디터가 최상위 프레임이면 0.
-    let ox = 0, oy = 0;
-    if (naverFrameId !== 0) {
-      const top = await chrome.scripting.executeScript({
-        target: { tabId, frameIds: [0] },
-        func: () => {
-          const ifr = document.querySelector('#mainFrame') ||
-            [...document.querySelectorAll('iframe')].sort(
-              (a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
-          if (!ifr) return null;
-          const b = ifr.getBoundingClientRect();
-          return { x: Math.round(b.left), y: Math.round(b.top) };
-        },
-      });
-      const off = top?.[0]?.result;
-      if (off) { ox = off.x; oy = off.y; blogLog(`iframe 오프셋 (${ox}, ${oy})`); }
-    }
-
-    const x = r.x + ox, y = r.y + oy;
-    blogLog(`제목 클릭 좌표 (${x}, ${y}) — 노란 디버깅 배너가 뜹니다`);
-
-    const click = await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x, y });
-    if (!click?.ok) { blogLog('제목 클릭 실패 — ' + (click?.error || ''), 'error'); return false; }
-    await new Promise(res => setTimeout(res, 400));
-
-    const ins = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: title });
-    if (!ins?.ok) { blogLog('제목 입력 실패 — ' + (ins?.error || ''), 'error'); return false; }
-
-    await new Promise(res => setTimeout(res, 400));
-    const chk = await sendToNaver(tabId, { type: 'NAVER_STATUS' });
-    if (chk.ok && chk.titleChars > 0) { blogLog(`제목 채움 (${chk.titleChars}자)`); return true; }
-    blogLog('제목이 비어 있습니다 — 좌표가 어긋났을 수 있습니다', 'warn');
-    return false;
-  } catch (e) {
-    blogLog('제목 처리 오류 — ' + e.message, 'error');
-    return false;
+// 모든 프레임에 물어보고 응답을 모은다.
+async function askAll(tabId, msg) {
+  const out = [];
+  for (const fid of naverFrames) {
+    const res = await sendFrame(tabId, fid, msg);
+    out.push({ frameId: fid, res });
   }
+  return out;
+}
+
+// 그 영역을 가진 프레임을 고른다 — 화면에서 가장 큰 것이 진짜다
+// (제목 iframe 에는 화면 밖으로 회전시켜 둔 보조 요소도 있다).
+async function pickFrameFor(tabId, area) {
+  const all = await askAll(tabId, { type: 'NAVER_RECT', area });
+  const cands = all.filter(x => x.res?.ok);
+  for (const c of cands) {
+    blogLog(`${area} 후보 · 프레임 ${c.frameId} · ${c.res.hint} · ${c.res.w}x${c.res.h} @(${c.res.x},${c.res.y})`);
+  }
+  if (!cands.length) return null;
+  cands.sort((a, b) => b.res.area - a.res.area);
+  return { frameId: cands[0].frameId, rect: cands[0].res };
+}
+
+// 본문 프레임 기준 전송 (하위 호환)
+function sendToNaver(tabId, msg) {
+  const fid = naverFrameId != null ? naverFrameId : 0;
+  return sendFrame(tabId, fid, msg);
+}
+
+// ─── 한 영역에 사람처럼 입력하기 ───
+//
+// 제목이든 본문이든 같은 방식이다 —
+//   ① 그 영역을 가진 프레임과 화면 좌표를 구한다
+//   ② CDP 로 '진짜 클릭' 을 쏴서 커서를 그 자리에 놓는다
+//   ③ CDP Input.insertText + 신뢰 Enter 로 줄 단위로 넣는다
+//
+// 합성 이벤트로는 커서가 안 옮겨지고(제목이 본문으로 들어갔던 이유),
+// 붙여넣기는 SmartEditor 가 자기 모델로 정규화하며 서식을 버린다.
+// 결국 '사람이 클릭하고 타이핑하는 것' 과 같은 경로가 가장 확실하다.
+async function typeIntoArea(tabId, area, text) {
+  const pick = await pickFrameFor(tabId, area);
+  if (!pick) { blogLog(`${area} 영역을 못 찾았습니다`, 'error'); return { ok: false, frameId: null }; }
+  const { frameId, rect } = pick;
+
+  blogLog(`${area} 프레임 ${frameId} 확정 · 클릭 (${rect.x}, ${rect.y})`);
+  const click = await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: rect.x, y: rect.y });
+  if (!click?.ok) { blogLog(`${area} 클릭 실패 — ${click?.error || ''}`, 'error'); return { ok: false, frameId }; }
+  await new Promise(r => setTimeout(r, 450));
+
+  const lines = String(text).split('\n').length;
+  if (lines > 40) blogLog(`${area} ${lines}줄 입력 중… 한 줄씩 실제 타이핑하므로 ${Math.round(lines * 0.25)}초쯤 걸립니다`);
+
+  const ins = await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
+  if (!ins?.ok) { blogLog(`${area} 입력 실패 — ${ins?.error || ''}`, 'error'); return { ok: false, frameId }; }
+
+  await new Promise(r => setTimeout(r, 500));
+  const chk = await sendFrame(tabId, frameId, { type: 'NAVER_STATUS' });
+  const got = area === '제목' ? chk.titleChars : chk.bodyChars;
+  blogLog(`${area} 입력 완료 — 에디터 글자수 ${got ?? '?'}`);
+  return { ok: true, frameId, chars: got };
 }
 
 // ─── 채우기 ───
@@ -2139,65 +2141,60 @@ async function fillNaver() {
   const btn = $('#blogFill');
   btn.disabled = true;
   blogStatus('채우는 중…');
+  const tabIdHolder = {};
   try {
     const tabId = await ensureNaverTab();
-    // 에디터 프레임을 찾는다 (네이버 글쓰기는 로딩이 느려서 몇 번 다시 본다)
-    naverFrameId = null;
-    let ready = false;
-    for (let i = 0; i < 12; i++) {
-      if (await findNaverFrame(tabId)) {
-        const p = await sendToNaver(tabId, { type: 'NAVER_PING' });
-        if (p.ok && p.hasEditor) { ready = true; break; }
-      }
-      await new Promise(r => setTimeout(r, 800));
-    }
-    if (!ready) throw new Error('에디터를 못 찾았습니다. 위 프레임 목록을 확인하고 진단 버튼을 눌러주세요');
+    tabIdHolder.id = tabId;
+    await injectNaver(tabId);
 
-    const keep = $('#blogKeepFormat').checked;
     const p = blogPicked.parsed;
+    const keep = $('#blogKeepFormat').checked;
 
-    // ① 본문 먼저. 제목보다 본문을 먼저 넣어야 제목 클릭이 본문을 밀지 않는다.
-    const res = await sendToNaver(tabId, {
-      type: 'NAVER_FILL',
-      title: null,
-      bodyText: p.text,
-      bodyHtml: keep ? p.html : null,
-    });
-    for (const r of (res.results || [])) {
-      blogLog(r.ok ? `${r.label} 채움 (${r.how})` : `${r.label} 실패 — ${r.reason}`, r.ok ? 'info' : 'warn');
-    }
+    // ① 본문 — 분량이 많아 시간이 걸린다
+    const body = await typeIntoArea(tabId, '본문', p.text);
+    naverFrameId = body.frameId != null ? body.frameId : naverFrameId;
 
-    // ② 소제목 굵게 — 붙여넣은 <strong> 은 에디터가 정규화하며 버린다.
-    //    평문으로 들어간 뒤 '그 줄을 선택 → 굵게' 를 실제 편집 명령으로 적용한다.
-    if (keep && p.bolds?.length) {
-      const f = await sendToNaver(tabId, { type: 'NAVER_FORMAT', bolds: p.bolds, fontSize: 5 });
+    // ② 소제목 굵게 — 넣은 뒤 그 줄을 선택해 실제 편집 명령으로 적용한다
+    if (body.ok && keep && p.bolds?.length) {
+      const f = await sendFrame(tabId, body.frameId, { type: 'NAVER_FORMAT', bolds: p.bolds, fontSize: 5 });
       if (f.ok) {
         blogLog(`소제목 굵게 ${f.applied}/${f.total}개 적용`);
         if (f.missed?.length) blogLog(`못 찾은 소제목: ${f.missed.join(' / ')}`, 'warn');
       } else {
-        blogLog('소제목 굵게 적용 실패 — 에디터에서 직접 지정해주세요', 'warn');
+        blogLog('소제목 굵게 실패 — 에디터에서 직접 지정해주세요', 'warn');
+      }
+
+      // execCommand 가 막혔거나 일부만 먹었으면 CDP 로 진짜 Ctrl+B 를 쏜다.
+      // (선택은 content script 가 잡아두고, CDP 키는 현재 선택에 작용한다)
+      const remain = f.ok ? (f.missed || []) : p.bolds;
+      if (remain.length) {
+        blogLog(`남은 소제목 ${remain.length}개에 CDP 굵게 시도`);
+        let done = 0;
+        for (const line of remain) {
+          const sel = await sendFrame(tabId, body.frameId, { type: 'NAVER_SELECT_LINE', text: line });
+          if (!sel.ok) { blogLog(`  건너뜀 (${line}) — ${sel.error}`, 'warn'); continue; }
+          if (sel.alreadyBold) { done++; continue; }
+          await sendBg({ type: 'NAVER_CDP_BOLD', tabId });
+          await new Promise(r => setTimeout(r, 160));
+          const chk = await sendFrame(tabId, body.frameId, { type: 'NAVER_BOLD_CHECK', text: line });
+          if (chk.bold) done++;
+        }
+        blogLog(`CDP 굵게 ${done}/${remain.length}개 성공`, done ? 'info' : 'warn');
       }
     }
 
-    // ③ 제목 — 여기가 까다롭다.
-    //    합성 마우스 이벤트로는 실제 커서가 안 옮겨진다. 그래서 제목에 넣었다고 생각한
-    //    글자가 에디터가 기억하는 본문 위치로 들어가버렸다(1차 시도의 증상).
-    //    → CDP 로 제목 좌표에 '진짜 클릭'을 쏜 뒤 Input.insertText 로 넣는다.
+    // ③ 제목 — 마지막에 넣는다 (제목 클릭이 본문 커서를 밀지 않게)
+    let title = { ok: false };
     if (blogPicked.title) {
-      const ok = await fillNaverTitle(tabId, blogPicked.title);
-      if (!ok) {
+      title = await typeIntoArea(tabId, '제목', blogPicked.title);
+      naverTitleFrameId = title.frameId;
+      if (!title.ok) {
         await navigator.clipboard.writeText(blogPicked.title).catch(() => {});
         blogLog('제목은 직접 입력해주세요 — 클립보드에 복사해뒀습니다', 'warn');
       }
     }
 
-    // 디버거를 떼서 노란 배너를 없앤다 (붙어 있는 상태를 네이버가 볼 이유가 없다)
-    await sendBg({ type: 'NAVER_CDP_DONE', tabId });
-
-    const st = await sendToNaver(tabId, { type: 'NAVER_STATUS' });
-    if (st.ok) blogLog(`현재 에디터: 제목 ${st.titleChars}자 / 본문 ${st.bodyChars}자`);
-
-    if (st.ok && st.bodyChars > 100) {
+    if (body.ok) {
       blogStatus('채웠습니다. 사진 넣고 검토한 뒤 직접 발행하세요', 'ok');
       await navigator.clipboard.writeText(p.tagLine).catch(() => {});
       blogLog('해시태그를 클립보드에 넣어뒀습니다 — 본문 맨 아래에 붙여넣으세요');
@@ -2208,6 +2205,8 @@ async function fillNaver() {
     blogLog(e.message, 'error');
     blogStatus(e.message, 'error');
   } finally {
+    // 디버거를 떼서 노란 배너를 없앤다 (붙어 있는 상태를 네이버가 볼 이유가 없다)
+    if (tabIdHolder.id) await sendBg({ type: 'NAVER_CDP_DONE', tabId: tabIdHolder.id });
     btn.disabled = false;
   }
 }
@@ -2244,27 +2243,24 @@ async function saveBlogImages() {
 }
 
 // ─── 진단 ───
+// 프레임마다 구조를 뽑는다. 에디터가 바뀌어 셀렉터가 어긋날 때 이걸 보고 고친다.
 async function diagnoseNaver() {
   try {
     const tabId = await ensureNaverTab();
-    naverFrameId = null;
-    const fid = await findNaverFrame(tabId);
-    if (fid == null) {
-      // 입력영역이 아예 없으면 프레임 목록만이라도 보여준다 (에디터 구조가 바뀐 경우)
-      const all = await chrome.scripting.executeScript({
-        target: { tabId, allFrames: true },
-        func: () => ({ url: location.href.slice(0, 140), tags: document.body ? document.body.children.length : 0 }),
-      });
-      console.log('[MangoAuto] 프레임 목록', all);
-      blogLog(`입력영역이 있는 프레임이 없습니다. 프레임 ${all.length}개 정보를 콘솔에 출력했습니다`, 'error');
-      await navigator.clipboard.writeText(JSON.stringify(all, null, 2)).catch(() => {});
-      return;
+    await injectNaver(tabId);
+    const all = await askAll(tabId, { type: 'NAVER_DIAGNOSE' });
+    const dump = all.map(x => ({ frameId: x.frameId, ...(x.res?.info || { error: x.res?.error }) }));
+    console.log('[MangoAuto] 네이버 프레임 진단', dump);
+    for (const d of dump) {
+      if (d.error) { blogLog(`프레임 ${d.frameId}: ${d.error}`, 'warn'); continue; }
+      blogLog(`프레임 ${d.frameId} (${d.frame}) · 입력영역 ${d.editableCount}개 · 제목 ${d.titleFound ? 'O' : 'X'} · 본문 ${d.bodyFound ? 'O' : 'X'} · file input ${d.fileInputs?.length ?? 0}`);
     }
-    const r = await sendToNaver(tabId, { type: 'NAVER_DIAGNOSE' });
-    if (!r.ok) { blogLog('진단 실패 — ' + (r.error || '에디터 없음'), 'error'); return; }
-    console.log('[MangoAuto] 네이버 에디터 진단', r.info);
-    blogLog(`진단: contenteditable ${r.info.editableCount}개, 제목 ${r.info.titleFound ? 'O' : 'X'}, 본문 ${r.info.bodyFound ? 'O' : 'X'}, file input ${r.info.fileInputs.length}개`);
-    await navigator.clipboard.writeText(JSON.stringify(r.info, null, 2)).catch(() => {});
+    // 어느 프레임이 어느 영역을 갖는지도 같이 확인
+    for (const area of ['제목', '본문']) {
+      const pick = await pickFrameFor(tabId, area);
+      blogLog(pick ? `→ ${area} 은 프레임 ${pick.frameId}` : `→ ${area} 을 가진 프레임이 없음`, pick ? 'info' : 'error');
+    }
+    await navigator.clipboard.writeText(JSON.stringify(dump, null, 2)).catch(() => {});
     blogLog('상세 구조를 클립보드에 복사했습니다 (콘솔에도 출력)');
   } catch (e) {
     blogLog(e.message, 'error');

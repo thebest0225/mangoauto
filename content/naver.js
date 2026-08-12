@@ -5,14 +5,17 @@
 // ⚠️ 자동 "발행"은 하지 않는다. 채우기까지만 하고 검토·발행은 사람이 한다.
 //    (네이버는 자동 발행 패턴을 계정 제재 사유로 본다. 채우기만 하면 수동 작성과 구분되지 않는다.)
 //
-// SmartEditor ONE 은 iframe(#mainFrame) 안에서 돈다. 그래서 이 스크립트는
-// all_frames:true 로 주입되고, 에디터를 실제로 가진 프레임만 응답한다.
+// ★실제로 겪어서 알게 된 것 (2026-08-12, 3차 시도까지)
+//  · 제목과 본문이 서로 다른 iframe 에 있다. 프레임을 하나만 골라 둘 다 찾으면 실패한다.
+//    → 모든 프레임에 주입하고, 영역별로 프레임을 따로 확정한다(가장 큰 것이 진짜).
+//  · 합성 마우스 이벤트로는 실제 커서가 안 옮겨진다. 제목에 넣은 글자가 에디터가 기억하는
+//    본문 위치로 들어갔다. → CDP 로 진짜 클릭을 쏜다.
+//  · 합성 paste 와 execCommand('insertHTML') 은 에디터가 막거나 자기 모델로 정규화하면서
+//    <strong>·<hr> 을 버린다. → 평문으로 넣고, 굵게는 '그 줄 선택 → 편집 명령' 으로 따로.
+//  · 결국 사람이 클릭하고 타이핑하는 것과 같은 경로(CDP)가 가장 확실하다.
 //
-// 입력 경로는 3단계로 내려간다 —
-//   1) 합성 paste (ClipboardEvent + DataTransfer) — 배너 없음, 서식 유지. 대개 여기서 끝난다.
-//   2) execCommand insertHTML / insertText — paste 를 막는 에디터 대응
-//   3) CDP Input.insertText (background 가 처리) — 위 둘이 다 막힐 때. 노란 배너가 뜬다.
-// 각 단계 후 실제로 글자가 들어갔는지 검증하고, 안 들어갔으면 다음 단계로 내려간다.
+// 좌표는 반드시 최상위 뷰포트 기준이어야 한다 — viewportRect() 가 frameElement 를 타고
+// 올라가며 iframe 오프셋을 더한다 (blog.naver.com 안은 모두 같은 출처).
 
 (function () {
   'use strict';
@@ -97,6 +100,25 @@
 
   // ─── 텍스트 양 측정 — 입력 성공 여부 판정에 쓴다 ───
   const textLen = (el) => (el ? (el.innerText || el.textContent || el.value || '').trim().length : 0);
+
+  // ─── 최상위 뷰포트 기준 좌표 ───
+  // 제목과 본문이 서로 다른 iframe 에 있어서, 프레임마다 자기 오프셋을 스스로 더해야
+  // CDP 클릭 좌표가 맞는다. blog.naver.com 안은 모두 같은 출처라 frameElement 를 탈 수 있다.
+  function viewportRect(el) {
+    const r = el.getBoundingClientRect();
+    let x = r.left, y = r.top, w = window, guard = 0;
+    try {
+      while (w !== w.parent && w.frameElement && guard++ < 8) {
+        const fr = w.frameElement.getBoundingClientRect();
+        x += fr.left; y += fr.top;
+        w = w.parent;
+      }
+    } catch (_) { /* 다른 출처면 거기서 멈춘다 */ }
+    return { x, y, w: r.width, h: r.height };
+  }
+
+  const describe = (el) => !el ? '' :
+    (el.tagName.toLowerCase() + (el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : '')).slice(0, 60);
 
   // ─── 포커스 + 커서를 끝으로 ───
   function focusEnd(el) {
@@ -276,8 +298,9 @@
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !String(msg.type || '').startsWith('NAVER_')) return;
 
-    // 에디터 없는 프레임은 조용히 빠진다 — all_frames 라서 여러 프레임이 응답하면 꼬인다.
-    if (msg.type !== 'NAVER_PING' && !hasEditor()) return;
+    // 에디터 없는 프레임은 조용히 빠진다. 단 PING·DIAGNOSE 는 모든 프레임이 답해야
+    // 어느 프레임에 무엇이 있는지 알 수 있다.
+    if (msg.type !== 'NAVER_PING' && msg.type !== 'NAVER_DIAGNOSE' && !hasEditor()) return;
 
     (async () => {
       try {
@@ -336,18 +359,22 @@
           }
 
           case 'NAVER_RECT': {
-            // 제목/본문 영역의 화면 좌표. CDP 로 '진짜 클릭'을 쏠 위치를 알아내는 데 쓴다.
+            // 제목/본문 영역의 '최상위 뷰포트' 좌표. CDP 로 진짜 클릭을 쏠 위치다.
             const el = msg.area === '제목' ? findTitle() : findBody();
             if (!el) { sendResponse({ ok: false, error: `${msg.area} 영역 없음` }); return; }
             el.scrollIntoView({ block: 'center', behavior: 'instant' });
             await sleep(150);
-            const r = el.getBoundingClientRect();
+            const v = viewportRect(el);
+            if (!v.w || !v.h) { sendResponse({ ok: false, error: `${msg.area} 영역 크기 0` }); return; }
             sendResponse({
               ok: true,
               // 왼쪽 끝에 붙여 클릭한다 (가운데를 찍으면 글자 사이에 커서가 낀다)
-              x: Math.round(r.left + 12), y: Math.round(r.top + r.height / 2),
-              w: Math.round(r.width), h: Math.round(r.height),
+              x: Math.round(v.x + 12), y: Math.round(v.y + v.h / 2),
+              w: Math.round(v.w), h: Math.round(v.h),
+              area: Math.round(v.w * v.h),
               chars: textLen(el),
+              frame: window === window.top ? 'top' : 'iframe',
+              hint: describe(el),
             });
             return;
           }
@@ -397,6 +424,52 @@
               total: want.size,
               missed: [...want].filter((t) => !found.has(t)),
             });
+            return;
+          }
+
+          case 'NAVER_SELECT_LINE': {
+            // execCommand('bold') 가 에디터에 막힐 때를 위한 경로.
+            // 여기서 그 줄을 '선택' 만 해두면 CDP 가 진짜 Ctrl+B 를 쏜다.
+            const target = String(msg.text || '').trim();
+            if (!target) { sendResponse({ ok: false, error: '빈 문자열' }); return; }
+            const root = (findBody() && findBody().closest('[contenteditable="true"]')) || document.body;
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            let n, hit = null;
+            while ((n = walker.nextNode())) {
+              if ((n.nodeValue || '').trim() === target) { hit = n; break; }
+            }
+            if (!hit) { sendResponse({ ok: false, error: '그 줄을 못 찾음' }); return; }
+            try {
+              const r = document.createRange();
+              r.selectNodeContents(hit);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(r);
+              const p = hit.parentElement;
+              const v = viewportRect(p || hit.parentNode);
+              sendResponse({
+                ok: true,
+                alreadyBold: !!(p && p.closest('b,strong')),
+                x: Math.round(v.x + 12), y: Math.round(v.y + v.h / 2),
+              });
+            } catch (e) { sendResponse({ ok: false, error: String(e.message || e) }); }
+            return;
+          }
+
+          case 'NAVER_BOLD_CHECK': {
+            // CDP Ctrl+B 후 실제로 굵어졌는지 확인
+            const target = String(msg.text || '').trim();
+            const root = (findBody() && findBody().closest('[contenteditable="true"]')) || document.body;
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            let n, bold = false;
+            while ((n = walker.nextNode())) {
+              if ((n.nodeValue || '').trim() === target) {
+                const p = n.parentElement;
+                bold = !!(p && (p.closest('b,strong') || /^(bold|[6-9]00)$/i.test(getComputedStyle(p).fontWeight)));
+                break;
+              }
+            }
+            sendResponse({ ok: true, bold });
             return;
           }
 
