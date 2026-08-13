@@ -910,6 +910,32 @@
             return;
           }
 
+          case 'NAVER_TABLE_CELL': {
+            // ⚠️ 셀 좌표를 한 번에 다 받아두면 안 된다. 한 셀에 글이 들어가는 순간
+            //    줄바꿈으로 행 높이가 커져서 아래 행들의 좌표가 전부 밀린다.
+            //    (8행 표에서 2~4행 내용이 1행 셀에 다 들어갔다.)
+            //    그래서 쓰기 직전에 그 셀 하나만 다시 재고, 화면 밖이면 스크롤한다.
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '표를 못 찾음' }); return; }
+            const tr = t.querySelectorAll('tr')[msg.r];
+            if (!tr) { sendResponse({ ok: false, error: `${msg.r}행이 없음` }); return; }
+            const td = tr.querySelectorAll('td,th')[msg.c];
+            if (!td) { sendResponse({ ok: false, error: `${msg.r},${msg.c} 칸이 없음` }); return; }
+            const target = td.querySelector('[class*="paragraph"], [contenteditable]') || td;
+            target.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(160);
+            const v = viewportRect(target);
+            sendResponse({
+              ok: true,
+              x: Math.round(v.x + Math.min(14, v.w / 2)),
+              y: Math.round(v.y + v.h / 2),
+              w: Math.round(v.w), h: Math.round(v.h),
+              had: (td.innerText || '').trim().length,
+            });
+            return;
+          }
+
           case 'NAVER_TABLE_TEXT': {
             // 표에 들어간 내용 검증용 — 셀별 글자수
             const tabs = document.querySelectorAll('[class*="se-table"], table');

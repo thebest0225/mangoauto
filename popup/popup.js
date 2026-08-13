@@ -2541,17 +2541,28 @@ async function insertTables(tabId, frameId, tables) {
       const cells = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_CELLS' });
       if (!cells.ok || !cells.grid?.length) { blogLog(`  ${t.marker} 셀 좌표를 못 구함`, 'warn'); continue; }
       blogLog(`  ${t.marker} 표 ${cells.rows}×${cells.cols} 준비 (원하던 ${rows}×${cols})`);
+      let miss = 0;
       for (let r = 0; r < Math.min(rows, cells.rows); r++) {
         for (let c = 0; c < Math.min(cols, cells.cols); c++) {
           const text = t.rows[r][c];
           if (!text) continue;
-          const cell = cells.grid[r][c];
+          // ⚠️ 쓰기 직전에 그 셀 좌표를 다시 잰다. 앞 셀에 글이 들어가면 행 높이가
+          //    커져서 미리 받아둔 아래 행 좌표가 전부 밀린다(1행에 다 뭉쳤던 원인).
+          const cell = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_CELL', r, c });
+          if (!cell.ok) { miss++; continue; }
           await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: cell.x, y: cell.y });
-          await new Promise(x => setTimeout(x, 170));
+          await new Promise(x => setTimeout(x, 180));
           await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text });
-          await new Promise(x => setTimeout(x, 110));
+          await new Promise(x => setTimeout(x, 120));
+          // 그 칸에 실제로 늘어났는지 본다. 엉뚱한 칸에 들어갔으면 여기서 드러난다.
+          const now = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_CELL', r, c });
+          if (now.ok && now.had <= (cell.had || 0)) {
+            miss++;
+            console.log('[MangoAuto] 셀 입력 실패', r, c, text, cell, now);
+          }
         }
       }
+      if (miss) blogLog(`  ${t.marker} 칸 ${miss}개가 엉뚱한 곳에 들어갔을 수 있습니다`, 'warn');
 
       // ⑥ 칸마다 실제로 들어갔는지 센다
       const vfy = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_TEXT' });
