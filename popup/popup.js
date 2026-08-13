@@ -3163,6 +3163,24 @@ function renderPhotoSlots(photos) {
 
 function bindBlogEvents() {
   $('#blogRefresh')?.addEventListener('click', loadBlogDrafts);
+  $('#blogWrite')?.addEventListener('click', async () => {
+    // 이미 글쓰기 탭이 열려 있으면 새로 열지 않고 그 탭으로 간다 —
+    // 새 탭을 열면 작업 중인 내용이 두 탭으로 갈려서 어디에 채울지 헷갈린다.
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://blog.naver.com/*' });
+      const writing = tabs.find(t => /PostWriteForm|Redirect=Write/i.test(t.url || ''));
+      if (writing) {
+        await chrome.tabs.update(writing.id, { active: true });
+        await chrome.windows.update(writing.windowId, { focused: true });
+        blogLog('이미 열려 있는 글쓰기 탭으로 이동했습니다');
+        return;
+      }
+      await chrome.tabs.create({ url: NAVER_WRITE_URL, active: true });
+      blogLog('네이버 글쓰기 페이지를 열었습니다');
+    } catch (e) {
+      blogLog(`글쓰기 페이지를 열지 못했습니다 — ${e.message || e}`, 'error');
+    }
+  });
   $('#blogMatchPub')?.addEventListener('click', async () => {
     // 예약발행 대응 — 3시간마다 자동으로도 돌지만 지금 바로 확인하고 싶을 때
     blogLog('네이버 발행글과 초안을 대조합니다…');
