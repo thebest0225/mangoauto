@@ -272,6 +272,129 @@ async function matchPublishedNaverPosts({ minScore = 0.85, apply = true } = {}) 
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  니치 분석 — 네이버 블로그 검색 상위 글의 제목을 모아온다
+//
+//  왜 확장이 하나
+//    네이버 robots.txt 는 blog.naver.com 과 search.naver.com 에 대해 ClaudeBot 을
+//    명시적으로 금지한다. 그래서 서버에서 검색결과를 긁을 수 없다.
+//    사용자 브라우저에서 사용자 세션으로 보는 건 그냥 검색하는 것과 같으므로,
+//    수집은 여기서 하고 서버에는 결과만 보낸다.
+//
+//  왜 방어적으로 짜나
+//    네이버 검색 DOM 은 자주 바뀐다. 선택자 하나에 의존하면 어느 날 조용히 0건이 된다.
+//    그래서 여러 선택자를 순서대로 시도하고, 전부 실패하면 blog.naver.com 링크를
+//    훑는 일반 경로로 떨어진다. 어느 경로로 잡았는지 함께 돌려줘 진단할 수 있게 한다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NICHE_SEARCH_URL = (kw) =>
+  `https://search.naver.com/search.naver?ssc=tab.blog.all&sm=tab_jum&query=${encodeURIComponent(kw)}`;
+
+// 검색 결과 페이지에서 실행된다(주입 함수라 바깥 스코프를 쓸 수 없다).
+function _extractNaverBlogSerp(limit) {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const out = [];
+  let via = '';
+
+  // ① 최신 구조 — 결과 카드마다 제목 링크와 블로그명이 함께 있다
+  const CARD = ['.view_wrap', '.total_wrap', 'li.bx', '.detail_box'];
+  for (const sel of CARD) {
+    const cards = Array.from(document.querySelectorAll(sel));
+    if (cards.length < 3) continue;
+    for (const c of cards) {
+      const a = c.querySelector('a.title_link, a.link_tit, .title_area a, .total_tit a');
+      if (!a) continue;
+      const href = a.href || '';
+      if (!/blog\.naver\.com|blog\.me/.test(href)) continue;
+      const blog = clean((c.querySelector('.name, .user_info a, .sub_name, .elss') || {}).textContent);
+      const date = clean((c.querySelector('.sub_time, .date, .time') || {}).textContent);
+      out.push({ title: clean(a.textContent), url: href.split('?')[0], blog, date });
+      if (out.length >= limit) break;
+    }
+    if (out.length) { via = sel; break; }
+  }
+
+  // ② 실패하면 blog.naver.com 링크를 직접 훑는다
+  if (!out.length) {
+    const seen = new Set();
+    for (const a of document.querySelectorAll('a[href*="blog.naver.com"]')) {
+      const t = clean(a.textContent);
+      // 제목 링크만 남긴다 — 너무 짧거나 UI 문구인 것은 버린다
+      if (t.length < 8 || /더보기|블로그 홈|바로가기|이웃추가/.test(t)) continue;
+      const url = (a.href || '').split('?')[0];
+      if (seen.has(url)) continue;
+      seen.add(url);
+      out.push({ title: t, url, blog: '', date: '' });
+      if (out.length >= limit) break;
+    }
+    if (out.length) via = 'a[href*=blog.naver.com]';
+  }
+
+  return { ok: !!out.length, via, count: out.length, items: out,
+           pageTitle: document.title, url: location.href };
+}
+
+// 키워드 하나를 검색해 상위 제목을 긁는다. 탭은 백그라운드로 열고 바로 닫는다.
+async function scanOneKeyword(kw, limit = 10) {
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: NICHE_SEARCH_URL(kw), active: false });
+    // 로드 완료를 기다린다 (검색 결과는 스크립트로 그려지는 부분이 있어 여유를 둔다)
+    await new Promise((resolve) => {
+      const done = (id, info) => {
+        if (id === tab.id && info.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(done);
+          resolve();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(done);
+      setTimeout(() => { chrome.tabs.onUpdated.removeListener(done); resolve(); }, 12000);
+    });
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: _extractNaverBlogSerp,
+      args: [limit],
+    });
+    return { keyword: kw, ...(res && res.result ? res.result : { ok: false, error: '주입 실패' }) };
+  } catch (e) {
+    return { keyword: kw, ok: false, error: String((e && e.message) || e) };
+  } finally {
+    if (tab && tab.id) { try { await chrome.tabs.remove(tab.id); } catch (_) {} }
+  }
+}
+
+// 키워드 여러 개를 순서대로 훑고 결과를 블로그라이터에 보낸다.
+async function scanNaverNiche({ keywords = [], limit = 10, save = true } = {}) {
+  const report = { scanned: 0, total: 0, results: [], errors: [] };
+  for (const kw of keywords) {
+    const r = await scanOneKeyword(kw, limit);
+    report.scanned++;
+    if (r.ok) { report.total += r.count; report.results.push(r); }
+    else report.errors.push(`${kw}: ${r.error || '결과 없음'}`);
+    broadcastLog(`[니치] "${kw}" ${r.ok ? `${r.count}건 (${r.via})` : `실패 — ${r.error || '결과 없음'}`}`,
+                 r.ok ? 'info' : 'warn');
+    // 연속 요청으로 보이지 않게 사이를 둔다
+    await new Promise((x) => setTimeout(x, 1500 + Math.floor(Math.random() * 1200)));
+  }
+
+  if (save && report.results.length) {
+    try {
+      const resp = await fetch(`${BW_BASE}/api/niche/observe`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site: 'naver', results: report.results }),
+      });
+      report.saved = resp.ok;
+      if (!resp.ok) report.errors.push(`저장 실패 ${resp.status}`);
+    } catch (e) {
+      report.errors.push(`저장 실패 ${e.message}`);
+    }
+  }
+  return report;
+}
+
 // 3시간마다 알아서 대조한다. 브라우저가 켜져 있는 동안만 돈다.
 chrome.alarms.create('naverMatch', { periodInMinutes: 180, delayInMinutes: 3 });
 
@@ -748,6 +871,11 @@ async function handleMessage(msg, sender) {
 
     case 'NAVER_MATCH_PUBLISHED':
       return await matchPublishedNaverPosts({ apply: msg.apply !== false });
+
+    // 니치 분석 — 사용자 브라우저에서 네이버 블로그 검색 상위 제목을 모아온다
+    case 'NAVER_NICHE_SCAN':
+      return await scanNaverNiche({
+        keywords: msg.keywords || [], limit: msg.limit || 10, save: msg.save !== false });
 
     // 네이버 작업이 끝나면 디버거를 뗀다 — 노란 배너를 계속 띄워두지 않는다.
     case 'NAVER_CDP_DONE':

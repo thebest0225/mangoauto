@@ -3174,6 +3174,34 @@ function renderPhotoSlots(photos) {
 
 function bindBlogEvents() {
   $('#blogRefresh')?.addEventListener('click', loadBlogDrafts);
+  $('#blogNiche')?.addEventListener('click', async () => {
+    // 네이버가 robots.txt 로 서버 크롤링을 막아서, 수집은 사용자 브라우저에서 한다.
+    // 검색 탭을 백그라운드로 열고 제목만 긁은 뒤 바로 닫는다.
+    const raw = prompt('검색할 키워드 (쉼표로 여러 개)\n예: 강아지 여름 산책, 반려견 동반 호텔',
+                       '강아지 여름 산책, 반려견 동반 카페');
+    if (!raw) return;
+    const keywords = raw.split(',').map(x => x.trim()).filter(Boolean).slice(0, 6);
+    if (!keywords.length) return;
+    const btn = $('#blogNiche');
+    btn.disabled = true; btn.textContent = '수집…';
+    blogLog(`니치 분석 시작 — ${keywords.length}개 키워드. 검색 탭이 잠깐씩 열렸다 닫힙니다`);
+    try {
+      const r = await sendBg({ type: 'NAVER_NICHE_SCAN', keywords, limit: 10 });
+      if (!r) throw new Error('응답 없음');
+      if (r.error) throw new Error(r.error);
+      blogLog(`니치 분석 완료 — ${r.scanned}개 키워드 / 제목 ${r.total}건` +
+              (r.saved ? ' · 블로그라이터에 저장됨' : ''), r.total ? 'info' : 'warn');
+      (r.errors || []).forEach(e => blogLog(`  ${e}`, 'warn'));
+      for (const g of (r.results || [])) {
+        blogLog(`  "${g.keyword}" ${g.count}건`);
+        (g.items || []).slice(0, 3).forEach((it, i) => blogLog(`    ${i + 1}. ${it.title.slice(0, 42)}`));
+      }
+    } catch (e) {
+      blogLog(`니치 분석 실패 — ${e.message || e}`, 'error');
+    }
+    btn.disabled = false; btn.textContent = '니치';
+  });
+
   $('#blogWrite')?.addEventListener('click', async () => {
     // 이미 글쓰기 탭이 열려 있으면 새로 열지 않고 그 탭으로 간다 —
     // 새 탭을 열면 작업 중인 내용이 두 탭으로 갈려서 어디에 채울지 헷갈린다.
