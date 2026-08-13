@@ -161,7 +161,9 @@ async function fetchNaverPostList() {
 }
 
 // 초안 ↔ 발행글 대조. 확실한 것만 자동 처리한다.
-async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) {
+// minScore 0.75 는 '강아지 …' 로 시작하는 제목들을 잘못 붙였다. 0.85 로 올리고
+// 0.5~0.85 는 '애매' 로 남겨 사람이 확인한다(패널에서 주소를 직접 넣을 수 있다).
+async function matchPublishedNaverPosts({ minScore = 0.85, apply = true } = {}) {
   const report = { posts: 0, drafts: 0, matched: [], unsure: [], tried: '', error: '' };
   try {
     const { posts, tried } = await fetchNaverPostList();
@@ -191,13 +193,43 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
     report.drafts = items.length;
     report.backfill = items.filter(i => i._backfill).length;
 
+    // ⚠️ 초안마다 독립적으로 최고점을 고르면 두 초안이 같은 글을 가져가거나 서로 뒤바뀐다.
+    //    ('발 씻기' 와 '귀 청소' 처럼 앞머리가 같은 제목에서 실제로 잘못 매칭됐다.)
+    //    그래서 ① 이미 다른 항목이 쓰는 주소는 후보에서 빼고
+    //          ② 모든 (초안×글) 점수를 만들어 높은 순으로 1:1 로만 배정한다.
+    const usedLogNo = new Set();
+    for (const st of ['published']) {
+      try {
+        const wr = await fetch(`${BW_BASE}/api/work?status=${st}`, { credentials: 'include' });
+        if (wr.ok) for (const it of ((await wr.json()).items || [])) {
+          if (!isNaver(it) || !it.published_url) continue;
+          if (items.some((x) => x.id === it.id)) continue;   // 지금 매칭 대상은 제외
+          const m = String(it.published_url).match(/(\d{6,})\s*$/);
+          if (m) usedLogNo.add(m[1]);
+        }
+      } catch {}
+    }
+    const free = posts.filter((p) => !usedLogNo.has(String(p.logNo)));
+    report.postsFree = free.length;
+
+    const pairs = [];
     for (const it of items) {
-      let best = null, bestScore = 0;
-      for (const p of posts) {
+      for (const p of free) {
         const sc = _titleSim(it.title, p.title);
-        if (sc > bestScore) { bestScore = sc; best = p; }
+        if (sc >= 0.5) pairs.push({ it, p, sc });
       }
-      if (!best) continue;
+    }
+    pairs.sort((a, b) => b.sc - a.sc);
+
+    const takenItem = new Set(), takenPost = new Set();
+    const picks = [];
+    for (const pr of pairs) {
+      if (takenItem.has(pr.it.id) || takenPost.has(pr.p.logNo)) continue;
+      takenItem.add(pr.it.id); takenPost.add(pr.p.logNo);
+      picks.push(pr);
+    }
+
+    for (const { it, p: best, sc: bestScore } of picks) {
       const row = {
         id: it.id, draftTitle: it.title, postTitle: best.title,
         url: `https://blog.naver.com/${NAVER_BLOG_ID}/${best.logNo}`,
@@ -215,7 +247,8 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
               title: it.title, status: 'published',
               published_url: row.url,
               publish_mode: it.publish_mode || 'scheduled',
-              note: it._backfill ? `${it.note || '예약발행'} → 주소 확인됨` : (it.note ?? undefined),
+              // 유사도와 매칭된 글 제목을 남긴다. 잘못 매칭됐을 때 이걸 보고 판단한다.
+              note: `${it._backfill ? (it.note || '예약발행') + ' → ' : ''}자동대조 유사도 ${row.score} · "${String(best.title).slice(0, 40)}"`,
             }),
           });
           row.applied = up.ok;
@@ -227,7 +260,7 @@ async function matchPublishedNaverPosts({ minScore = 0.75, apply = true } = {}) 
     }
 
     const n = report.matched.length;
-    broadcastLog(`[네이버 대조] 발행글 ${report.posts}건 · 대상 ${report.drafts}건(주소대기 ${report.backfill}건) → ${n}건 처리` +
+    broadcastLog(`[네이버 대조] 발행글 ${report.posts}건(미사용 ${report.postsFree}건) · 대상 ${report.drafts}건(주소대기 ${report.backfill}건) → ${n}건 처리` +
                  (report.unsure.length ? ` (애매 ${report.unsure.length}건은 그대로 둠)` : ''), n ? 'info' : 'info');
     for (const m of report.matched) broadcastLog(`  ✓${m.backfill ? '[주소채움]' : ''} ${m.draftTitle.slice(0, 26)} → ${m.url} (유사도 ${m.score})`, 'info');
     for (const m of report.unsure) broadcastLog(`  ? ${m.draftTitle.slice(0, 28)} ~ ${m.postTitle.slice(0, 28)} (유사도 ${m.score}) — 수동 확인`, 'warn');

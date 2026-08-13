@@ -1680,6 +1680,8 @@ function renderReviewList() {
 //    그래서 채울 때 그 자리에서 바이트로 내려받아 네이버에 올린다 (핫링크 금지 원칙과 같은 이유).
 
 const BLOGWRITE_BASE = 'https://write.mangois.love';
+// 주소를 손으로 고칠 때 글번호만 넣어도 되게 하려고 여기에도 둔다(background 와 같은 값).
+const NAVER_BLOG_ID = 'mangoabba';
 const NAVER_WRITE_URL = 'https://blog.naver.com/mangoabba?Redirect=Write';
 
 let blogItems = [];
@@ -1768,11 +1770,84 @@ function renderBlogList() {
         if (it.published_url) chrome.tabs.create({ url: it.published_url, active: true });
         else blogLog(`주소 대기 중입니다. ${it.note || ''}`.trim(), 'warn');
       });
-    } else {
-      card.addEventListener('click', () => pickBlogDraft(it.id));
+      list.appendChild(card);
+      list.appendChild(buildUrlEditor(it));
+      continue;
     }
+    card.addEventListener('click', () => pickBlogDraft(it.id));
     list.appendChild(card);
   }
+}
+
+// 자동 대조가 잘못 붙인 주소를 고치는 줄. 발행완료 목록에만 붙는다.
+// 카드가 <button> 이라 안에 버튼을 넣을 수 없어서 형제 요소로 만든다.
+function buildUrlEditor(it) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="blog-url-row">
+      <input class="blog-url-input" type="text" spellcheck="false"
+             placeholder="https://blog.naver.com/mangoabba/224…">
+      <button class="btn-ghost btn-xs u-save" title="이 주소로 저장">저장</button>
+      <button class="btn-ghost btn-xs u-clear" title="주소를 비워 다음 대조에서 다시 찾게 합니다">지우기</button>
+    </div>
+    <div class="blog-url-note"></div>`;
+
+  const input = wrap.querySelector('.blog-url-input');
+  const note = wrap.querySelector('.blog-url-note');
+  input.value = it.published_url || '';
+  if (it.note) {
+    note.textContent = it.note;
+    // 유사도가 낮으면 눈에 띄게 — 잘못 붙었을 가능성이 그만큼 높다
+    const m = String(it.note).match(/유사도\s*([\d.]+)/);
+    if (m && parseFloat(m[1]) < 0.9) note.classList.add('low');
+  }
+  input.addEventListener('input', () => {
+    input.classList.toggle('dirty', input.value.trim() !== (it.published_url || ''));
+  });
+
+  const save = async (url) => {
+    const clean = String(url || '').trim();
+    // 글번호만 붙여넣어도 되게 한다 — 주소창에서 숫자만 복사하는 경우가 많다
+    const only = clean.match(/^\d{6,}$/);
+    const finalUrl = only ? `https://blog.naver.com/${NAVER_BLOG_ID}/${clean}` : clean;
+    if (finalUrl && !/^https:\/\/blog\.naver\.com\/[^/]+\/\d{6,}$/.test(finalUrl)) {
+      blogLog('주소 형식이 아닙니다 — https://blog.naver.com/아이디/글번호 또는 글번호만 넣어주세요', 'warn');
+      return;
+    }
+    if (finalUrl) {
+      const taken = await urlTakenBy(finalUrl, it.id);
+      if (taken) {
+        blogLog(`이 주소는 이미 "${(taken.title || '').slice(0, 26)}" 에 붙어 있습니다. ` +
+                `그 글의 주소를 먼저 지우거나 고쳐주세요`, 'error');
+        return;
+      }
+    }
+    try {
+      const r = await fetch(BLOGWRITE_BASE + '/api/work', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          // ⚠️ upsertWorkItem 의 UPDATE 는 target·destination_id·title 에 COALESCE 를 안 쓴다.
+          //    같이 보내지 않으면 지워진다.
+          id: it.id, target: it.target || 'naver',
+          destination_id: it.destination_id || 'naver_mango',
+          title: it.title, status: 'published',
+          published_url: finalUrl,
+          note: finalUrl ? '수동 확인' : '주소 비움 — 다음 대조에서 다시 찾습니다',
+        }),
+      });
+      if (!r.ok) throw new Error(`블로그라이터 응답 ${r.status}`);
+      blogLog(finalUrl ? `주소를 저장했습니다 — ${finalUrl}` : '주소를 비웠습니다. 다음 대조에서 다시 찾습니다');
+      await loadBlogDrafts();
+    } catch (e) {
+      blogLog(`주소 저장 실패 — ${e.message || e}`, 'error');
+    }
+  };
+
+  wrap.querySelector('.u-save').addEventListener('click', () => save(input.value));
+  wrap.querySelector('.u-clear').addEventListener('click', () => save(''));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(input.value); });
+  return wrap;
 }
 
 // ─── 선택 ───
@@ -2866,15 +2941,37 @@ function normalizeNaverPostUrl(url) {
 }
 
 // 열려 있는 네이버 탭에서 발행된 글 주소를 찾아본다
+// ⚠️ 열려 있는 아무 네이버 탭에서 주소를 주워오면 안 된다.
+//    다른 글을 띄워둔 탭이 있으면 그 주소가 붙는다 — '물놀이' 초안에 '발 씻기' 글
+//    주소가 들어가는 사고가 실제로 났다.
+//    그래서 지금 보고 있는 탭만 본다. 여러 탭 중 하나를 고르는 추측을 하지 않는다.
 async function detectPublishedUrl() {
   try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const hit = normalizeNaverPostUrl(active?.url || '');
+    if (hit) return hit;
+    // 활성 탭이 글 주소가 아니면 후보가 여러 개인지만 알려주고 아무것도 고르지 않는다
     const tabs = await chrome.tabs.query({ url: 'https://blog.naver.com/*' });
-    for (const t of tabs) {
-      const hit = normalizeNaverPostUrl(t.url || '');
-      if (hit) return hit;
+    const cands = tabs.map((t) => normalizeNaverPostUrl(t.url || '')).filter(Boolean);
+    if (cands.length) {
+      blogLog(`네이버 글 탭이 ${cands.length}개 열려 있어 어느 글인지 알 수 없습니다. ` +
+              `발행한 글 탭을 앞으로 두고 다시 누르거나, 주소를 직접 넣어주세요`, 'warn');
     }
   } catch (_) {}
   return '';
+}
+
+// 그 주소를 이미 다른 항목이 쓰고 있는지 본다. 같은 주소가 두 초안에 붙으면
+// 내부 링크 후보가 오염되고 어느 글이 어느 주소인지 알 수 없게 된다.
+async function urlTakenBy(url, selfId) {
+  try {
+    const j = await bwFetch('/api/work?status=published');
+    for (const it of (j.items || [])) {
+      if (it.id === selfId) continue;
+      if ((it.published_url || '') === url) return it;
+    }
+  } catch (_) {}
+  return null;
 }
 
 async function markPublished() {
@@ -2892,6 +2989,16 @@ async function markPublished() {
   // ★예약발행 대응: 주소가 없어도 '표시한 시각' 으로 저장해 목록에서 내린다.
   //   예약을 걸면 그 시점에 글 주소가 아직 없다. 주소가 생긴 뒤에는 3시간마다 도는
   //   자동 대조가 알아서 채운다(그때까지 발행완료 목록에 '주소 대기' 로 보인다).
+  if (norm) {
+    const taken = await urlTakenBy(norm, blogPicked.id);
+    if (taken) {
+      blogLog(`이 주소는 이미 "${(taken.title || '').slice(0, 26)}" 에 붙어 있습니다 — ` +
+              `주소를 확인해 직접 넣어주세요. 비워두면 예약발행으로 저장되고 자동 대조가 찾습니다`, 'error');
+      blogStatus('같은 주소가 다른 글에 이미 있습니다', 'err');
+      return;
+    }
+  }
+
   const scheduled = !norm;
   const stamp = new Date().toLocaleString('ko-KR', { hour12: false });
 
@@ -2906,7 +3013,8 @@ async function markPublished() {
         destination_id: blogPicked.destinationId,
         title: blogPicked.title,
         status: 'published',
-        published_url: norm || null,
+        // 예약발행이면 '' 로 명시해 주소를 비운다(null 은 '기존 유지' 로 해석된다).
+        published_url: scheduled ? '' : (norm || ''),
         publish_mode: scheduled ? 'scheduled' : 'manual',
         note: scheduled ? `예약발행 · ${stamp} 에 발행완료 표시 (주소는 자동 대조로 채움)` : `${stamp} 발행`,
       }),

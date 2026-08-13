@@ -1149,3 +1149,26 @@ button.badge.badge-on { cursor: default; }
 #blogPanel .btn-danger { border-color: rgba(255,120,120,.35); color: #ff9a9a; }
 #blogPanel .btn-danger:hover { background: rgba(255,90,90,.14); border-color: rgba(255,120,120,.6); }
 #blogPanel .confirm-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; font-size: 11px; }
+
+/* ── 발행완료 주소 수정 ─────────────────────────────────────────────
+   자동 대조가 잘못 붙인 주소를 사람이 고칠 수 있어야 한다.
+   ('발 씻기' 와 '귀 청소' 처럼 앞머리 같은 제목에서 실제로 뒤바뀌었다) */
+#blogPanel .blog-url-row {
+  display: flex; gap: 4px; align-items: center;
+  margin: -4px 0 6px; padding: 0 2px;
+}
+#blogPanel .blog-url-input {
+  flex: 1; min-width: 0;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 7px; padding: 5px 7px; color: inherit;
+  font-size: 10.5px; font-family: inherit;
+}
+#blogPanel .blog-url-input:focus {
+  outline: none; border-color: rgba(120,190,255,.5); background: rgba(120,190,255,.07);
+}
+#blogPanel .blog-url-input.dirty { border-color: rgba(255,200,90,.55); }
+#blogPanel .blog-url-note {
+  font-size: 9.5px; color: rgba(255,255,255,.4); padding: 0 4px 6px;
+  word-break: keep-all; line-height: 1.4;
+}
+#blogPanel .blog-url-note.low { color: #ffd27f; }
