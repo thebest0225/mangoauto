@@ -1933,10 +1933,21 @@ function naverizeDraft(md) {
   const ti = src.search(/^[ \t]*##\s*썸네일 프롬프트/m);
   if (ti >= 0) { thumb = src.slice(ti).replace(/^[ \t]*##\s*썸네일 프롬프트\s*/m, '').trim(); src = src.slice(0, ti); }
 
-  // 2) 맨 위 메타 두 줄
+  // 2) 맨 위 메타 줄 — 전부 걷어낸다
+  //
+  // ⚠️ 여기 목록을 빠뜨리면 그 줄이 네이버 글 첫 줄에 그대로 찍힌다.
+  //    실제로 '유형: 경험형' 을 추가하고 여기 안 넣어서 본문에 노출된 적이 있다.
+  //    서버의 parseNaverDraft(playbook.js) 와 같은 목록을 유지할 것.
   const meta = {};
-  src = src.replace(/^\s*카테고리\s*[:：]\s*(.+)$/m, (_, v) => { meta.category = v.trim(); return ''; });
-  src = src.replace(/^\s*원본참고\s*[:：]\s*(.+)$/m, (_, v) => { meta.source = v.trim(); return ''; });
+  const META_KEYS = [
+    ['카테고리', 'category'],   // 발행 카테고리
+    ['원본참고', 'source'],     // 어느 글을 참고했는지
+    ['유형', 'kind'],           // 경험형 / 정보형 — 분량·소제목 밴드를 가른다
+  ];
+  for (const [label, key] of META_KEYS) {
+    src = src.replace(new RegExp(`^\\s*${label}\\s*[:：]\\s*(.+)$`, 'm'),
+      (_, v) => { meta[key] = v.trim(); return ''; });
+  }
 
   // 3) 해시태그 줄 (# 이 3개 이상 있는 줄)
   let tagLine = '';
