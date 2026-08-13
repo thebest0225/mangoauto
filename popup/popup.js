@@ -2509,6 +2509,13 @@ async function insertTables(tabId, frameId, tables) {
       //    버튼 글자에 인덱스가 들어 있어("2행 다음에 행 추가") 마지막 것을 누르면 된다.
       for (const [axis, need, label] of [['col', cols, '열'], ['row', rows, '행']]) {
         for (let guard = 0; guard < 12; guard++) {
+          // ⚠️ 추가 버튼을 한 번 누르면 표 컨트롤이 꺼져 다음 버튼을 못 찾는다
+          //    (3행 → 4행 에서 멈췄다). 매번 셀을 다시 클릭해 컨트롤을 켠다.
+          const fc = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
+          if (fc.ok) {
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: fc.x, y: fc.y });
+            await new Promise(r => setTimeout(r, 280));
+          }
           const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
           if (!st.ok) {
             console.log('[MangoAuto] 표 추가 버튼 없음', st);
@@ -2518,7 +2525,15 @@ async function insertTables(tabId, frameId, tables) {
           const have = axis === 'row' ? st.rows : st.cols;
           if (have >= need) break;
           await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
-          await new Promise(r => setTimeout(r, 320));
+          await new Promise(r => setTimeout(r, 380));
+          // 실제로 늘었는지 확인 — 안 늘면 더 눌러도 소용없다
+          const chk = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
+          const now = chk.ok ? (axis === 'row' ? chk.rows : chk.cols) : have;
+          if (now <= have) {
+            blogLog(`  ${label}이 ${have}에서 안 늘어납니다 — 남은 줄은 표 아래로 보냅니다`, 'warn');
+            break;
+          }
+          blogLog(`  ${label} ${have} → ${now}`);
         }
       }
 
