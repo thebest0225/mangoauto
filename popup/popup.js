@@ -1942,12 +1942,24 @@ function naverizeDraft(md) {
   const META_KEYS = [
     ['카테고리', 'category'],   // 발행 카테고리
     ['원본참고', 'source'],     // 어느 글을 참고했는지
-    ['유형', 'kind'],           // 경험형 / 정보형 — 분량·소제목 밴드를 가른다
+    ['유형', 'kind'],           // 옛 표기 (경험형 / 정보형)
+    ['깊이', 'depth'],          // 가볍게 / 보통 / 깊게 / 아주 깊게
   ];
   for (const [label, key] of META_KEYS) {
     src = src.replace(new RegExp(`^\\s*${label}\\s*[:：]\\s*(.+)$`, 'm'),
       (_, v) => { meta[key] = v.trim(); return ''; });
   }
+  // ⚠️ 위 목록을 빠뜨리면 그 줄이 네이버 글 첫 줄에 그대로 찍힌다. 두 번 당했다
+  //    ('유형:' 이어서 '깊이:'). 그래서 목록에 의존하지 않는 안전망을 둔다 —
+  //    본문 맨 앞의 '라벨: 값' 한 줄짜리 메타는 전부 걷어낸다.
+  //    (도입부 첫 문장에 콜론이 오는 일은 없다. 있으면 그건 메타다.)
+  src = src.replace(/^(?:\s*[가-힣A-Za-z]{2,6}\s*[:：][^\n]*\n)+/, (block) => {
+    for (const line of block.split('\n')) {
+      const m = line.match(/^\s*([가-힣A-Za-z]{2,6})\s*[:：]\s*(.+)$/);
+      if (m && !meta[m[1]]) meta[m[1]] = m[2].trim();   // 모르는 라벨도 보관은 한다
+    }
+    return '';
+  });
 
   // 3) 해시태그 줄 (# 이 3개 이상 있는 줄)
   let tagLine = '';
