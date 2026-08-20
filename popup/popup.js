@@ -1502,8 +1502,27 @@ async function loadSettings() {
 }
 
 // ─── Helpers ───
-function sendBg(msg) {
-  return chrome.runtime.sendMessage(msg);
+// ⚠️ MV3 서비스워커는 유휴 상태면 종료된다. 첫 sendMessage 가 깨우는 도중
+//    "Could not establish connection. Receiving end does not exist." 로 실패할 수 있다.
+//    한 번 더 보내면 대개 붙는다. 그래도 안 되면 패널이 옛 확장 컨텍스트에 묶인 것이라
+//    (확장을 새로고침했는데 패널을 안 닫은 경우) 사람이 패널을 다시 열어야 한다.
+//    크롬 원문 영어 오류를 그대로 노출하면 무슨 뜻인지 알 수 없으므로 한국어로 바꾼다.
+const _BG_DEAD = /Receiving end does not exist|Could not establish connection|message port closed/i;
+
+async function sendBg(msg) {
+  try {
+    return await chrome.runtime.sendMessage(msg);
+  } catch (e) {
+    if (!_BG_DEAD.test(String(e && e.message || e))) throw e;
+    await new Promise(r => setTimeout(r, 350));   // 워커가 깨어날 시간
+    try {
+      return await chrome.runtime.sendMessage(msg);
+    } catch (e2) {
+      if (!_BG_DEAD.test(String(e2 && e2.message || e2))) throw e2;
+      throw new Error('확장 백그라운드에 연결하지 못했습니다. ' +
+        'chrome://extensions 에서 MangoAuto 를 새로고침하고, 이 패널을 닫았다가 다시 열어주세요');
+    }
+  }
 }
 
 function fileToDataUrl(file) {
