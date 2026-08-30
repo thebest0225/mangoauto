@@ -667,49 +667,9 @@
     return false;
   }
 
-  // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05). 다국어(KO/EN/TH/VI) 지원.
-  function findSubmitButton() {
-    // 1. aria-label 기반 (정확 일치). 제외 라벨은 스킵.
-    const exactLabels = [
-      // KO
-      '제출', '전송', '동영상 만들기', '생성', '보내기',
-      // EN
-      'Submit', 'Send', 'Create video', 'Generate',
-      // TH
-      'ส่ง', 'สร้างวิดีโอ', 'สร้าง',
-      // VI
-      'Gửi', 'Tạo video', 'Tạo',
-    ];
-    for (const label of exactLabels) {
-      const btn = document.querySelector(`button[aria-label="${label}"]`);
-      if (btn && !btn.disabled && !_isExcludedSubmitBtn(btn)) return btn;
-    }
-    // 부분일치 aria-label
-    const allBtns0 = Array.from(document.querySelectorAll('button'));
-    const partials = ['submit','send','generate','create video',
-                      '보내','전송','제출','생성',
-                      'ส่ง','สร้าง',
-                      'gửi','tạo'];
-    for (const b of allBtns0) {
-      if (b.disabled || _isExcludedSubmitBtn(b)) continue;
-      const al = (b.getAttribute('aria-label') || '').toLowerCase();
-      if (partials.some(k => al.includes(k))) return b;
-    }
-
-    // 2. type="submit"
-    const typeSubmit = document.querySelector('button[type="submit"]:not([disabled])');
-    if (typeSubmit && !_isExcludedSubmitBtn(typeSubmit)) return typeSubmit;
-
-    // 3. 텍스트 기반
-    const submitTexts = ['제출', 'Submit', '전송', 'Send'];
-    for (const b of allBtns0) {
-      if (b.disabled || _isExcludedSubmitBtn(b)) continue;
-      const text = (b.textContent || '').trim();
-      if (submitTexts.includes(text)) return b;
-    }
-
-    // 4. ↑ 화살표 SVG 아이콘 버튼 — 에디터와 같은 입력 바 안 + 위치 기반 선택.
-    //    "저장됨" 같은 엉뚱한 버튼 오클릭 방지: editor 와 같은 행(수평) + editor 오른쪽에 있는 것만.
+  // ↑ 화살표(아이콘 전용) 전송 버튼 — 에디터와 같은 입력 바 안 + 위치 기반 선택.
+  // "저장됨" 같은 엉뚱한 버튼 오클릭 방지: editor 와 같은 행(수평) + editor 오른쪽에 있는 것만.
+  function _findArrowSubmitButton(excludeBtn) {
     const editor = findEditor();
     if (editor) {
       const edRect = editor.getBoundingClientRect();
@@ -724,6 +684,7 @@
       const candidates = [];
       for (const scope of scopes) {
         for (const b of scope.querySelectorAll('button')) {
+          if (b === excludeBtn) continue;
           if (seen.has(b) || b.disabled || _isExcludedSubmitBtn(b)) continue;
           seen.add(b);
           const noText = (b.textContent || '').trim().length === 0;
@@ -741,8 +702,10 @@
         }
       }
       if (candidates.length) {
-        // 가장 오른쪽(전송 버튼은 입력바 맨 우측) 선택
-        candidates.sort((a, c) => c.r.right - a.r.right);
+        // 동그란 버튼(rounded-full) 우선 → 그 다음 가장 오른쪽.
+        // 전송 버튼은 입력바 맨 우측의 원형 버튼이다(파란 화살표).
+        const isRound = (x) => /rounded-full/.test((x.b.className || '').toString()) ? 1 : 0;
+        candidates.sort((a, c) => (isRound(c) - isRound(a)) || (c.r.right - a.r.right));
         const best = candidates[0].b;
         console.log(LOG_PREFIX, `전송 버튼 (위치기반 ↑, ${Math.round(candidates[0].r.width)}x${Math.round(candidates[0].r.height)}, aria="${best.getAttribute('aria-label') || ''}")`);
         return best;
@@ -751,6 +714,60 @@
 
     return null;
   }
+
+  // Submit button: 그록 리뉴얼 UI 의 ↑ 화살표 버튼 대응 (2026-05). 다국어(KO/EN/TH/VI) 지원.
+  function findSubmitButton(excludeBtn) {
+    // 0. ★아이콘 전용 ↑ 화살표 버튼 우선★ (리뉴얼 UI 의 실제 전송 버튼)
+    //    왜 맨 앞인가 (2026-08-30 실측): 예전엔 aria-label 정확일치가 먼저였는데,
+    //    그 목록에 '동영상 만들기' 가 있어서 컴포저의 ★영상 모드 버튼★ 을 눌러 버렸다.
+    //    로그에는 Submit clicked 로 찍히는데 생성은 시작되지 않고 프롬프트만 남았다.
+    //    전송 버튼은 글자 없이 아이콘만 있고 입력바 맨 오른쪽의 동그란 버튼이다.
+    const _arrow = _findArrowSubmitButton(excludeBtn);
+    if (_arrow && _arrow !== excludeBtn) return _arrow;
+
+    // 1. aria-label 기반 (정확 일치). 제외 라벨은 스킵.
+    const exactLabels = [
+      // KO
+      '제출', '전송', '동영상 만들기', '생성', '보내기',
+      // EN
+      'Submit', 'Send', 'Create video', 'Generate',
+      // TH
+      'ส่ง', 'สร้างวิดีโอ', 'สร้าง',
+      // VI
+      'Gửi', 'Tạo video', 'Tạo',
+    ];
+    for (const label of exactLabels) {
+      const btn = document.querySelector(`button[aria-label="${label}"]`);
+      if (btn && btn !== excludeBtn && !btn.disabled && !_isExcludedSubmitBtn(btn)) return btn;
+    }
+    // 부분일치 aria-label
+    const allBtns0 = Array.from(document.querySelectorAll('button'));
+    const partials = ['submit','send','generate','create video',
+                      '보내','전송','제출','생성',
+                      'ส่ง','สร้าง',
+                      'gửi','tạo'];
+    for (const b of allBtns0) {
+      if (b === excludeBtn || b.disabled || _isExcludedSubmitBtn(b)) continue;
+      const al = (b.getAttribute('aria-label') || '').toLowerCase();
+      if (partials.some(k => al.includes(k))) return b;
+    }
+
+    // 2. type="submit"
+    const typeSubmit = document.querySelector('button[type="submit"]:not([disabled])');
+    if (typeSubmit && !_isExcludedSubmitBtn(typeSubmit)) return typeSubmit;
+
+    // 3. 텍스트 기반
+    const submitTexts = ['제출', 'Submit', '전송', 'Send'];
+    for (const b of allBtns0) {
+      if (b.disabled || _isExcludedSubmitBtn(b)) continue;
+      const text = (b.textContent || '').trim();
+      if (submitTexts.includes(text)) return b;
+    }
+
+    return null;
+  }
+
+
 
   // ─── Enter 키 전송 fallback — 버튼 못 찾을 때 에디터에 Enter 발사 ───
   async function trySubmitByEnter() {
@@ -1491,6 +1508,29 @@
   }
 
   // ─── Submit ───
+  // 전송이 ★실제로★ 먹었는지 확인.
+  //
+  // 왜 필요한가 (2026-08-30 실측): 컴포저의 '동영상 만들기'(모드 버튼)를 눌렀는데
+  // 로그에는 "Submit clicked" 로 찍히고 조용히 아무 일도 일어나지 않았다.
+  // 버튼을 눌렀다는 사실만으로 성공이라 하면 이런 실패가 안 보인다.
+  // 판정 근거 세 가지 — 하나라도 잡히면 전송된 것으로 본다:
+  //   ① 생성 진행 표시(취소 버튼 등)  ② URL 이 바뀜  ③ 컴포저의 프롬프트가 비워짐
+  //      (그록은 전송하면 입력창을 비운다 → 글이 그대로면 안 나간 것이다)
+  async function _waitSubmitTookEffect(timeout = 6000, urlBefore = '', textBefore = '') {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      if (isAutoGenerating() || isVideoStillGenerating()) return 'generating';
+      if (urlBefore && location.href !== urlBefore) return 'url';
+      if (textBefore) {
+        const ed = findEditor();
+        const now = ed ? (ed.value !== undefined ? ed.value : ed.textContent || '').trim() : '';
+        if (now.length < Math.max(4, textBefore.length * 0.5)) return 'cleared';
+      }
+      await delay(400);
+    }
+    return null;
+  }
+
   async function tryClickSubmit() {
     // 🔒 LOCKOUT: 최근 30초 안에 이미 submit 한 적 있으면 절대 다시 안 누름 (중복 영상 생성 차단).
     //    이전 영상 생성 중인데 또 누르면 그록이 '기존+새' 모드로 인식 → 2개 동시 생성.
@@ -1508,6 +1548,11 @@
       window.__mangoauto_lastGrokSubmitMs = Date.now();  // 진행 중 표시 (lockout 갱신)
       return true;
     }
+
+    // 클릭 전 상태 스냅샷 — 클릭이 실제로 먹었는지 판정하는 기준이 된다
+    const urlBefore = location.href;
+    const _ed0 = findEditor();
+    const textBefore = _ed0 ? ((_ed0.value !== undefined ? _ed0.value : _ed0.textContent) || '').trim() : '';
 
     // Wait for submit button to be enabled (이미지 업로드 중 disabled일 수 있으므로 30초 대기)
     const btn = await waitForSubmitEnabled(30000);
@@ -1560,10 +1605,33 @@
     }
     window.__mangoauto_lastGrokSubmitMs = Date.now();  // 🔒 lockout 마킹
     console.log(LOG_PREFIX, `Submit clicked (native only): aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
-    // ❌ Enter fallback 보강 제거 — 버튼 클릭 후 Enter 추가 발사하면 영상 2번 생성 (409 Conflict).
-    //    URL 변경 / isAutoGenerating 감지는 비동기라 1초 후 false negative 가능.
-    //    버튼 클릭 성공 = success. 실제 결과는 waitForResultPage 에서 검증.
-    return true;
+
+    // 클릭이 실제로 먹었는지 확인한다. 안 먹었으면 ★다른 버튼으로 1회만★ 재시도.
+    // 중복 생성 위험은 낮다 — 첫 클릭이 아무 효과도 없었다는 걸 확인한 뒤에만 누른다
+    // (프롬프트가 컴포저에 그대로 남아 있고, 생성 표시도 URL 변경도 없는 상태).
+    const eff = await _waitSubmitTookEffect(6000, urlBefore, textBefore);
+    if (eff) {
+      console.log(LOG_PREFIX, `전송 확인됨 (${eff})`);
+      return true;
+    }
+    console.warn(LOG_PREFIX, '⚠️ 버튼을 눌렀는데 전송 흔적이 없다 — 모드 버튼을 눌렀을 가능성. 대체 버튼 1회 재시도');
+    showToast('전송 반응 없음 — 다른 버튼으로 재시도', 'warn');
+    const alt = findSubmitButton(btn);
+    if (!alt) {
+      console.error(LOG_PREFIX, '대체 전송 버튼 없음 — Enter fallback');
+      await trySubmitByEnter();
+      const eff2 = await _waitSubmitTookEffect(5000, urlBefore, textBefore);
+      if (eff2) { console.log(LOG_PREFIX, `Enter 로 전송됨 (${eff2})`); return true; }
+      return false;
+    }
+    try { alt.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (_) {}
+    try { alt.focus({ preventScroll: true }); } catch (_) {}
+    try { alt.click(); } catch (_) {}
+    console.log(LOG_PREFIX, `대체 버튼 클릭: aria="${alt.getAttribute('aria-label') || ''}" text="${(alt.textContent || '').trim().substring(0, 20)}"`);
+    const eff3 = await _waitSubmitTookEffect(6000, urlBefore, textBefore);
+    if (eff3) { console.log(LOG_PREFIX, `전송 확인됨 (${eff3})`); return true; }
+    console.error(LOG_PREFIX, '❌ 두 번 눌렀는데도 전송 흔적 없음');
+    return false;
   }
 
   function isAutoGenerating() {
@@ -2106,6 +2174,10 @@
       console.warn(LOG_PREFIX, `첨부 개수 비정상(${n}장) — 컴포저 스코프 실패로 보고 ${fn || 1}장으로 보정`);
       n = fn || 1;
     }
+    // 반대 방향 보정: 첨부는 됐는데 0장으로 세는 경우.
+    // 그록은 업로드 후 file input 을 비우고 썸네일을 컴포저 밖에 그리기도 한다.
+    // 0장으로 두면 로그가 거짓말을 하고 '여러 장' 분기 판단도 못 한다.
+    if (n === 0 && checkImageAttached()) n = 1;
     return n;
   }
 
