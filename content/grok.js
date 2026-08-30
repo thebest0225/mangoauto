@@ -667,6 +667,40 @@
     return false;
   }
 
+  // 입력바 우측에 붙는 ★부속 버튼★ — 전송이 아니다.
+  //
+  // 실측 2026-08-30 (운영자 보고): 사용 한도를 78% 넘게 쓰면 전송 버튼 옆에
+  // 자동차 계기판 같은 게이지 아이콘이 새로 생긴다. 그게 뜨기 시작하면
+  // 확장이 전송 대신 그걸 눌러 팝업만 뜨고 전송은 안 됐다.
+  // 게이지·마이크·오디오는 라벨이 확실치 않을 수 있으므로 라벨 필터는 '보조' 이고,
+  // 진짜 방어는 아래 _scoreSubmitCandidate 의 구조 점수(채워진 배경 + 원형 + 최우측)다.
+  const _COMPOSER_SIDE_RE = /사용량|한도|제한|속도|사용\s*현황|요금|남은|잔여|마이크|음성|받아쓰기|녹음|오디오|소리|음소거|usage|limit|quota|rate|credit|remaining|speed|mic|voice|dictate|speech|audio|sound|mute|volume/i;
+
+  function _isComposerSideBtn(b) {
+    const al = (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '');
+    return _COMPOSER_SIDE_RE.test(al);
+  }
+
+  // 전송 버튼다움 점수. 높을수록 전송일 가능성이 크다.
+  // 그록의 전송은 ★배경이 채워진 원형(검정/파랑) 버튼★ 이고 입력바 맨 오른쪽에 있다.
+  // 게이지·마이크는 배경 없는 고스트 버튼이다.
+  function _scoreSubmitCandidate(b) {
+    let score = 0;
+    const cls = (b.className || '').toString();
+    if (/rounded-full/.test(cls)) score += 2;
+    try {
+      const bg = getComputedStyle(b).backgroundColor || '';
+      const m = bg.match(/rgba?\(([^)]+)\)/);
+      if (m) {
+        const p = m[1].split(',').map(x => parseFloat(x));
+        const alpha = p.length > 3 ? p[3] : 1;
+        if (alpha > 0.15) score += 3;          // 배경이 실제로 칠해져 있다
+      }
+    } catch (_) {}
+    if (_isComposerSideBtn(b)) score -= 6;      // 게이지·마이크·오디오
+    return score;
+  }
+
   // ↑ 화살표(아이콘 전용) 전송 버튼 — 에디터와 같은 입력 바 안 + 위치 기반 선택.
   // "저장됨" 같은 엉뚱한 버튼 오클릭 방지: editor 와 같은 행(수평) + editor 오른쪽에 있는 것만.
   function _findArrowSubmitButton(excludeBtn) {
@@ -685,7 +719,11 @@
       for (const scope of scopes) {
         for (const b of scope.querySelectorAll('button')) {
           if (b === excludeBtn) continue;
-          if (seen.has(b) || b.disabled || _isExcludedSubmitBtn(b)) continue;
+          // ⚠️ disabled 를 여기서 걸러내면 안 된다 (2026-08-30 실측).
+          //    이미지 업로드 중에는 전송 버튼이 잠깐 disabled 인데, 그때 걸러 버리면
+          //    옆에 있는 ★게이지 버튼★ 이 '가장 오른쪽 후보' 가 되어 그걸 눌렀다.
+          //    → 후보로는 받아두고, 활성화될 때까지 기다리는 건 waitForSubmitEnabled 가 한다.
+          if (seen.has(b) || _isExcludedSubmitBtn(b) || _isComposerSideBtn(b)) continue;
           seen.add(b);
           const noText = (b.textContent || '').trim().length === 0;
           if (!noText || !b.querySelector('svg')) continue;
@@ -702,12 +740,15 @@
         }
       }
       if (candidates.length) {
-        // 동그란 버튼(rounded-full) 우선 → 그 다음 가장 오른쪽.
-        // 전송 버튼은 입력바 맨 우측의 원형 버튼이다(파란 화살표).
-        const isRound = (x) => /rounded-full/.test((x.b.className || '').toString()) ? 1 : 0;
-        candidates.sort((a, c) => (isRound(c) - isRound(a)) || (c.r.right - a.r.right));
+        // 전송 버튼다움 점수(채워진 배경 + 원형) → 같으면 가장 오른쪽.
+        candidates.forEach(x => { x.score = _scoreSubmitCandidate(x.b); });
+        candidates.sort((a, c) => (c.score - a.score) || (c.r.right - a.r.right));
         const best = candidates[0].b;
-        console.log(LOG_PREFIX, `전송 버튼 (위치기반 ↑, ${Math.round(candidates[0].r.width)}x${Math.round(candidates[0].r.height)}, aria="${best.getAttribute('aria-label') || ''}")`);
+        console.log(LOG_PREFIX,
+          `전송 버튼 (점수 ${candidates[0].score}, ${Math.round(candidates[0].r.width)}x${Math.round(candidates[0].r.height)}, ` +
+          `disabled=${best.disabled}, aria="${best.getAttribute('aria-label') || ''}") ` +
+          `후보 ${candidates.length}개: ` +
+          candidates.slice(0, 5).map(x => `[${x.score}|${Math.round(x.r.right)}px|${x.b.getAttribute('aria-label') || '아이콘'}]`).join(' '));
         return best;
       }
     }
@@ -1614,8 +1655,14 @@
       console.log(LOG_PREFIX, `전송 확인됨 (${eff})`);
       return true;
     }
-    console.warn(LOG_PREFIX, '⚠️ 버튼을 눌렀는데 전송 흔적이 없다 — 모드 버튼을 눌렀을 가능성. 대체 버튼 1회 재시도');
+    console.warn(LOG_PREFIX, '⚠️ 버튼을 눌렀는데 전송 흔적이 없다 — 모드/게이지 버튼을 눌렀을 가능성. 대체 버튼 1회 재시도');
     showToast('전송 반응 없음 — 다른 버튼으로 재시도', 'warn');
+    // 잘못 누른 버튼이 팝업을 열었으면 그게 다음 클릭을 막는다 → Escape 로 닫고 간다
+    try {
+      document.body.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      await delay(400);
+    } catch (_) {}
     const alt = findSubmitButton(btn);
     if (!alt) {
       console.error(LOG_PREFIX, '대체 전송 버튼 없음 — Enter fallback');
@@ -1655,12 +1702,23 @@
   }
 
   async function waitForSubmitEnabled(timeout = 5000) {
+    // ⚠️ 폴링마다 findSubmitButton() 을 새로 부르면 안 된다 (2026-08-30 실측).
+    //    전송 버튼이 잠깐 disabled 인 동안 옆의 게이지 버튼이 대신 뽑혀 눌렸다.
+    //    → 버튼을 ★한 번 고르고★, 그 버튼이 활성화될 때까지 기다린다.
+    //      (DOM 에서 사라진 경우에만 다시 고른다)
     const start = Date.now();
+    let btn = findSubmitButton();
+    let logged = false;
     while (Date.now() - start < timeout) {
-      const btn = findSubmitButton();
+      if (!btn || !btn.isConnected) btn = findSubmitButton();
       if (btn && !btn.disabled) return btn;
+      if (btn && !logged) {
+        console.log(LOG_PREFIX, `전송 버튼 비활성 — 활성화 대기 (aria="${btn.getAttribute('aria-label') || '아이콘'}")`);
+        logged = true;
+      }
       await delay(300);
     }
+    if (btn) console.warn(LOG_PREFIX, '전송 버튼이 끝까지 비활성 상태였음');
     return null;
   }
 
