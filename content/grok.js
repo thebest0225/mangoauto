@@ -294,6 +294,17 @@
         }
         checkStopped();
 
+        // Step 4.9: 모드 확인 — 주간 한도 팝업이 뜨면 그록이 비디오 → 이미지로 되돌린다.
+        //   그대로 보내면 영상 대신 이미지가 나온다(운영자 보고 2026-08-30).
+        if (!(await ensureVideoMode())) {
+          const notice = detectLimitNotice();
+          throw new Error(
+            '컴포저가 이미지 모드입니다 — 비디오로 되돌리지 못해 전송을 중단했습니다' +
+            (notice ? ` (그록 안내: ${notice})` : ' (주간 한도 팝업 때문일 수 있습니다)')
+          );
+        }
+        checkStopped();
+
         // Step 5: 전송
         //
         // ⚠️ 2026-08-30 그록 리뉴얼로 바뀐 부분 — 여기가 '전송 버튼을 못 누른다' 의 원인이었다.
@@ -938,6 +949,147 @@
    * 현재 컴포저 설정을 **읽기만** 한다 (클릭 없음).
    * 비디오 설정 자동화를 껐을 때, 사용자가 맞춰둔 상태가 실제로 뭔지 로그로 확인용.
    */
+  // ═══════════════════════════════════════════════════
+  // ─── 컴포저 모드 가드 (2026-08-30) ───
+  //
+  // 운영자 보고: 주간 한도 팝업이 뜨면 그록이 컴포저 모드를 ★비디오 → 이미지★ 로
+  // 되돌려 버린다. 그 상태로 전송하면 영상이 아니라 이미지가 만들어진다.
+  // 큐가 통째로 이미지로 채워지는 사고라, 전송 직전에 모드를 확인한다.
+  //
+  // 🔒 설정 자동조작은 여전히 하지 않는다(skipVideoSettings 기본 ON).
+  //    여기서 손대는 건 ★모드 하나★ 뿐이고, 그것도 '비디오로 되돌리는' 방향뿐이다.
+  //    되돌리지 못하면 이미지로 만들지 말고 ★전송을 포기★ 한다.
+  // ═══════════════════════════════════════════════════
+
+  // 컴포저 근처에서 텍스트로 버튼 찾기.
+  // ⚠️ findButtonByTextInArea() 를 쓰면 안 되는 자리다 — 그건 '화면 하단 200px' 을 가정하는데,
+  //    /imagine 랜딩에서는 컴포저가 페이지 ★상단★ 에 있어서 아무것도 못 찾는다 (2026-08-30).
+  function _findComposerButtonByText(text) {
+    const editor = findEditor();
+    const edRect = editor ? editor.getBoundingClientRect() : null;
+    let best = null;
+    for (const b of document.querySelectorAll('button')) {
+      const r = b.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      if (b.closest('[data-variant="sidebar"], aside, nav, header')) continue;
+      const t = (b.textContent || '').trim();
+      if (!t || t.length > 12 || !t.includes(text)) continue;
+      if (edRect && !(r.top > edRect.top - 60 && r.top < edRect.bottom + 160)) continue;
+      if (!best || r.left < best.r.left) best = { b, r };
+    }
+    return best ? best.b : null;
+  }
+
+  // 컴포저의 현재 모드 — 'video' | 'image' | null(판독 실패)
+  // 그록은 모드 버튼에 현재 모드 이름을 그대로 쓴다 (예: [🎬 비디오]).
+  function getComposerMode() {
+    const editor = findEditor();
+    const edRect = editor ? editor.getBoundingClientRect() : null;
+    let best = null;
+    document.querySelectorAll('button').forEach(b => {
+      const r = b.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return;
+      if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
+      const t = (b.textContent || '').trim();
+      if (!/^(비디오|동영상|이미지|video|image)$/i.test(t)) return;
+      // 컴포저 근처만 — 에디터와 같은 줄이거나 바로 아래 입력바
+      if (edRect && !(r.top > edRect.top - 60 && r.top < edRect.bottom + 160)) return;
+      if (!best || r.left < best.r.left) best = { b, r, t };
+    });
+    if (!best) return null;
+    return /이미지|image/i.test(best.t) ? 'image' : 'video';
+  }
+
+  // 열려 있는 팝업/다이얼로그 닫기 (한도 안내 등). 닫은 게 있으면 true.
+  function dismissBlockingDialog() {
+    let closed = false;
+    const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    for (const d of dialogs) {
+      const r = d.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const txt = (d.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 120);
+      console.warn(LOG_PREFIX, `팝업 감지 → 닫는다: "${txt}"`);
+      const closeBtn = d.querySelector('button[aria-label*="닫기"], button[aria-label*="Close" i], button[aria-label*="close" i]');
+      if (closeBtn) { try { closeBtn.click(); closed = true; } catch (_) {} }
+    }
+    if (dialogs.length) {
+      document.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      closed = true;
+    }
+    return closed;
+  }
+
+  // 한도 안내가 화면에 떠 있나 — 실패 메시지를 정확히 쓰기 위해서만 본다.
+  function detectLimitNotice() {
+    const nodes = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    for (const d of nodes) {
+      const r = d.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const t = (d.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/한도|限度|limit|quota|usage|남은|잔여|초과|upgrade|업그레이드/i.test(t)) {
+        return t.substring(0, 160);
+      }
+    }
+    return null;
+  }
+
+  // 전송 직전 모드 보증. 비디오면 통과, 이미지면 한 번만 되돌린다. 실패하면 false.
+  async function ensureVideoMode() {
+    let mode = getComposerMode();
+    if (mode === 'video') return true;
+    if (mode === null) {
+      // 판독 실패 — 기존 동작을 막지 않는다(오탐으로 큐를 세우지 않기 위함)
+      console.warn(LOG_PREFIX, '컴포저 모드를 읽지 못했다 — 확인 없이 진행');
+      return true;
+    }
+
+    const notice = detectLimitNotice();
+    console.warn(LOG_PREFIX, `⚠️ 컴포저가 ★이미지 모드★ 다 — 비디오로 되돌린다${notice ? ` (팝업: "${notice}")` : ''}`);
+    showToast('이미지 모드로 바뀌어 있음 — 비디오로 되돌리는 중', 'warn');
+
+    dismissBlockingDialog();
+    await delay(400);
+
+    // 1) 입력바의 인라인 '비디오' 버튼
+    let btn = _findComposerButtonByText('비디오') || _findComposerButtonByText('동영상') ||
+              _findComposerButtonByText('Video') ||
+              findButtonByTextInArea('비디오') || findButtonByTextInArea('Video');
+    if (btn) {
+      MangoDom.simulateClick(btn);
+      await delay(700);
+      if (getComposerMode() === 'video') {
+        console.log(LOG_PREFIX, '✅ 비디오 모드 복구 (인라인 버튼)');
+        showToast('비디오 모드로 되돌림', 'success');
+        return true;
+      }
+    }
+
+    // 2) 모드 드롭다운을 열고 '비디오' 선택
+    const trigger = _findComposerButtonByText('이미지') || _findComposerButtonByText('Image') ||
+                    findButtonByTextInArea('이미지') || findButtonByTextInArea('Image');
+    if (trigger) {
+      MangoDom.simulateClick(trigger);
+      await delay(600);
+      const item = findDropdownItem('비디오') || findDropdownItem('동영상') || findDropdownItem('Video');
+      if (item) {
+        MangoDom.simulateClick(item);
+        await delay(700);
+        if (getComposerMode() === 'video') {
+          console.log(LOG_PREFIX, '✅ 비디오 모드 복구 (드롭다운)');
+          showToast('비디오 모드로 되돌림', 'success');
+          return true;
+        }
+      }
+      document.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+      await delay(300);
+    }
+
+    console.error(LOG_PREFIX, '❌ 비디오 모드 복구 실패 — 이미지가 만들어지는 걸 막기 위해 전송하지 않는다');
+    return false;
+  }
+
   function reportComposerMode() {
     try {
       const found = [];
@@ -1655,6 +1807,9 @@
       console.log(LOG_PREFIX, `전송 확인됨 (${eff})`);
       return true;
     }
+    // 전송 흔적이 없을 때 팝업이 떠 있으면 그게 원인이다 — 로그에 남긴다
+    const _lim = detectLimitNotice();
+    if (_lim) console.warn(LOG_PREFIX, `전송이 막힌 이유로 보이는 팝업: "${_lim}"`);
     console.warn(LOG_PREFIX, '⚠️ 버튼을 눌렀는데 전송 흔적이 없다 — 모드/게이지 버튼을 눌렀을 가능성. 대체 버튼 1회 재시도');
     showToast('전송 반응 없음 — 다른 버튼으로 재시도', 'warn');
     // 잘못 누른 버튼이 팝업을 열었으면 그게 다음 클릭을 막는다 → Escape 로 닫고 간다
