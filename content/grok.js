@@ -294,19 +294,23 @@
         }
         checkStopped();
 
-        // Step 5: 전송 (이미지 첨부로 자동 전송됐으면 건너뛰기)
-        if (!isOnMainPage()) {
-          showToast('Step 5: 이미지 첨부로 자동 전송됨', 'info');
-          window.__mangoauto_lastGrokSubmitMs = Date.now();  // 자동 전송도 lockout 마킹
-        } else if (isVideoStillGenerating()) {
-          // 이전 영상 진행 중이면 절대 전송 X — 그록이 '기존+새' 2개 모드로 인식
-          console.warn(LOG_PREFIX, '⚠️ 메인 페이지지만 이전 영상 진행 중 감지 — 전송 skip, 결과 대기로 진행');
-          showToast('이전 영상 진행 중 — 전송 skip', 'warn');
+        // Step 5: 전송
+        //
+        // ⚠️ 2026-08-30 그록 리뉴얼로 바뀐 부분 — 여기가 '전송 버튼을 못 누른다' 의 원인이었다.
+        //    예전 UI: 이미지를 첨부하면 그대로 생성이 시작됐다 → '메인 페이지를 벗어남 = 자동 전송됨'.
+        //    지금 UI: 이미지를 첨부하면 /imagine/post/{id} 로 ★이동만★ 하고 생성은 시작되지 않는다.
+        //            그 페이지에서 프롬프트를 넣고 파란 화살표를 눌러야 한다.
+        //    → URL 로 판단하면 전송을 통째로 건너뛰고 영영 안 누른다. 실제로 그랬다.
+        //    → URL 이 아니라 ★실제로 생성이 돌고 있는가★ 로만 판단한다.
+        //       (중복 전송 방지는 tryClickSubmit 안의 30초 lockout 이 이미 담당한다)
+        if (isAutoGenerating() || isVideoStillGenerating()) {
+          console.warn(LOG_PREFIX, '이미 생성 진행 중 감지 — 전송 skip, 결과 대기로 진행');
+          showToast('Step 5: 이미 생성 중 — 전송 skip', 'warn');
           window.__mangoauto_lastGrokSubmitMs = Date.now();
         } else {
           showToast('Step 5: 전송...', 'info');
           const submitted = await tryClickSubmit();
-          if (!submitted) throw new Error('전송 실패');
+          if (!submitted) throw new Error('전송 실패 — 파란 화살표(전송) 버튼을 찾지 못했습니다');
         }
         checkStopped();
 
@@ -1508,20 +1512,27 @@
     // Wait for submit button to be enabled (이미지 업로드 중 disabled일 수 있으므로 30초 대기)
     const btn = await waitForSubmitEnabled(30000);
     if (!btn) {
-      // 디버그: 전송 버튼 못 찾은 이유 파악
-      console.error(LOG_PREFIX, '전송 버튼 못 찾음! 에디터 근처 버튼 목록:');
+      // 디버그: 전송 버튼 못 찾은 이유 파악.
+      // 그록 UI 가 또 바뀌면 여기 로그만 보고 셀렉터를 고칠 수 있어야 한다 —
+      // 브라우저에서 직접 확인할 수 없으니 위치·아이콘까지 다 찍는다.
+      console.error(LOG_PREFIX, '전송 버튼 못 찾음! 컴포저 버튼 목록 (URL=' + location.pathname + '):');
       const editor = findEditor();
-      if (editor) {
-        let c = editor;
-        for (let i = 0; i < 5; i++) c = c?.parentElement;
-        if (c) {
-          c.querySelectorAll('button').forEach((b, i) => {
-            const text = (b.textContent || '').trim().substring(0, 20);
-            const aria = b.getAttribute('aria-label') || '';
-            console.log(LOG_PREFIX, `  btn[${i}]: "${text}" aria="${aria}" disabled=${b.disabled} type=${b.type || ''}`);
-          });
-        }
-      }
+      const scope = findComposerRoot() || (editor && editor.parentElement) || document.body;
+      const edRect = editor ? editor.getBoundingClientRect() : null;
+      scope.querySelectorAll('button').forEach((b, i) => {
+        const r = b.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return;   // 안 보이는 버튼은 생략
+        const text = (b.textContent || '').trim().substring(0, 20);
+        const aria = b.getAttribute('aria-label') || '';
+        const svg  = b.querySelector('svg');
+        const path = svg ? (svg.querySelector('path')?.getAttribute('d') || '').substring(0, 32) : '';
+        const side = edRect ? (r.left >= edRect.right - 8 ? '에디터오른쪽' : (r.top > edRect.bottom ? '에디터아래' : '기타')) : '';
+        console.log(LOG_PREFIX,
+          `  btn[${i}] "${text}" aria="${aria}" disabled=${b.disabled} type=${b.type || ''}` +
+          ` cls="${(b.className || '').toString().substring(0, 40)}" ${side}` +
+          ` pos=(${Math.round(r.left)},${Math.round(r.top)}) ${Math.round(r.width)}x${Math.round(r.height)}` +
+          (path ? ` svgPath="${path}…"` : ' (svg없음)'));
+      });
       // 버튼 못 찾음 → Enter 키 fallback
       console.warn(LOG_PREFIX, '전송 버튼 못 찾음 — Enter 키 fallback 시도');
       const ok = await trySubmitByEnter();
@@ -2030,6 +2041,27 @@
   }
 
   // 첨부된 이미지 개수 카운트 (중복 감지용)
+  // 컴포저(입력 바) 루트 — 에디터에서 위로 올라가며 전송 버튼까지 품는 가장 가까운 조상.
+  //
+  // ⚠️ 왜 필요한가 (2026-08-30, 그록 리뉴얼 후 실제로 물림):
+  //    이미지를 첨부하면 그 즉시 /imagine/post/{id} 로 이동한다. 그 페이지엔 생성된 프레임
+  //    썸네일이 잔뜩 깔려 있어서, 문서 전체에서 blob/data 이미지를 세면 93장 같은 값이 나온다.
+  //    → '여러 장' 으로 오판해 @참조 경로로 새고, dedupe 가 엉뚱한 삭제 버튼을 누를 뻔했다.
+  //    첨부 개수는 반드시 컴포저 안에서만 센다.
+  function findComposerRoot() {
+    const editor = findEditor();
+    if (!editor) return null;
+    const form = editor.closest && editor.closest('form');
+    if (form) return form;
+    let node = editor;
+    for (let i = 0; i < 8; i++) {
+      node = node && node.parentElement;
+      if (!node) break;
+      if (node.querySelector('button[aria-label], button[type="submit"]')) return node;
+    }
+    return editor.parentElement || editor;
+  }
+
   function countAttachedImages() {
     let n = 0;
     const fileInput = findFileInput();
@@ -2052,9 +2084,12 @@
     collect('[class*="preview" i] img[src^="data:"]');
     collect('[class*="thumb" i] img[src^="blob:"]');
     collect('[class*="thumb" i] img[src^="data:"]');
-    // 2) 에디터 외부의 모든 blob/data 이미지 (새 UI — 첨부 영역이 클래스 이름 없는 div 일 때)
+    // 2) ★컴포저 안★ 의 blob/data 이미지 (새 UI — 첨부 영역이 클래스 이름 없는 div 일 때)
+    //    ⚠️ 예전엔 document 전체를 뒤졌다. 결과 페이지(/imagine/post/…)에서는 생성된 프레임
+    //       썸네일까지 세어 93장이 나왔다. 반드시 컴포저로 한정한다.
     const editor = findEditor();
-    document.querySelectorAll('img[src^="blob:"], img[src^="data:"]').forEach(img => {
+    const scope = findComposerRoot() || document;
+    scope.querySelectorAll('img[src^="blob:"], img[src^="data:"]').forEach(img => {
       if (editor && editor.contains(img)) return;  // 에디터 인라인 제외 (paste 잔재)
       // 너무 작은 아바타·아이콘 제외
       const rect = img.getBoundingClientRect();
@@ -2063,6 +2098,14 @@
       if (src && !seen.has(src)) seen.add(src);
     });
     n = Math.max(n, seen.size);
+    // 사니티: 컴포저에 10장 넘게 잡히면 스코프가 틀린 것이다. file input 개수로 되돌린다.
+    // (이 값이 틀리면 @참조 경로로 새고 dedupe 가 엉뚱한 버튼을 누른다 — 실제로 물렸다)
+    if (n > 10) {
+      const fi = findFileInput();
+      const fn = (fi && fi.files) ? fi.files.length : 0;
+      console.warn(LOG_PREFIX, `첨부 개수 비정상(${n}장) — 컴포저 스코프 실패로 보고 ${fn || 1}장으로 보정`);
+      n = fn || 1;
+    }
     return n;
   }
 
