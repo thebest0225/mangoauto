@@ -1322,32 +1322,38 @@ async function startAutomation(config) {
 
 // ─── Ensure target site tabs are open (supports concurrent) ───
 async function ensureTargetTabs(platform, count) {
+  // 2026-09: Flow 가 labs.google/fx/tools/flow → flow.google.com 으로 이전했다.
+  // 새 탭은 신주소로 열되, 이미 열려 있는 구주소 탭도 찾아서 그대로 쓴다.
   const urls = {
     grok: 'https://grok.com/imagine',
     whisk: 'https://labs.google/fx/tools/image-fx',
-    flow: 'https://labs.google/fx/tools/flow'
+    flow: 'https://flow.google.com/'
+  };
+
+  // 기존 탭을 찾을 때 훑을 주소 패턴 (앞에서부터 먼저 맞는 것을 쓴다)
+  const lookupPatterns = {
+    grok: ['https://grok.com/imagine*'],
+    whisk: [
+      'https://labs.google/fx/tools/image-fx*',
+      'https://labs.google/fx/*/tools/image-fx*'
+    ],
+    flow: [
+      'https://flow.google.com/*',
+      'https://labs.google/fx/tools/flow*',
+      'https://labs.google/fx/*/tools/flow*',
+      'https://labs.google/fx/*/tools/video-fx*',
+      'https://labs.google/fx/tools/video-fx*'
+    ]
   };
 
   const targetUrl = urls[platform];
   if (!targetUrl) throw new Error('Unknown platform: ' + platform);
 
   // Find existing tabs (including locale variants and project pages)
-  let tabs = await chrome.tabs.query({ url: targetUrl + '*' });
-
-  if (platform !== 'grok' && tabs.length === 0) {
-    const toolName = targetUrl.split('/tools/')[1];
-    tabs = await chrome.tabs.query({ url: `https://labs.google/fx/*/tools/${toolName}*` });
-  }
-
-  // Flow: video-fx 탭도 검색
-  if (platform === 'flow' && tabs.length === 0) {
-    const vfxTabs = await chrome.tabs.query({ url: 'https://labs.google/fx/*/tools/video-fx*' });
-    if (vfxTabs.length === 0) {
-      const vfxTabs2 = await chrome.tabs.query({ url: 'https://labs.google/fx/tools/video-fx*' });
-      tabs = vfxTabs2;
-    } else {
-      tabs = vfxTabs;
-    }
+  let tabs = [];
+  for (const pattern of (lookupPatterns[platform] || [targetUrl + '*'])) {
+    tabs = await chrome.tabs.query({ url: pattern });
+    if (tabs.length > 0) break;
   }
 
   activeTabIds = tabs.map(t => t.id).slice(0, count);
@@ -3309,7 +3315,8 @@ function applyFlowVideoQuality(url, quality) {
   // Flow/Google Labs fifeUrl만 대상 (storage.googleapis.com 또는 lh3.google)
   const isGoogleUrl = url.includes('storage.googleapis.com') ||
                       url.includes('lh3.google') ||
-                      url.includes('labs.google');
+                      url.includes('labs.google') ||
+                      url.includes('flow.google.com');
   if (!isGoogleUrl) return url;
 
   // 1080p: =w1920 파라미터 추가 (Google fife URL 스타일)
@@ -3362,7 +3369,8 @@ async function exportApiKey(apiKey) {
 
 // ─── Inject fetch interceptor into Google Labs pages ───
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url?.includes('labs.google/fx/')) {
+  if (changeInfo.status === 'complete' &&
+      (tab.url?.includes('labs.google/fx/') || tab.url?.includes('flow.google.com'))) {
     chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',

@@ -1,6 +1,6 @@
 /**
  * MangoAuto - Google Flow Automation
- * Content script for labs.google/fx/tools/flow & video-fx
+ * Content script for Google Flow (flow.google.com, 구주소 labs.google/fx/tools/flow & video-fx)
  * Handles text-to-video, image-to-video, text-to-image, image-to-image
  *
  * Key selectors:
@@ -578,8 +578,11 @@
 
     if (!newProjectBtn) {
       console.warn(LOG_PREFIX, 'Cannot find "새 프로젝트" button, trying direct navigation');
-      // URL 기반 이동
-      window.location.href = url.replace(/\/flow\/?$/, '/flow/project/new');
+      // URL 기반 이동 — 2026-09 이후 신주소(flow.google.com)와 구주소(labs.google/fx/tools/flow) 둘 다 대응.
+      // 구주소 replace 는 flow.google.com 루트에 안 걸려서 그냥 제자리에 머물렀다.
+      window.location.href = url.includes('flow.google.com')
+        ? `${window.location.origin}/project/new`
+        : url.replace(/\/flow\/?$/, '/flow/project/new');
       await delay(3000);
       // 페이지 로드 대기
       await waitForElement(() => findPromptTextarea(), 15000);

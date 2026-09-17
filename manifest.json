@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MangoAuto",
-  "version": "2.3.6",
+  "version": "2.3.7",
   "description": "Grok/Flow 영상 자동화 + 네이버 블로그 초안 채우기 (MangoHub 연동)",
   "permissions": [
     "cookies",
@@ -21,6 +21,7 @@
     "https://*.grok.com/*",
     "https://imagine-public.x.ai/*",
     "https://labs.google/*",
+    "https://flow.google.com/*",
     "https://*.googleapis.com/*",
     "https://*.googleusercontent.com/*",
     "https://*.mangois.love/*",
@@ -81,9 +82,22 @@
       "run_at": "document_idle"
     },
     {
+      "//": "구주소. 2026-09 Google 이 Flow 를 flow.google.com 으로 옮겼지만 리다이렉트 대비로 남겨둔다.",
       "matches": [
         "https://labs.google/fx/tools/flow*",
         "https://labs.google/fx/*/tools/flow*"
+      ],
+      "js": [
+        "lib/utils.js",
+        "content/shared-dom.js",
+        "content/flow.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "//": "Flow 신주소. 프로젝트 페이지가 https://flow.google.com/project/<id> 로 바뀌었다.",
+      "matches": [
+        "https://flow.google.com/*"
       ],
       "js": [
         "lib/utils.js",
@@ -110,7 +124,8 @@
         "content/inject.js"
       ],
       "matches": [
-        "https://labs.google/*"
+        "https://labs.google/*",
+        "https://flow.google.com/*"
       ]
     }
   ],

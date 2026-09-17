@@ -23,6 +23,9 @@ const SUPPORTED_PATTERNS = [
   { pattern: /^https:\/\/grok\.com/,                   platform: 'grok' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/video-fx/, platform: 'flow' },
   { pattern: /^https:\/\/labs\.google\/fx\/.*tools\/flow/,     platform: 'flow' },
+  // 2026-09: Google 이 Flow 를 flow.google.com 으로 옮겼다. 옛 labs.google 패턴만 있어서
+  // 확장이 '지원하는 페이지가 아닙니다' 만 띄우던 사고. 구주소는 리다이렉트 대비로 남겨둔다.
+  { pattern: /^https:\/\/flow\.google\.com/,          platform: 'flow' },
   { pattern: /^https:\/\/blog\.naver\.com/,            platform: 'naver' },
 ];
 
