@@ -2609,6 +2609,50 @@
     await noteStrategyFailure();
   }
 
+  // ─── 이미지 호버 메뉴 진단 — 다운로드 실패 시 후보를 팝업 로그로 ───
+  // 다운로드는 호버 → ⋮ → 다운로드 → 1K/2K 서브메뉴 경로라 DOM 의존이 크다.
+  // Flow UI 가 바뀌면 여기가 먼저 깨지는데, DevTools 를 열면 CDP 가 막혀 진단이 어렵다.
+  function dumpHoverMenuCandidates(targetImg) {
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      return `${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)}`;
+    };
+    const desc = (b) => {
+      const al = b.getAttribute('aria-label') || '';
+      const tid = b.getAttribute('data-test-id') || b.getAttribute('data-testid') || '';
+      const role = b.getAttribute('role') || '';
+      const txt = (b.textContent || '').trim().slice(0, 22);
+      return `${box(b)} role="${role}" al="${al}" tid="${tid}" txt="${txt}"`;
+    };
+
+    popupLog('── 호버메뉴 진단 ──', 'warn');
+    if (targetImg) {
+      const r = targetImg.getBoundingClientRect();
+      popupLog(`대상 이미지: ${box(targetImg)} src=${(targetImg.src || '').slice(0, 60)}`, 'warn');
+      // 이미지 영역과 겹치는 클릭 가능 요소 전부
+      const overlapping = Array.from(document.querySelectorAll('button,[role="button"],[role="menuitem"],a'))
+        .filter(el => {
+          const b = el.getBoundingClientRect();
+          return b.width > 4 && b.height > 4 &&
+                 b.left < r.right + 40 && b.right > r.left - 40 &&
+                 b.top < r.bottom + 40 && b.bottom > r.top - 40;
+        });
+      popupLog(`이미지 주변 클릭요소 ${overlapping.length}개:`, 'warn');
+      overlapping.slice(0, 14).forEach((el, i) => popupLog(`  H${i}: ${desc(el)}`, 'warn'));
+    }
+
+    // 현재 열려 있는 메뉴/팝업
+    const menus = Array.from(document.querySelectorAll('[role="menu"],[role="listbox"],[role="dialog"],[popover]'))
+      .filter(m => { const b = m.getBoundingClientRect(); return b.width > 20 && b.height > 20; });
+    popupLog(`열린 메뉴 컨테이너 ${menus.length}개`, 'warn');
+    menus.slice(0, 3).forEach((m, i) => {
+      const items = Array.from(m.querySelectorAll('[role="menuitem"],button,li,a'))
+        .map(x => (x.textContent || '').trim().slice(0, 20)).filter(Boolean);
+      popupLog(`  M${i}: ${box(m)} 항목 ${items.length}개: ${items.slice(0, 10).join(' | ').slice(0, 220)}`, 'warn');
+    });
+    popupLog('── 호버메뉴 진단 끝 ──', 'warn');
+  }
+
   // ─── DOM 진단 덤프 — 전송 실패 시 팝업 로그로 후보를 뱉는다 (DevTools 불필요) ───
   function dumpButtonCandidates() {
     const rect = (el) => {
@@ -3464,13 +3508,30 @@
         return true;
       }
     }
-    // 새 이미지 감지
+    // ─── 새 이미지 감지 ───
+    // 🔑 2026-09-19 수정. 예전엔 src 에 'storage.googleapis.com' 이 들어간 것만 인정했다.
+    //    스냅샷(snapshotExistingMedia)은 호스트를 안 가리고 img 를 전부 담는데 감지만 호스트로
+    //    걸러서 비대칭이었다. Flow 가 flow.google.com 으로 옮기며 이미지 CDN 이 바뀌자
+    //    "생성은 됐는데 완료를 못 잡아" 3분 타임아웃 → 실패 판정 → 다음 항목으로 넘어갔다.
+    //    이제 호스트를 요구하지 않고 "스냅샷에 없던 + 실제로 큼" 으로 판정한다.
+    //    (아이콘·아바타·스프라이트 오탐은 렌더 크기로 거른다)
+    const MIN_SIDE = 120;
     const images = document.querySelectorAll('img[src]');
     for (const img of images) {
-      if (img.src && !existingImages.has(img.src) &&
-          img.src.includes('storage.googleapis.com')) {
-        return true;
-      }
+      const src = img.src;
+      if (!src || existingImages.has(src)) continue;
+      if (src.startsWith('data:')) continue;              // 인라인 아이콘
+      const r = img.getBoundingClientRect();
+      // 아직 레이아웃 전이면 naturalWidth 로 판단
+      const w = r.width || img.naturalWidth || 0;
+      const h = r.height || img.naturalHeight || 0;
+      if (w < MIN_SIDE || h < MIN_SIDE) continue;
+      let host = '';
+      try { host = new URL(src, location.href).host; } catch (_) {}
+      console.log(LOG_PREFIX, `New image detected: ${w}x${h} host=${host} ${src.substring(0, 70)}`);
+      // 새 CDN 호스트를 남긴다 — 다음에 또 바뀌면 이 로그로 바로 안다
+      popupLog(`새 이미지 감지 (${Math.round(w)}x${Math.round(h)}, host=${host || 'blob/기타'})`, 'info');
+      return true;
     }
     return false;
   }
@@ -4119,6 +4180,8 @@
     }
     if (!moreBtn) {
       console.warn(LOG_PREFIX, '[img-download] ⋮ 버튼 못찾음');
+      popupLog('❌ 이미지 호버 메뉴의 ⋮ 버튼을 못 찾음 — 아래 후보를 개발자에게 전달', 'error');
+      try { dumpHoverMenuCandidates(target); } catch (e) { popupLog(`덤프 실패: ${e.message}`, 'warn'); }
       return false;
     }
 
@@ -4144,6 +4207,8 @@
     if (!downloadItem) {
       const items = getVisibleMenuItems();
       console.warn(LOG_PREFIX, `[img-download] 다운로드 메뉴 못찾음. 메뉴: ${items.join(', ')}`);
+      popupLog(`❌ '다운로드' 메뉴 항목 없음. 열린 메뉴 항목 ${items.length}개: ${items.join(' | ').slice(0, 300)}`, 'error');
+      try { dumpHoverMenuCandidates(target); } catch (_) {}
       document.body.click();
       return false;
     }
