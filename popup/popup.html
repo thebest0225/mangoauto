@@ -288,7 +288,13 @@
       <!-- Log -->
       <section id="logSection" class="card hidden">
         <div class="card-inner">
-          <div class="label">로그</div>
+          <div class="label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+            <span>로그</span>
+            <span style="display:flex;gap:4px;">
+              <button type="button" id="logCopyBtn" class="btn-ghost btn-xs" title="로그 전체를 클립보드에 복사">복사</button>
+              <button type="button" id="logClearBtn" class="btn-ghost btn-xs" title="로그 지우기">지우기</button>
+            </span>
+          </div>
           <div id="logContainer" class="log-container"></div>
         </div>
       </section>

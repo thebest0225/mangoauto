@@ -45,6 +45,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshState();
   // loadReviewMode() 제거 — 검토 탭 삭제됨
   bindEvents();
+  bindLogTools();
 });
 
 // ─── 탭 패널 동기화 ───
@@ -1359,6 +1360,55 @@ async function refreshState() {
 }
 
 // ─── Log ───
+// ─── 로그 복사 / 지우기 ───
+// 진단 때마다 로그를 손으로 긁어 붙이는 게 번거로워서 추가 (2026-09-19 사용자 요청).
+function getLogText() {
+  const c = $('#logContainer');
+  if (!c) return '';
+  return Array.from(c.querySelectorAll('.log-entry')).map(e => e.textContent).join('\n');
+}
+
+function bindLogTools() {
+  const copyBtn = $('#logCopyBtn');
+  const clearBtn = $('#logClearBtn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      const text = getLogText();
+      if (!text) { copyBtn.textContent = '비어있음'; setTimeout(() => copyBtn.textContent = '복사', 1200); return; }
+      const done = () => {
+        const n = text.split('\n').length;
+        copyBtn.textContent = `✓ ${n}줄`;
+        setTimeout(() => copyBtn.textContent = '복사', 1500);
+      };
+      try {
+        await navigator.clipboard.writeText(text);
+        done();
+      } catch (_) {
+        // 클립보드 API 가 막힌 환경 폴백 (팝업이 포커스를 잃은 경우 등)
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          done();
+        } catch (e2) {
+          copyBtn.textContent = '실패';
+          setTimeout(() => copyBtn.textContent = '복사', 1500);
+        }
+      }
+    });
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      const c = $('#logContainer');
+      if (c) c.innerHTML = '';
+    });
+  }
+}
+
 function addLog(text, type = 'info') {
   const container = $('#logContainer');
   if (!container) return;
