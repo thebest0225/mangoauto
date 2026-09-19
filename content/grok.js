@@ -2413,6 +2413,44 @@
         grokPopupLog(`Step 3: 드롭 예외 (${e.message}) → file input 폴백`, 'warn');
       }
 
+      // ── Strategy -0.5: ClipboardEvent paste 우선 (2026-09-19) ──
+      // 운영자 실측: Ctrl+C/V 붙여넣기도 드래그앤드롭과 똑같이 ★메인 페이지에 머문다★.
+      // 합성 drop 은 사이트가 OS 드래그를 요구하면 막히지만, paste 는 clipboardData 를
+      // 읽는 구현이면 합성 이벤트로도 통하는 경우가 많다. 드롭 다음, file input 앞에 둔다.
+      if (!checkImageAttached() && isOnMainPage()) {
+        console.log(LOG_PREFIX, 'Strategy -0.5: ClipboardEvent paste 우선');
+        grokPopupLog('Step 3: 붙여넣기 시도 (메인 페이지 유지 목적)', 'info');
+        try {
+          const ed = findEditor();
+          if (ed) {
+            ed.focus();
+            await delay(200);
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            ed.dispatchEvent(new ClipboardEvent('paste', {
+              bubbles: true, cancelable: true, clipboardData: dt
+            }));
+            await delay(3000);
+            if (checkImageAttached()) {
+              const stayed = isOnMainPage();
+              console.log(LOG_PREFIX, '✅ Strategy -0.5 (paste) 첨부 성공');
+              grokPopupLog(`Step 3: 붙여넣기로 첨부 성공 · 메인 유지=${stayed ? 'O' : 'X'} · url=${location.pathname}`, 'info');
+              return true;
+            }
+            if (!isOnMainPage()) {
+              grokPopupLog(`Step 3: 붙여넣기 후 페이지 이동됨 (${location.pathname})`, 'warn');
+              return true;
+            }
+            grokPopupLog('Step 3: 붙여넣기 미확인 → file input 으로 폴백', 'warn');
+          } else {
+            grokPopupLog('Step 3: 에디터를 못 찾아 붙여넣기 생략', 'warn');
+          }
+        } catch (e) {
+          console.warn(LOG_PREFIX, 'Strategy -0.5 (paste) 실패:', e.message);
+          grokPopupLog(`Step 3: 붙여넣기 예외 (${e.message}) → file input 폴백`, 'warn');
+        }
+      }
+
       // ── Strategy 0: file input (가장 결정적 — 정확히 1개 파일만 업로드) ──
       // 🔑 클립보드 paste 가 에디터에 인라인 이미지를 삽입 → 멈춘 blob 으로 2장처럼 보이는
       //    문제(2026-05 로그 규명) 회피. file input 은 dt.files 에 1개만 세팅 → 단일 업로드.
