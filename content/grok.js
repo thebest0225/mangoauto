@@ -2112,12 +2112,34 @@
     if (_lim) console.warn(LOG_PREFIX, `전송이 막힌 이유로 보이는 팝업: "${_lim}"`);
     console.warn(LOG_PREFIX, '⚠️ 버튼을 눌렀는데 전송 흔적이 없다 — 모드/게이지 버튼을 눌렀을 가능성. 대체 버튼 1회 재시도');
     showToast('전송 반응 없음 — 다른 버튼으로 재시도', 'warn');
-    // 잘못 누른 버튼이 팝업을 열었으면 그게 다음 클릭을 막는다 → Escape 로 닫고 간다
-    try {
-      document.body.dispatchEvent(new KeyboardEvent('keydown',
-        { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
-      await delay(400);
-    } catch (_) {}
+    // 잘못 누른 버튼이 팝업을 열었으면 그게 다음 클릭을 막는다 → Escape 로 닫고 간다.
+    // 🔑 2026-09-19 — 단, post 페이지에서는 Escape 가 ★그 페이지를 닫고 메인으로 되돌린다★.
+    //   실측 콘솔: Submit 클릭 → 효과 없음 → Escape → popstate → /imagine 로 튕김.
+    //   여태 "버튼을 잘못 눌러서 튕겼다" 고 봤는데 실제 범인은 이 Escape 였다.
+    //   post 페이지에서는 팝업이 있을 때만, 그것도 URL 을 확인하며 쏜다.
+    if (!/\/imagine\/post\//.test(location.href)) {
+      try {
+        document.body.dispatchEvent(new KeyboardEvent('keydown',
+          { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+        await delay(400);
+      } catch (_) {}
+    } else {
+      const hasDialog = !!document.querySelector('[role="dialog"], [role="alertdialog"]');
+      if (hasDialog) {
+        const _u = location.href;
+        try {
+          document.body.dispatchEvent(new KeyboardEvent('keydown',
+            { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+          await delay(400);
+        } catch (_) {}
+        if (location.href !== _u) {
+          grokPopupLog('❌ Escape 가 post 페이지를 닫아버렸다 — 중단', 'error');
+          return false;
+        }
+      } else {
+        grokPopupLog('Step 5: post 페이지 — 팝업 없음, Escape 생략(페이지 닫힘 방지)', 'info');
+      }
+    }
     const alt = findSubmitButton(btn);
     if (!alt) {
       console.error(LOG_PREFIX, '대체 전송 버튼 없음 — Enter fallback');
