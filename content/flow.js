@@ -2159,11 +2159,15 @@
     }
   });
 
+  const PROGRESS_LIGATURES = new Set(['progress_activity', 'hourglass_empty', 'hourglass_top', 'hourglass']);
   function countProgressIndicators() {
     let n = 0;
-    document.querySelectorAll('i, .material-icons, .material-symbols-outlined').forEach(ic => {
+    // 2026-09 신 UI: ligature 가 <i> 래퍼 없이 요소의 직접 텍스트로 들어간다.
+    // 생성 버튼과 같은 변화라 여기도 같이 깨져 있었다. span/button 까지 훑는다.
+    document.querySelectorAll('i, .material-icons, .material-symbols-outlined, span, button').forEach(ic => {
+      if (ic.children.length) return;           // 잎 노드만 (비용 절감 + 오탐 방지)
       const t = (ic.textContent || '').trim();
-      if (t === 'progress_activity' || t === 'hourglass_empty' || t === 'hourglass_top') n++;
+      if (PROGRESS_LIGATURES.has(t)) n++;
     });
     n += document.querySelectorAll('[role="progressbar"]').length;
     return n;
@@ -2172,10 +2176,15 @@
   // 클릭 전 baseline 캡처. 클릭 후 변화 감지.
   let _genBaselineCount = 0;
   let _genStartCutoff = 0;
+  let _genBaselinePromptLen = 0;    // 클릭 직전 에디터 글자수
+  let _genBaselineBtnEnabled = false; // 클릭 직전 '생성 시작' 활성 여부
   function captureGenerationBaseline() {
     _genBaselineCount = countProgressIndicators();
     _genStartCutoff = Date.now();
-    console.log(LOG_PREFIX, `[gen-detect] baseline 캡처: progress=${_genBaselineCount}`);
+    _genBaselinePromptLen = readEditorText().trim().length;
+    const b = findGenerateButton();
+    _genBaselineBtnEnabled = !!b && !(b.disabled === true || b.getAttribute('aria-disabled') === 'true');
+    console.log(LOG_PREFIX, `[gen-detect] baseline: progress=${_genBaselineCount} promptLen=${_genBaselinePromptLen} btnEnabled=${_genBaselineBtnEnabled}`);
   }
 
   function hasGenerationStarted() {
@@ -2183,6 +2192,22 @@
     if (_lastGenerationFetchTimestamp >= _genStartCutoff) return true;
     // 2순위: progress 아이콘 수가 baseline 보다 증가
     if (countProgressIndicators() > _genBaselineCount) return true;
+
+    // 🔑 3순위 (2026-09-19 추가) — Flow 가 제출을 받으면 프롬프트 상자를 비우고
+    //    '생성 시작' 버튼을 DISABLED 로 되돌린다. 이건 UI 가 바뀌어도 잘 안 변하는 신호다.
+    //    fetch 신호(엔드포인트명 변경)와 progress 아이콘(<i> 래퍼 제거)이 둘 다 깨져
+    //    제출에 성공하고도 "시작 안 됨" 으로 판정, 전략 8종을 45초간 헛돌리던 것을 막는다.
+    if (_genBaselinePromptLen > 0 && readEditorText().trim().length === 0) {
+      console.log(LOG_PREFIX, '[gen-detect] ✔ 프롬프트 상자가 비워짐 → 제출됨으로 판정');
+      return true;
+    }
+    if (_genBaselineBtnEnabled) {
+      const b = findGenerateButton();
+      if (b && (b.disabled === true || b.getAttribute('aria-disabled') === 'true')) {
+        console.log(LOG_PREFIX, "[gen-detect] ✔ '생성 시작' 이 비활성으로 전환 → 제출됨으로 판정");
+        return true;
+      }
+    }
     return false;
   }
 
@@ -3115,7 +3140,23 @@
       if (!a.insideImage && b.insideImage) return 1;
       return a.dist - b.dist;
     });
-    // 이미지 내부 버튼만 반환 (외부 버튼은 프로젝트 메뉴일 가능성 높음)
+    // 🔑 2026-09-19 — 카드(공통 조상) 기준 탐색을 최우선으로 둔다.
+    //    신 UI 는 액션바(즐겨찾기·프롬프트 재사용·옵션 더보기)가 이미지 '아래' 로 내려갔다.
+    //    실측: 이미지 캡션 y=552, 액션바 y=610. 기존 insideImage 는 이미지 경계 ±30px 를
+    //    요구해서 전부 탈락했고, 거리 폴백(100px)도 넘겨서 "⋮ 버튼 못찾음" 이 났다.
+    //    같은 카드 안에 있으면 레이아웃이 어떻든 그 이미지의 메뉴가 맞다.
+    let node = targetImg.parentElement;
+    for (let d = 0; d < 6 && node; d++) {
+      const inCard = allBtns.filter(b => node.contains(b.btn));
+      if (inCard.length > 0) {
+        console.log(LOG_PREFIX, `[more] 카드 조상(depth=${d})에서 ⋮ 발견`);
+        inCard.sort((a, b) => a.dist - b.dist);
+        return inCard[0].btn;
+      }
+      node = node.parentElement;
+    }
+
+    // 이미지 내부 버튼 (구 레이아웃)
     const inside = allBtns.filter(b => b.insideImage);
     if (inside.length > 0) return inside[0].btn;
     // 이미지 내부에 없으면 매우 가까운 것만 (100px 이내)
