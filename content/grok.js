@@ -1850,11 +1850,28 @@
   // 판정 근거 세 가지 — 하나라도 잡히면 전송된 것으로 본다:
   //   ① 생성 진행 표시(취소 버튼 등)  ② URL 이 바뀜  ③ 컴포저의 프롬프트가 비워짐
   //      (그록은 전송하면 입력창을 비운다 → 글이 그대로면 안 나간 것이다)
+  // 클릭한 버튼을 로그에 남기기 위한 요약 — '무엇을 눌렀나' 가 진단의 핵심이다
+  function _btnDesc(b) {
+    if (!b) return '(없음)';
+    const r = b.getBoundingClientRect();
+    return `${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)} ` +
+           `al="${b.getAttribute('aria-label') || ''}" txt="${(b.textContent || '').trim().slice(0, 16)}"`;
+  }
+
   async function _waitSubmitTookEffect(timeout = 6000, urlBefore = '', textBefore = '') {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       if (isAutoGenerating() || isVideoStillGenerating()) return 'generating';
-      if (urlBefore && location.href !== urlBefore) return 'url';
+      if (urlBefore && location.href !== urlBefore) {
+        // 🔑 2026-09-19 — URL 이 바뀌었다고 다 전송 성공이 아니다.
+        //   post 페이지에서 ★메인(/imagine)으로 되돌아간 것★ 도 URL 변경이라
+        //   'url' 을 리턴해 전송 성공으로 쳤다. 실제로는 엉뚱한 버튼을 눌러 튕긴 것이고,
+        //   그 뒤로는 오지 않을 영상을 기다리게 된다. 운영자 보고: "생성 메인페이지로 돌아와버렸어".
+        const wasPost = /\/imagine\/post\//.test(urlBefore);
+        const isPost  = /\/imagine\/post\//.test(location.href);
+        if (wasPost && !isPost) return 'navigated-away';
+        return 'url';
+      }
       if (textBefore) {
         const ed = findEditor();
         const now = ed ? (ed.value !== undefined ? ed.value : ed.textContent || '').trim() : '';
@@ -1939,13 +1956,21 @@
     }
     window.__mangoauto_lastGrokSubmitMs = Date.now();  // 🔒 lockout 마킹
     console.log(LOG_PREFIX, `Submit clicked (native only): aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
+    grokPopupLog(`Step 5: 전송 클릭 → ${_btnDesc(btn)}`, 'info');
 
     // 클릭이 실제로 먹었는지 확인한다. 안 먹었으면 ★다른 버튼으로 1회만★ 재시도.
     // 중복 생성 위험은 낮다 — 첫 클릭이 아무 효과도 없었다는 걸 확인한 뒤에만 누른다
     // (프롬프트가 컴포저에 그대로 남아 있고, 생성 표시도 URL 변경도 없는 상태).
     const eff = await _waitSubmitTookEffect(6000, urlBefore, textBefore);
+    if (eff === 'navigated-away') {
+      console.error(LOG_PREFIX, '❌ 전송이 아니라 메인 페이지로 튕겼다 — 잘못된 버튼을 눌렀다');
+      grokPopupLog(`❌ 전송 클릭이 메인으로 튕김 — 누른 버튼: ${_btnDesc(btn)}`, 'error');
+      try { dumpComposerButtons(); } catch (_) {}
+      return false;
+    }
     if (eff) {
       console.log(LOG_PREFIX, `전송 확인됨 (${eff})`);
+      grokPopupLog(`Step 5: 전송 확인됨 (${eff}) · 누른 버튼: ${_btnDesc(btn)}`, 'info');
       return true;
     }
     // 전송 흔적이 없을 때 팝업이 떠 있으면 그게 원인이다 — 로그에 남긴다
@@ -1972,7 +1997,15 @@
     try { alt.click(); } catch (_) {}
     console.log(LOG_PREFIX, `대체 버튼 클릭: aria="${alt.getAttribute('aria-label') || ''}" text="${(alt.textContent || '').trim().substring(0, 20)}"`);
     const eff3 = await _waitSubmitTookEffect(6000, urlBefore, textBefore);
-    if (eff3) { console.log(LOG_PREFIX, `전송 확인됨 (${eff3})`); return true; }
+    if (eff3 === 'navigated-away') {
+      grokPopupLog(`❌ 대체 버튼도 메인으로 튕김 — ${_btnDesc(alt)}`, 'error');
+      return false;
+    }
+    if (eff3) {
+      console.log(LOG_PREFIX, `전송 확인됨 (${eff3})`);
+      grokPopupLog(`Step 5: 대체 버튼으로 전송됨 (${eff3}) · ${_btnDesc(alt)}`, 'info');
+      return true;
+    }
     console.error(LOG_PREFIX, '❌ 두 번 눌렀는데도 전송 흔적 없음');
     return false;
   }
