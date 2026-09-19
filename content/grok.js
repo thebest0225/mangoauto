@@ -347,6 +347,12 @@
           showToast('Step 5: 이미 생성 중 — 전송 skip', 'warn');
           window.__mangoauto_lastGrokSubmitMs = Date.now();
         } else {
+          // 🔑 여기까지 오는 동안 페이지가 메인으로 튕겼으면 전송하면 안 된다.
+          //   프롬프트도 첨부도 없는 화면에서 '에이전트'·'이미지' 같은 엉뚱한 버튼을 눌렀다(실측).
+          if (!/\/imagine\/post\//.test(location.href)) {
+            grokPopupLog(`❌ Step 5: post 페이지가 아님 (${location.pathname}) — 전송하지 않고 실패 처리`, 'error');
+            throw new Error(`전송 중단 — 작업 페이지를 벗어났습니다 (${location.pathname})`);
+          }
           showToast('Step 5: 전송...', 'info');
           const submitted = await tryClickSubmit();
           if (!submitted) throw new Error('전송 실패 — 파란 화살표(전송) 버튼을 찾지 못했습니다');
@@ -1182,14 +1188,27 @@
     await delay(400);
 
     // 1) 입력바의 인라인 '비디오' 버튼
-    let btn = _findComposerButtonByText('비디오') || _findComposerButtonByText('동영상') ||
+    // 🔑 순서 중요 — aria-label 기반 아이콘 탐색을 ★먼저★ 본다.
+    //   텍스트 탐색(_findComposerButtonByText)이 하단 영역의 엉뚱한 링크/메뉴를 잡아
+    //   클릭 시 메인 페이지로 튕기는 사고가 났다 (2026-09-19 콘솔 로그로 확인).
+    let btn = _findModeIconButton('video') ||
+              _findComposerButtonByText('비디오') || _findComposerButtonByText('동영상') ||
               _findComposerButtonByText('Video') ||
-              _findModeIconButton('video') ||          // 신 UI: 아이콘 전용 모드 버튼
               findButtonByTextInArea('비디오') || findButtonByTextInArea('Video');
     if (btn) {
-      grokPopupLog('4.9: 인라인/아이콘 비디오 버튼 클릭', 'info');
+      grokPopupLog(`4.9: 비디오 버튼 클릭 → ${_btnDesc(btn)}`, 'info');
+      const _urlB = location.href;
       MangoDom.simulateClick(btn);
       await delay(700);
+      // 🔑 페이지가 이동했으면 그 클릭은 ★모드 버튼이 아니었다★.
+      //   예전엔 이동 후 메인 컴포저가 비디오라는 이유로 "✅ 복구" 를 찍고 넘어갔다(거짓 성공).
+      //   그 뒤 전송 단계는 프롬프트도 첨부도 없는 메인에서 엉뚱한 버튼을 눌렀다.
+      if (location.href !== _urlB) {
+        console.error(LOG_PREFIX, '❌ 모드 클릭이 페이지를 이동시켰다 — 오클릭');
+        grokPopupLog(`❌ 4.9: 모드 클릭이 페이지를 이동시킴 (${_urlB} → ${location.pathname}) — 오클릭. 전송 중단`, 'error');
+        try { dumpComposerButtons(); } catch (_) {}
+        return false;
+      }
       const m1 = getComposerMode();
       grokPopupLog(`4.9: 클릭 후 모드 = ${m1 || '판독불가'}`, m1 === 'video' ? 'info' : 'warn');
       if (m1 === 'video') {
@@ -1205,8 +1224,13 @@
     const trigger = _findComposerButtonByText('이미지') || _findComposerButtonByText('Image') ||
                     findButtonByTextInArea('이미지') || findButtonByTextInArea('Image');
     if (trigger) {
+      const _urlT = location.href;
       MangoDom.simulateClick(trigger);
       await delay(600);
+      if (location.href !== _urlT) {
+        grokPopupLog(`❌ 4.9: 드롭다운 트리거 클릭이 페이지를 이동시킴 — 오클릭. 전송 중단`, 'error');
+        return false;
+      }
       const item = findDropdownItem('비디오') || findDropdownItem('동영상') || findDropdownItem('Video');
       if (item) {
         MangoDom.simulateClick(item);
