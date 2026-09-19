@@ -42,6 +42,14 @@
       // Flow UI 개편 (2026-05): arrow_forward → arrow_upward / play_arrow / send 등 다양화.
       // 또한 aria-label='Generate'/'생성' / data-test-id='generate-button' 등 신패턴 추가.
       // 다중 OR 후보를 한 XPath 안에 묶어 어떤 변형도 잡히게.
+      // 🔑 2026-09 신 UI 실측: 아이콘 ligature 가 <i> 래퍼 없이 button 의 직접 텍스트로 들어간다.
+      //    실제 DOM: <button aria-label="생성 시작">arrow_forward</button> (32x32)
+      //    옛 조건(.//i[text()='arrow_forward'], @aria-label='생성' 완전일치)은 전부 빗나갔다.
+      "//button[normalize-space(text())='arrow_forward'] | " +
+      "//button[normalize-space(text())='arrow_upward'] | " +
+      "//button[normalize-space(text())='send'] | " +
+      "//button[contains(@aria-label,'생성')] | " +
+      "//button[contains(@aria-label,'시작')] | " +
       "//button[.//i[normalize-space(text())='arrow_forward']] | " +
       "//button[.//i[normalize-space(text())='arrow_upward']] | " +
       "//button[.//i[normalize-space(text())='send']] | " +
@@ -310,13 +318,15 @@
         const slateOk = await tryInjectSlateFirst(prompt, 2500);
         if (slateOk) {
           await delay(400);
-          const sb = findGenerateButton();
-          const submitOk = !!sb && !sb.disabled && sb.getAttribute('aria-disabled') !== 'true';
-          if (submitOk) {
-            console.log(LOG_PREFIX, '[prompt] ✅ Method 1 (inject.js Slate API) 성공 + submit 활성 — DOM typing 스킵');
+          // 🔑 자기보고를 믿지 말고 에디터를 읽어서 확인한다 (2026-09 신 UI 사고).
+          const landed = promptLandedInEditor(prompt);
+          const sb = await waitForGenerateEnabled(5000);
+          if (landed && sb) {
+            console.log(LOG_PREFIX, '[prompt] ✅ Method 1 (Slate API) — 에디터 반영 확인 + 버튼 활성');
             inputFilled = true;
           } else {
-            console.warn(LOG_PREFIX, '[prompt] ⚠️ Slate API 성공했으나 submit 비활성 — DOM typing 도 시도');
+            console.warn(LOG_PREFIX, `[prompt] ⚠️ Slate API 자기보고는 성공이나 실제 확인 실패 (에디터반영=${landed}, 버튼활성=${!!sb}) — DOM typing 으로 재시도`);
+            popupLog(`Slate 주입이 실제로는 반영되지 않음 (에디터=${landed ? 'O' : 'X'}, 버튼=${sb ? '활성' : '비활성'}) → DOM 입력 재시도`, 'warn');
           }
         } else {
           console.log(LOG_PREFIX, '[prompt] Method 1 (inject.js Slate API) 실패 — DOM typing 으로 전환');
@@ -337,6 +347,15 @@
       await delay(200);
 
       // Step 6: Click generate
+      // 비활성 버튼에는 어떤 전송 전략도 통하지 않는다. 먼저 활성화를 기다리고,
+      // 끝내 비활성이면 전략 8종(45초)을 헛돌리지 말고 원인을 명확히 남기고 실패시킨다.
+      const genBtn = await waitForGenerateEnabled(8000);
+      if (!genBtn) {
+        const txt = readEditorText().trim();
+        popupLog(`❌ '생성 시작' 버튼이 비활성입니다 — 프롬프트가 Flow 에 등록되지 않았습니다 (에디터 글자수=${txt.length}). 전송 전략은 건너뜁니다.`, 'error');
+        try { dumpButtonCandidates(); } catch (_) {}
+        throw new Error('Generate button disabled — prompt not registered');
+      }
       await clickGenerate();
       checkStopped();
 
@@ -1536,6 +1555,41 @@
   }
 
   // ─── inject.js (MAIN world) Slate API 우선 시도 (React fiber 직접 접근) ───
+  // ─── 에디터에 실제로 글자가 들어갔는지 읽어서 확인한다 ───
+  // ⚠️ tryInjectSlateFirst 는 inject.js 의 자기보고(slateOk)만 믿는다. 2026-09 신 UI 에서
+  //    execCommand insertText 가 true 를 리턴하고 "성공" 이 찍히는데도 에디터는 비어 있었다.
+  //    그 결과 "생성 시작" 버튼이 DISABLED 인 채로 전송 전략 8종이 헛돌았다(45초 낭비).
+  function readEditorText() {
+    const el = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+               document.querySelector('textarea[id*="PINHOLE" i], textarea, [contenteditable="true"]');
+    if (!el) return '';
+    return (el.value !== undefined && el.value !== null && el.tagName === 'TEXTAREA')
+      ? String(el.value) : (el.innerText || el.textContent || '');
+  }
+
+  function promptLandedInEditor(prompt) {
+    const want = (prompt || '').trim().slice(0, 24).replace(/\s+/g, ' ');
+    if (!want) return false;
+    const got = readEditorText().trim().replace(/\s+/g, ' ');
+    return got.includes(want);
+  }
+
+  // 진짜 생성 버튼이 활성화될 때까지 기다린다. 비활성인 채로 누르면 어떤 전략도 통하지 않는다.
+  async function waitForGenerateEnabled(timeoutMs = 8000) {
+    const start = Date.now();
+    let last = null;
+    while (Date.now() - start < timeoutMs) {
+      const btn = findGenerateButton();
+      if (btn) {
+        last = btn;
+        const dis = btn.disabled === true || btn.getAttribute('aria-disabled') === 'true';
+        if (!dis) return btn;
+      }
+      await delay(300);
+    }
+    return last && !(last.disabled === true || last.getAttribute('aria-disabled') === 'true') ? last : null;
+  }
+
   async function tryInjectSlateFirst(prompt, timeoutMs) {
     timeoutMs = timeoutMs || 2500;
     return new Promise((resolve) => {
@@ -1947,6 +2001,8 @@
       for (const icon of icons) {
         if (SUBMIT_ICONS.has((icon.textContent || '').trim())) return true;
       }
+      // 2026-09 신 UI: <i> 래퍼 없이 button 직접 텍스트가 ligature 다 (<button>arrow_forward</button>).
+      if (SUBMIT_ICONS.has((btn.textContent || '').trim())) return true;
       return false;
     };
 
@@ -1991,7 +2047,9 @@
           if (!isEnabledButton(btn)) continue;
           const label = (btn.getAttribute('aria-label') || '').toLowerCase();
           const testid = (btn.getAttribute('data-test-id') || btn.getAttribute('data-testid') || '').toLowerCase();
-          if (label.includes('generate') || label.includes('send') || label === '생성' || label === '만들기' || label === '보내기' ||
+          // 완전일치였던 탓에 실제 라벨 "생성 시작" 을 놓쳤다 (2026-09 실측) → 부분일치로 바꿈
+          if (label.includes('generate') || label.includes('send') ||
+              label.includes('생성') || label.includes('만들기') || label.includes('보내기') || label.includes('시작') ||
               testid.includes('generate') || testid.includes('submit')) {
             console.log(LOG_PREFIX, `[btn] ③ prompt-ancestor(depth=${depth}) aria-label 선택 (label="${label||testid}")`);
             return btn;
@@ -2022,6 +2080,7 @@
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
       const testid = (btn.getAttribute('data-test-id') || btn.getAttribute('data-testid') || '').toLowerCase();
       if ((label.includes('generate') && !label.includes('project')) || label.includes('send') ||
+          label.includes('생성') || label.includes('만들기') || label.includes('보내기') ||
           testid.includes('generate') || testid.includes('submit')) {
         console.log(LOG_PREFIX, `[btn] ⑤ 전역 aria-label 선택 (label="${label||testid}")`);
         return btn;
