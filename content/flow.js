@@ -2938,7 +2938,7 @@
     const h = img.naturalHeight || img.offsetHeight || img.height || 0;
     if (w > 80 && h > 80) return true;
     // URL 패턴 폴백 (크기 정보 없을 때)
-    if (src.includes('googleapis.com')) return true;
+    if (src.includes('googleapis.com') || src.includes('flow-content.google')) return true;
     if (src.includes('googleusercontent.com')) return true;
     if (src.startsWith('blob:')) return true;
     return false;
@@ -3612,16 +3612,33 @@
       return lastApiResult.mediaUrls[0];
     }
 
-    // Method 2: Find new large images
-    const images = document.querySelectorAll('img[src]');
-    for (const img of images) {
-      const src = img.getAttribute('src');
-      if (src && !existingImages.has(src) &&
-          (src.includes('storage.googleapis.com') || src.includes('generated'))) {
-        return src;
-      }
+    // Method 2: 스냅샷에 없던 새 이미지 중 가장 큰 것
+    // 🔑 2026-09-19. 예전엔 src 에 'storage.googleapis.com' 또는 'generated' 가 있어야 했다.
+    //    신 Flow 의 이미지 CDN 은 flow-content.google 이라 전부 탈락 →
+    //    생성·감지까지 다 되고도 'Cannot find generated image' 로 실패했다.
+    //    호스트를 요구하지 말고 "새로 생긴 + 충분히 큰" 것 중 최대를 고른다.
+    // ⚠️ 비교 기준은 img.src(절대경로)로 통일한다. 예전엔 getAttribute('src')(상대 가능)를
+    //    절대경로 Set 과 비교해 어긋날 수 있었다.
+    const MIN_SIDE = 120;
+    let best = null, bestArea = 0;
+    document.querySelectorAll('img[src]').forEach(img => {
+      const src = img.src;
+      if (!src || existingImages.has(src) || src.startsWith('data:')) return;
+      const r = img.getBoundingClientRect();
+      const w = img.naturalWidth || r.width || 0;
+      const h = img.naturalHeight || r.height || 0;
+      if (w < MIN_SIDE || h < MIN_SIDE) return;
+      const area = w * h;
+      if (area > bestArea) { bestArea = area; best = src; }
+    });
+    if (best) {
+      let host = ''; try { host = new URL(best, location.href).host; } catch (_) {}
+      console.log(LOG_PREFIX, `[img-url] 새 이미지 선택: host=${host} area=${bestArea}`);
+      popupLog(`생성 이미지 확보 (host=${host})`, 'info');
+      return best;
     }
 
+    popupLog('❌ 생성된 이미지 URL 을 못 찾음 — 새 img 후보 0개', 'error');
     return null;
   }
 
