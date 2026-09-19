@@ -3206,6 +3206,16 @@
   // 3초 간격 폴링, 5분 타임아웃
   // 영상이 아직 생성 중인지 감지 — visible 진행률 % element 직접 검사 (가장 정확).
   // 2개 영상 동시 생성 패턴 (43%, 52% 썸네일 + "생성 중 52% | 취소") 모두 감지.
+  // 생성 감지 근거를 팝업에 남긴다. 폴링 루프에서 불리므로 10초 스로틀.
+  // 어느 분기가 참을 냈고 무엇을 잡았는지 모르면 오탐을 영영 못 잡는다 (2026-09-19).
+  let _genDetectLastLog = 0;
+  function _genDetectLog(msg) {
+    const now = Date.now();
+    if (now - _genDetectLastLog < 10000) return;
+    _genDetectLastLog = now;
+    try { grokPopupLog(`[생성감지] ${msg}`, 'warn'); } catch (_) {}
+  }
+
   function isVideoStillGenerating() {
     // 1) visible 진행률 % 텍스트 element 검사 (가장 강한 신호)
     //    "43%", "52%", "29 %" 같은 짧은 텍스트가 visible 이면 진행 중.
@@ -3240,6 +3250,7 @@
 
       // OK — 진행률 표시 element 확정
       console.log(LOG_PREFIX, `[gen] 진행률 표시 감지: "${text}" @${Math.round(rect.top)}`);
+      _genDetectLog(`①퍼센트: "${text}" ${Math.round(rect.width)}x${Math.round(rect.height)}@${Math.round(rect.left)},${Math.round(rect.top)} tag=${el.tagName}`);
       return true;
     }
 
@@ -3254,6 +3265,7 @@
       if (!inProgressKeywords.some(kw => text.includes(kw))) continue;
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
+      _genDetectLog(`②키워드: "${text.slice(0, 40)}" @${Math.round(rect.top)} tag=${el.tagName}`);
       return true;
     }
 
@@ -3265,8 +3277,14 @@
         const rect = btn.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
           // body 어디든 % 진행률 함께 있으면 진행 중 확정
+          // ⚠️ 이 분기는 매우 헐렁하다 — '취소' 버튼 하나 + 페이지 어딘가의 NN% 면 참이 된다.
+          //    줌 표시(100%)·사용량(76%) 같은 것과 겹치면 바로 오탐이다.
           const bodyText = (document.body.textContent || '');
-          if (/\b\d{1,3}\s*%/.test(bodyText)) return true;
+          const m = bodyText.match(/\b\d{1,3}\s*%/);
+          if (m) {
+            _genDetectLog(`③취소버튼+퍼센트: 버튼@${Math.round(rect.top)} / 본문에서 찾은 값 "${m[0]}" ← 오탐 의심 1순위`);
+            return true;
+          }
         }
       }
     }
@@ -3275,7 +3293,10 @@
     const progressEl = document.querySelector('[role="progressbar"], progress[value]');
     if (progressEl) {
       const rect = progressEl.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) return true;
+      if (rect.width > 0 && rect.height > 0) {
+        _genDetectLog(`④progressbar: ${Math.round(rect.width)}x${Math.round(rect.height)}@${Math.round(rect.top)} cls="${(progressEl.className||'').toString().slice(0,40)}"`);
+        return true;
+      }
     }
     return false;
   }
