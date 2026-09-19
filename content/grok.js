@@ -348,7 +348,8 @@
 
         // Step 10: 업스케일 시도 (timeout 60초 — 사용자 정책 2026-06-07)
         const postUrlBeforeUpscale = location.href;
-        if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
+        // 2026-09-19: 기본 미실행으로 바꿈(운영자 요청). 예전엔 `!== false` 라 설정이 없으면 돌았다.
+        if (settings?.grok?.autoUpscale === true && videoUrl && !videoUrl.includes('_hd')) {
           showToast('Step 10: 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(60000);
           if (upscaled === 'already-hd') {
@@ -428,7 +429,8 @@
 
         // Step 4: 업스케일 (timeout 60초 — 사용자 정책 2026-06-07)
         const postUrlBeforeUpscale = location.href;
-        if (settings?.grok?.autoUpscale !== false && videoUrl && !videoUrl.includes('_hd')) {
+        // 2026-09-19: 기본 미실행으로 바꿈(운영자 요청). 예전엔 `!== false` 라 설정이 없으면 돌았다.
+        if (settings?.grok?.autoUpscale === true && videoUrl && !videoUrl.includes('_hd')) {
           showToast('480p 감지 - 업스케일 시도...', 'info');
           const upscaled = await tryUpscaleVideo(60000);
           if (upscaled === 'already-hd') {
@@ -982,6 +984,68 @@
 
   // 컴포저의 현재 모드 — 'video' | 'image' | null(판독 실패)
   // 그록은 모드 버튼에 현재 모드 이름을 그대로 쓴다 (예: [🎬 비디오]).
+  // popup 로그 패널 직결 — DevTools 없이 진단 (Flow 쪽과 동일 패턴)
+  function grokPopupLog(text, level = 'info') {
+    try { chrome.runtime.sendMessage({ type: 'CONTENT_LOG', text: `[Grok] ${text}`, level }); } catch (_) {}
+  }
+
+  // 컴포저 하단바 버튼을 팝업 로그로 덤프 — 모드 판독 실패 시 원인 파악용
+  function dumpComposerButtons() {
+    const editor = findEditor();
+    const edRect = editor ? editor.getBoundingClientRect() : null;
+    const out = [];
+    document.querySelectorAll('button').forEach(b => {
+      const r = b.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return;
+      if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
+      if (edRect && !(r.top > edRect.top - 80 && r.top < edRect.bottom + 200)) return;
+      const at = [];
+      for (const a of b.attributes) {
+        if (/^(aria-|data-|title|type)/.test(a.name)) at.push(`${a.name}="${a.value.slice(0, 40)}"`);
+      }
+      out.push(`${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)} ` +
+               `txt="${(b.textContent || '').trim().slice(0, 16)}" ${at.join(' ').slice(0, 160)}`);
+    });
+    grokPopupLog(`── 컴포저 버튼 ${out.length}개 ──`, 'warn');
+    out.slice(0, 14).forEach((l, i) => grokPopupLog(`  C${i}: ${l}`, 'warn'));
+    grokPopupLog('── 컴포저 덤프 끝 ──', 'warn');
+  }
+
+  // 아이콘 전용 모드 버튼 찾기 — 신 UI 는 텍스트가 없고 aria-label 만 있다.
+  // (+ 옆에 이미지 아이콘, 그 옆에 비디오 아이콘, 오른쪽 끝에 파란 전송 화살표)
+  function _findModeIconButton(kind) {
+    const editor = findEditor();
+    const edRect = editor ? editor.getBoundingClientRect() : null;
+    const want = kind === 'video' ? /동영상|비디오|video/i : /이미지|image/i;
+    let best = null;
+    document.querySelectorAll('button').forEach(b => {
+      const r = b.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return;
+      if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
+      if (edRect && !(r.top > edRect.top - 80 && r.top < edRect.bottom + 200)) return;
+      const label = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+      if (!label || !want.test(label)) return;
+      // '만들기' 계열은 모드 버튼이다 (전송 버튼은 아이콘 화살표라 라벨이 다름).
+      if (!best || r.left < best.r.left) best = { b, r, label };
+    });
+    return best ? best.b : null;
+  }
+
+  // 버튼이 '선택됨' 상태인지 — 속성 여러 개를 훑는다 (프레임워크마다 다름)
+  function _isModeButtonActive(btn) {
+    if (!btn) return false;
+    const ap = btn.getAttribute('aria-pressed');
+    if (ap === 'true') return true;
+    if (ap === 'false') return false;
+    const ac = btn.getAttribute('aria-checked');
+    if (ac === 'true') return true;
+    if (ac === 'false') return false;
+    const ds = (btn.getAttribute('data-state') || btn.getAttribute('data-selected') || '').toLowerCase();
+    if (ds === 'active' || ds === 'on' || ds === 'true' || ds === 'selected') return true;
+    if (ds === 'inactive' || ds === 'off' || ds === 'false') return false;
+    return null;  // 판독 불가
+  }
+
   function getComposerMode() {
     const editor = findEditor();
     const edRect = editor ? editor.getBoundingClientRect() : null;
@@ -996,8 +1060,20 @@
       if (edRect && !(r.top > edRect.top - 60 && r.top < edRect.bottom + 160)) return;
       if (!best || r.left < best.r.left) best = { b, r, t };
     });
-    if (!best) return null;
-    return /이미지|image/i.test(best.t) ? 'image' : 'video';
+    if (best) return /이미지|image/i.test(best.t) ? 'image' : 'video';
+
+    // 🔑 2026-09-19 — 신 UI 는 모드 버튼이 ★아이콘 전용★ 이라 textContent 가 비어 있다.
+    //    위 텍스트 완전일치 스캔이 전부 탈락 → null 반환 → ensureVideoMode 가
+    //    "판독 실패, 확인 없이 진행" 으로 빠져 ★이미지 모드 그대로 전송★ 되었다.
+    //    프레임→영상에서 영상 대신 이미지가 나오던 원인.
+    const vBtn = _findModeIconButton('video');
+    const iBtn = _findModeIconButton('image');
+    const vOn = _isModeButtonActive(vBtn);
+    const iOn = _isModeButtonActive(iBtn);
+    if (vOn === true) return 'video';
+    if (iOn === true) return 'image';
+    if (vOn === false && iOn === null && vBtn) return 'image';  // 비디오가 꺼져 있음
+    return null;
   }
 
   // 열려 있는 팝업/다이얼로그 닫기 (한도 안내 등). 닫은 게 있으면 true.
@@ -1039,8 +1115,23 @@
     let mode = getComposerMode();
     if (mode === 'video') return true;
     if (mode === null) {
-      // 판독 실패 — 기존 동작을 막지 않는다(오탐으로 큐를 세우지 않기 위함)
+      // 판독 실패 — 아이콘 버튼으로 한 번 더 시도한다.
+      // 그래도 못 읽으면 기존 방침대로 진행하되(오탐으로 큐를 세우지 않는다),
+      // 원인을 알 수 있게 컴포저 버튼을 팝업 로그로 덤프한다.
+      const vb = _findModeIconButton('video');
+      if (vb && _isModeButtonActive(vb) !== true) {
+        console.warn(LOG_PREFIX, '모드 판독 실패 — 비디오 아이콘 버튼을 눌러 본다');
+        grokPopupLog('모드 판독 실패 → 비디오 아이콘 클릭 시도', 'warn');
+        MangoDom.simulateClick(vb);
+        await delay(700);
+        if (getComposerMode() === 'video' || _isModeButtonActive(vb) === true) {
+          grokPopupLog('✅ 비디오 모드로 전환됨 (아이콘)', 'info');
+          return true;
+        }
+      }
       console.warn(LOG_PREFIX, '컴포저 모드를 읽지 못했다 — 확인 없이 진행');
+      grokPopupLog('⚠️ 컴포저 모드 판독 실패 — 아래 버튼 목록을 개발자에게 전달', 'warn');
+      try { dumpComposerButtons(); } catch (_) {}
       return true;
     }
 
@@ -1054,6 +1145,7 @@
     // 1) 입력바의 인라인 '비디오' 버튼
     let btn = _findComposerButtonByText('비디오') || _findComposerButtonByText('동영상') ||
               _findComposerButtonByText('Video') ||
+              _findModeIconButton('video') ||          // 신 UI: 아이콘 전용 모드 버튼
               findButtonByTextInArea('비디오') || findButtonByTextInArea('Video');
     if (btn) {
       MangoDom.simulateClick(btn);
