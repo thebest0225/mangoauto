@@ -1887,27 +1887,42 @@
   //    오클릭이므로 즉시 실패로 돌린다. (예전 사고: 넓은 폴백이 사이드바를 눌러 페이지 이동)
   const _ACTIVATE_HINT = /click to select and edit text segments|텍스트 세그먼트를? 선택/i;
 
-  async function activateComposerIfNeeded() {
-    // 이미 컴포저가 보이면 건드리지 않는다
-    const hasMode = !!(_findModeIconButton('video') || _findModeIconButton('image'));
-    if (hasMode) {
-      grokPopupLog('3.5: 컴포저 이미 활성 — 클릭 불필요', 'info');
-      return true;
-    }
-
-    let target = null;
-    const walker = document.querySelectorAll('div, span, p, button, [role="button"]');
-    for (const el of walker) {
+  function _findActivateHint() {
+    const els = document.querySelectorAll('div, span, p, button, [role="button"]');
+    for (const el of els) {
       if (el.children.length > 2) continue;                 // 잎에 가까운 것만
       const t = (el.textContent || '').trim();
       if (!t || t.length > 80) continue;
       if (!_ACTIVATE_HINT.test(t)) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 20 || r.height < 8) continue;
-      target = el;
-      break;
+      return el;
+    }
+    return null;
+  }
+
+  function _composerVisible() {
+    return !!(_findModeIconButton('video') || _findModeIconButton('image'));
+  }
+
+  async function activateComposerIfNeeded() {
+    // ① 먼저 잠깐 기다린다 — 첨부 직후엔 컴포저가 늦게 붙는다.
+    //    운영자 확인: 안내 문구가 떴다가 ★사라지는★ 경우가 있어 타이밍 싸움이다.
+    for (let i = 0; i < 12; i++) {           // 최대 ~6초
+      if (_composerVisible()) {
+        grokPopupLog(`3.5: 컴포저 활성 확인 (${(i * 0.5).toFixed(1)}초 대기) — 클릭 불필요`, 'info');
+        return true;
+      }
+      // 기다리는 동안 안내 문구가 보이면 즉시 그걸 누른다
+      if (_findActivateHint()) break;
+      await delay(500);
+    }
+    if (_composerVisible()) {
+      grokPopupLog('3.5: 컴포저 활성 — 클릭 불필요', 'info');
+      return true;
     }
 
+    let target = _findActivateHint();
     if (!target) {
       grokPopupLog('3.5: 활성화 안내 문구 없음 — 컴포저도 안 보임. 아래 덤프 참조', 'warn');
       try { dumpComposerButtons(); } catch (_) {}
@@ -1923,7 +1938,8 @@
       grokPopupLog(`❌ 3.5: 활성화 클릭이 페이지를 이동시킴 (${location.pathname}) — 중단`, 'error');
       return false;
     }
-    const ok = !!(_findModeIconButton('video') || _findModeIconButton('image'));
+    let ok = false;
+    for (let i = 0; i < 8 && !ok; i++) { ok = _composerVisible(); if (!ok) await delay(400); }
     grokPopupLog(`3.5: 클릭 후 컴포저 ${ok ? '나타남' : '여전히 안 보임'}`, ok ? 'info' : 'warn');
     if (!ok) { try { dumpComposerButtons(); } catch (_) {} }
     return ok;
