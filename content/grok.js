@@ -1017,16 +1017,29 @@
     try { chrome.runtime.sendMessage({ type: 'CONTENT_LOG', text: `[Grok] ${text}`, level }); } catch (_) {}
   }
 
+  // 컴포저 영역 판정 — 🔑 2026-09-19. 예전엔 findEditor() 기준 밴드만 봤는데,
+  //   post 페이지에는 세그먼트 편집기 같은 다른 contenteditable 이 있어 findEditor 가
+  //   그걸 잡는다. 그 결과 스캔 범위가 엉뚱해져 덤프에 버튼이 1개(aria-label="편집")만
+  //   찍혔다. 컴포저는 항상 화면 ★하단★ 에 있으므로 뷰포트 기준을 함께 쓴다.
+  function _inComposerArea(r) {
+    const vh = window.innerHeight || 800;
+    if (r.top > vh * 0.55) return true;           // 화면 하단 45%
+    const editor = findEditor();
+    if (editor) {
+      const e = editor.getBoundingClientRect();
+      if (r.top > e.top - 80 && r.top < e.bottom + 200) return true;
+    }
+    return false;
+  }
+
   // 컴포저 하단바 버튼을 팝업 로그로 덤프 — 모드 판독 실패 시 원인 파악용
   function dumpComposerButtons() {
-    const editor = findEditor();
-    const edRect = editor ? editor.getBoundingClientRect() : null;
     const out = [];
-    document.querySelectorAll('button').forEach(b => {
+    document.querySelectorAll('button, [role="button"]').forEach(b => {
       const r = b.getBoundingClientRect();
       if (r.width < 4 || r.height < 4) return;
       if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
-      if (edRect && !(r.top > edRect.top - 80 && r.top < edRect.bottom + 200)) return;
+      if (!_inComposerArea(r)) return;
       const at = [];
       for (const a of b.attributes) {
         if (/^(aria-|data-|title|type)/.test(a.name)) at.push(`${a.name}="${a.value.slice(0, 40)}"`);
@@ -1042,15 +1055,13 @@
   // 아이콘 전용 모드 버튼 찾기 — 신 UI 는 텍스트가 없고 aria-label 만 있다.
   // (+ 옆에 이미지 아이콘, 그 옆에 비디오 아이콘, 오른쪽 끝에 파란 전송 화살표)
   function _findModeIconButton(kind) {
-    const editor = findEditor();
-    const edRect = editor ? editor.getBoundingClientRect() : null;
     const want = kind === 'video' ? /동영상|비디오|video/i : /이미지|image/i;
     let best = null;
-    document.querySelectorAll('button').forEach(b => {
+    document.querySelectorAll('button, [role="button"]').forEach(b => {
       const r = b.getBoundingClientRect();
       if (r.width < 4 || r.height < 4) return;
       if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
-      if (edRect && !(r.top > edRect.top - 80 && r.top < edRect.bottom + 200)) return;
+      if (!_inComposerArea(r)) return;
       const label = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
       if (!label || !want.test(label)) return;
       // '만들기' 계열은 모드 버튼이다 (전송 버튼은 아이콘 화살표라 라벨이 다름).
@@ -1085,7 +1096,7 @@
       const t = (b.textContent || '').trim();
       if (!/^(비디오|동영상|이미지|video|image)$/i.test(t)) return;
       // 컴포저 근처만 — 에디터와 같은 줄이거나 바로 아래 입력바
-      if (edRect && !(r.top > edRect.top - 60 && r.top < edRect.bottom + 160)) return;
+      if (!_inComposerArea(r)) return;
       if (!best || r.left < best.r.left) best = { b, r, t };
     });
     if (best) return /이미지|image/i.test(best.t) ? 'image' : 'video';
@@ -1176,13 +1187,18 @@
               _findModeIconButton('video') ||          // 신 UI: 아이콘 전용 모드 버튼
               findButtonByTextInArea('비디오') || findButtonByTextInArea('Video');
     if (btn) {
+      grokPopupLog('4.9: 인라인/아이콘 비디오 버튼 클릭', 'info');
       MangoDom.simulateClick(btn);
       await delay(700);
-      if (getComposerMode() === 'video') {
+      const m1 = getComposerMode();
+      grokPopupLog(`4.9: 클릭 후 모드 = ${m1 || '판독불가'}`, m1 === 'video' ? 'info' : 'warn');
+      if (m1 === 'video') {
         console.log(LOG_PREFIX, '✅ 비디오 모드 복구 (인라인 버튼)');
         showToast('비디오 모드로 되돌림', 'success');
         return true;
       }
+    } else {
+      grokPopupLog('4.9: ⚠️ 비디오 버튼을 못 찾음 (인라인·아이콘 모두)', 'warn');
     }
 
     // 2) 모드 드롭다운을 열고 '비디오' 선택
@@ -1207,6 +1223,8 @@
     }
 
     console.error(LOG_PREFIX, '❌ 비디오 모드 복구 실패 — 이미지가 만들어지는 걸 막기 위해 전송하지 않는다');
+    grokPopupLog('❌ 4.9: 비디오 모드 복구 실패 → 전송 중단. 아래 덤프 참조', 'error');
+    try { dumpComposerButtons(); } catch (_) {}
     return false;
   }
 
