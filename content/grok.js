@@ -2382,6 +2382,37 @@
       const file = MangoDom.dataUrlToFile(imageDataUrl, `image-${Date.now()}.png`);
       console.log(LOG_PREFIX, `파일 생성: ${file.name}, 크기: ${file.size}`);
 
+      // ── Strategy -1: Drag-and-drop 우선 (2026-09-19) ──
+      // 🔑 운영자 실측: 손으로 ★드래그 앤 드롭★ 하면 메인 페이지에 그대로 머물고,
+      //    거기서 프롬프트 입력 → 파란 화살표로 바로 영상이 만들어진다.
+      //    반면 file input 경로는 업로드와 동시에 /imagine/post/{id} 로 이동해버리고,
+      //    그 post 뷰가 [role=dialog] 라서 팝업 정리·Escape·모드 초기화 같은 문제가 줄줄이 생겼다.
+      //    → post 페이지로 아예 안 가는 게 근본 해결이므로 드롭을 먼저 시도한다.
+      //    실패하면 기존 Strategy 0(file input) 으로 그대로 폴백한다.
+      console.log(LOG_PREFIX, 'Strategy -1: Drag-and-drop 우선 (post 페이지 이동 회피)');
+      grokPopupLog('Step 3: 드래그앤드롭 우선 시도 (메인 페이지 유지 목적)', 'info');
+      try {
+        const preTargets = findDropTargets();
+        for (const target of preTargets.slice(0, 4)) {
+          await dispatchRobustDrop(target, file);
+          await delay(2500);
+          if (checkImageAttached()) {
+            const stayed = isOnMainPage();
+            console.log(LOG_PREFIX, '✅ Strategy -1 (drop) 첨부 성공');
+            grokPopupLog(`Step 3: 드롭으로 첨부 성공 · 메인 유지=${stayed ? 'O' : 'X'} · url=${location.pathname}`, 'info');
+            return true;
+          }
+          if (!isOnMainPage()) {   // 드롭이 이동을 유발했으면 더 시도하지 않는다
+            grokPopupLog(`Step 3: 드롭 후 페이지 이동됨 (${location.pathname})`, 'warn');
+            return true;
+          }
+        }
+        grokPopupLog('Step 3: 드롭 실패 → file input 으로 폴백', 'warn');
+      } catch (e) {
+        console.warn(LOG_PREFIX, 'Strategy -1 (drop) 실패:', e.message);
+        grokPopupLog(`Step 3: 드롭 예외 (${e.message}) → file input 폴백`, 'warn');
+      }
+
       // ── Strategy 0: file input (가장 결정적 — 정확히 1개 파일만 업로드) ──
       // 🔑 클립보드 paste 가 에디터에 인라인 이미지를 삽입 → 멈춘 blob 으로 2장처럼 보이는
       //    문제(2026-05 로그 규명) 회피. file input 은 dt.files 에 1개만 세팅 → 단일 업로드.
