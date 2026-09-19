@@ -306,6 +306,9 @@
         const imgCount = countAttachedImages();
         showToast(`이미지 첨부 완료! (${imgCount}장)`, 'success');
         grokPopupLog(`Step 3: 첨부 완료 ${imgCount}장 · url=${location.pathname}`, 'info');
+        // 🔑 이 시점의 URL 이 '작업 페이지' 다. 드롭이면 /imagine 그대로, file input 이면
+        //    /imagine/post/{id}. 둘 다 정상이므로 경로 모양이 아니라 ★변했는지★ 로 판단한다.
+        const _workUrl = location.href;
         checkStopped();
 
         // Step 3.5 — post 페이지 컴포저 활성화 (안내 문구가 떠 있으면 눌러서 필드를 띄운다)
@@ -355,10 +358,12 @@
           grokPopupLog(`⚠️ Step 5: '이미 생성 중' 으로 판정해 전송을 건너뜀 (auto=${isAutoGenerating()}, video=${isVideoStillGenerating()}) — 오탐이면 여기가 원인`, 'warn');
           window.__mangoauto_lastGrokSubmitMs = Date.now();
         } else {
-          // 🔑 여기까지 오는 동안 페이지가 메인으로 튕겼으면 전송하면 안 된다.
-          //   프롬프트도 첨부도 없는 화면에서 '에이전트'·'이미지' 같은 엉뚱한 버튼을 눌렀다(실측).
-          if (!/\/imagine\/post\//.test(location.href)) {
-            grokPopupLog(`❌ Step 5: post 페이지가 아님 (${location.pathname}) — 전송하지 않고 실패 처리`, 'error');
+          // 🔑 작업 페이지를 벗어났으면 전송하지 않는다.
+          //   예전엔 '/imagine/post/ 가 아니면 중단' 이었는데, 드래그앤드롭 첨부가 도입되면서
+          //   메인(/imagine)에 머무는 것이 ★정상 경로★ 가 됐다. 그래서 그 가드가 정상 흐름을
+          //   막아버렸다(실측 2026-09-19). 경로 모양이 아니라 첨부 시점 대비 ★변경 여부★ 로 본다.
+          if (_workUrl && location.href !== _workUrl) {
+            grokPopupLog(`❌ Step 5: 작업 페이지를 벗어남 (${_workUrl} → ${location.pathname}) — 전송하지 않고 실패 처리`, 'error');
             throw new Error(`전송 중단 — 작업 페이지를 벗어났습니다 (${location.pathname})`);
           }
           showToast('Step 5: 전송...', 'info');
