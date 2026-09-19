@@ -1062,6 +1062,26 @@
     grokPopupLog('── 컴포저 덤프 끝 ──', 'warn');
   }
 
+  // 하단 영역의 ★버튼이 아닌★ 요소까지 덤프 — 컴포저가 통째로 없을 때 무엇이 있는지 본다
+  function dumpBottomArea() {
+    const vh = window.innerHeight || 800;
+    const rows = [];
+    document.querySelectorAll('div, section, form, textarea, [contenteditable], [role]').forEach(el => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 60 || r.height < 12) return;
+      if (r.top < vh * 0.55) return;
+      if (el.children.length > 6) return;                  // 큰 컨테이너 제외
+      const t = (el.textContent || '').trim().slice(0, 28);
+      const cls = (el.className || '').toString().slice(0, 40);
+      rows.push(`${el.tagName} ${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)} ` +
+                `role="${el.getAttribute('role') || ''}" ce="${el.getAttribute('contenteditable') || ''}" ` +
+                `cls="${cls}" txt="${t}"`);
+    });
+    grokPopupLog(`── 하단영역 요소 ${rows.length}개 ──`, 'warn');
+    rows.slice(0, 12).forEach((l, i) => grokPopupLog(`  D${i}: ${l}`, 'warn'));
+    grokPopupLog('── 하단영역 덤프 끝 ──', 'warn');
+  }
+
   // 아이콘 전용 모드 버튼 찾기 — 신 UI 는 텍스트가 없고 aria-label 만 있다.
   // (+ 옆에 이미지 아이콘, 그 옆에 비디오 아이콘, 오른쪽 끝에 파란 전송 화살표)
   function _findModeIconButton(kind) {
@@ -1924,9 +1944,20 @@
 
     let target = _findActivateHint();
     if (!target) {
-      grokPopupLog('3.5: 활성화 안내 문구 없음 — 컴포저도 안 보임. 아래 덤프 참조', 'warn');
-      try { dumpComposerButtons(); } catch (_) {}
-      return false;
+      // 🔑 운영자 확인 (2026-09-19): 안내 문구가 없거나 이미 사라졌어도
+      //   ★입력 필드를 한 번 누르면★ 컴포저가 활성화된다.
+      //   실측상 컴포저 버튼이 하나도 없는 상태에서도 tiptap 에디터는 DOM 에 있다
+      //   (콘솔: "Editor found: tiptap ProseMirror ... query-bar-editor").
+      //   그래서 에디터 자체를 클릭 대상으로 쓴다 — 넓은 폴백이 아니라 한 요소만.
+      const ed = findEditor();
+      if (ed) {
+        grokPopupLog(`3.5: 안내 문구 없음 → 입력 필드 클릭 시도 ${_btnDesc(ed)}`, 'info');
+        target = ed;
+      } else {
+        grokPopupLog('3.5: 안내 문구도 입력 필드도 없음. 아래 덤프 참조', 'warn');
+        try { dumpComposerButtons(); dumpBottomArea(); } catch (_) {}
+        return false;
+      }
     }
 
     const urlB = location.href;
@@ -1941,7 +1972,7 @@
     let ok = false;
     for (let i = 0; i < 8 && !ok; i++) { ok = _composerVisible(); if (!ok) await delay(400); }
     grokPopupLog(`3.5: 클릭 후 컴포저 ${ok ? '나타남' : '여전히 안 보임'}`, ok ? 'info' : 'warn');
-    if (!ok) { try { dumpComposerButtons(); } catch (_) {} }
+    if (!ok) { try { dumpComposerButtons(); dumpBottomArea(); } catch (_) {} }
     return ok;
   }
 
@@ -2051,6 +2082,14 @@
     }
     window.__mangoauto_lastGrokSubmitMs = Date.now();  // 🔒 lockout 마킹
     console.log(LOG_PREFIX, `Submit clicked (native only): aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
+    // 🔑 메모리 함정 #3 — aria-label="동영상 만들기" 는 ★전송이 아니라 모드 버튼★ 이다.
+    //   실측(2026-09-19): 컴포저가 없는 상태에서 이걸 전송으로 눌렀다(328x36 "동영상 만들기").
+    const _al = (btn.getAttribute('aria-label') || '').trim();
+    if (/만들기$|^(동영상|비디오|이미지)\s*만들기/.test(_al)) {
+      grokPopupLog(`❌ Step 5: '${_al}' 는 모드 버튼이지 전송이 아니다 — 누르지 않고 중단`, 'error');
+      try { dumpComposerButtons(); dumpBottomArea(); } catch (_) {}
+      return false;
+    }
     grokPopupLog(`Step 5: 전송 클릭 → ${_btnDesc(btn)}`, 'info');
 
     // 클릭이 실제로 먹었는지 확인한다. 안 먹었으면 ★다른 버튼으로 1회만★ 재시도.
