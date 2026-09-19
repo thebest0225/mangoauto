@@ -2045,6 +2045,25 @@
     return null;
   }
 
+  // 컴포저의 진짜 전송 버튼 — 2026-09-19 실측 DOM 기준.
+  //   aria-label 이 '…만들기'(동영상 만들기/이미지 만들기) 이고 aria-checked 가 없는,
+  //   컴포저 영역에서 ★가장 오른쪽★ 버튼. 모드 라디오(aria-checked 보유)는 제외한다.
+  function _findComposerSubmit() {
+    let best = null;
+    document.querySelectorAll('button, [role="button"]').forEach(b => {
+      const r = b.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return;
+      if (b.closest('[data-variant="sidebar"], aside, nav, header')) return;
+      if (!_inComposerArea(r)) return;
+      if (b.hasAttribute('aria-checked')) return;                 // 모드 라디오 제외
+      if (b.getAttribute('aria-haspopup')) return;                // 해상도/길이 드롭다운 제외
+      const al = (b.getAttribute('aria-label') || '').trim();
+      if (!/만들기|생성|보내기|send|generate|submit/i.test(al)) return;
+      if (!best || r.left > best.r.left) best = { b, r };          // 가장 오른쪽
+    });
+    return best ? best.b : null;
+  }
+
   async function tryClickSubmit() {
     // 🔒 LOCKOUT: 최근 30초 안에 이미 submit 한 적 있으면 절대 다시 안 누름 (중복 영상 생성 차단).
     //    이전 영상 생성 중인데 또 누르면 그록이 '기존+새' 모드로 인식 → 2개 동시 생성.
@@ -2065,11 +2084,17 @@
 
     // 클릭 전 상태 스냅샷 — 클릭이 실제로 먹었는지 판정하는 기준이 된다
     const urlBefore = location.href;
+    const _composerSubmit = _findComposerSubmit();
+    if (_composerSubmit) {
+      grokPopupLog(`Step 5: 컴포저 전송 버튼 확보 → ${_btnDesc(_composerSubmit)}`, 'info');
+    }
     const _ed0 = findEditor();
     const textBefore = _ed0 ? ((_ed0.value !== undefined ? _ed0.value : _ed0.textContent) || '').trim() : '';
 
     // Wait for submit button to be enabled (이미지 업로드 중 disabled일 수 있으므로 30초 대기)
-    const btn = await waitForSubmitEnabled(30000);
+    // 컴포저 전송 버튼을 찾았으면 점수 기반 탐색보다 ★그걸 우선★ 쓴다.
+    // 점수 탐색은 '에이전트'·'이미지'·'업로드' 를 같은 점수로 뽑아 오클릭을 냈다(실측).
+    const btn = _composerSubmit || await waitForSubmitEnabled(30000);
     if (!btn) {
       // 디버그: 전송 버튼 못 찾은 이유 파악.
       // 그록 UI 가 또 바뀌면 여기 로그만 보고 셀렉터를 고칠 수 있어야 한다 —
@@ -2119,12 +2144,15 @@
     }
     window.__mangoauto_lastGrokSubmitMs = Date.now();  // 🔒 lockout 마킹
     console.log(LOG_PREFIX, `Submit clicked (native only): aria="${btn.getAttribute('aria-label') || ''}" text="${(btn.textContent || '').trim().substring(0, 20)}"`);
-    // 🔑 메모리 함정 #3 — aria-label="동영상 만들기" 는 ★전송이 아니라 모드 버튼★ 이다.
-    //   실측(2026-09-19): 컴포저가 없는 상태에서 이걸 전송으로 눌렀다(328x36 "동영상 만들기").
+    // 🔑 2026-09-19 실측 덤프로 판별 기준이 확정됐다. 예전 함정(#3)은 구 UI 기준이었고
+    //   신 UI 에서는 반대다 — 'aria-label=\"동영상 만들기\"' 가 ★진짜 전송 버튼★ 이다.
+    //     모드 버튼: aria-checked 를 가진 라디오 (이미지/비디오/에이전트, 42x36)
+    //     전송 버튼: aria-checked 없음, 컴포저 맨 오른쪽 (40x40 @x=1081)
+    //   → 차단 기준을 라벨이 아니라 ★aria-checked 보유 여부★ 로 바꾼다.
     const _al = (btn.getAttribute('aria-label') || '').trim();
-    if (/만들기$|^(동영상|비디오|이미지)\s*만들기/.test(_al)) {
-      grokPopupLog(`❌ Step 5: '${_al}' 는 모드 버튼이지 전송이 아니다 — 누르지 않고 중단`, 'error');
-      try { dumpComposerButtons(); dumpBottomArea(); } catch (_) {}
+    if (btn.hasAttribute('aria-checked') || /^(이미지|비디오|에이전트|image|video|agent)$/i.test(_al)) {
+      grokPopupLog(`❌ Step 5: '${_al}' 는 모드 선택 버튼(aria-checked) — 전송 아님. 중단`, 'error');
+      try { dumpComposerButtons(); } catch (_) {}
       return false;
     }
     grokPopupLog(`Step 5: 전송 클릭 → ${_btnDesc(btn)}`, 'info');
