@@ -1312,6 +1312,13 @@ async function startAutomation(config) {
   }
   await MangoUtils.sleep(2000);
 
+  // 🔑 워치독 타이머 리셋. 안 하면 이전 세션에 멈춰 있던 _lastStateChange 가 그대로 남아
+  //    새 작업의 첫 항목이 시작 몇 초 만에 "N초 경과 → 강제 에러" 로 죽는다.
+  //    실측(2026-09-19): 101952초(28시간) 묵은 값이 남아 1번 항목이 16초 만에 강제 종료됐고,
+  //    그 바람에 2번이 곧장 시작돼 content script 가 "Already processing" 을 뱉는 연쇄가 났다.
+  _lastStateChange = Date.now();
+  _lastWatchdogGenId = _generationId;
+
   broadcastLog('자동화 루프 시작!', 'info');
   runLoop().catch(err => {
     broadcastLog(`루프 에러: ${err.message}`, 'error');
@@ -1791,7 +1798,16 @@ async function ensureContentScript(tabId, platform) {
     return;
   }
 
-  const EXPECTED_VERSION = 'dbg-2026-05-28c';
+  // ⚠️ 사이트별로 따로 관리한다. 예전엔 단일 상수였는데 flow.js 만 버전 문자열이 달라
+  //    (dbg-2026-05-22-flow-submit-v14-cdp-trusted-enter) 영원히 불일치 → 매 항목마다
+  //    "구버전 감지 → 강제 재주입" 이 돌았다. 그런데 flow.js 상단 중복 가드가 두번째 로드를
+  //    무시하므로 재주입은 아무 일도 안 하고 2초만 태웠다. 151개면 5분이다. (2026-09-19)
+  const EXPECTED_VERSIONS = {
+    grok:  'dbg-2026-05-28c',
+    whisk: 'dbg-2026-05-28c',
+    flow:  'dbg-2026-09-19-flow-ui-migration',
+  };
+  const EXPECTED_VERSION = EXPECTED_VERSIONS[platform] || 'dbg-2026-05-28c';
 
   // ─── Grok: MAIN world dedupe (fetch/XHR 중복 POST 차단) — 기존 탭 reload 없이도 적용되도록 항상 주입 ───
   // dedupe 스크립트는 자체 중복 가드 (window.__MANGOAUTO_GROK_DEDUPE_LOADED__) 있어 다회 주입 안전.
@@ -1815,10 +1831,11 @@ async function ensureContentScript(tabId, platform) {
     if (resp?.ok) {
       // 버전 체크: 구버전이면 강제 재주입
       if (resp.version !== EXPECTED_VERSION) {
-        broadcastLog(`Content script 구버전 감지 (v=${resp.version||'old'}) → 강제 재주입`, 'warn');
-        await chrome.scripting.executeScript({ target: { tabId }, files });
-        await MangoUtils.sleep(2000);
-        broadcastLog('강제 재주입 완료', 'info');
+        // 재주입해도 content script 상단 중복 가드가 두번째 로드를 무시하므로 교체가 안 된다.
+        // 헛돌지 말고 사용자에게 탭 새로고침을 요구한다 (자동 reload 는 작업 중 위험).
+        broadcastLog(
+          `⚠️ Content script 가 구버전입니다 (탭=${resp.version||'old'} / 기대=${EXPECTED_VERSION}). ` +
+          `해당 탭을 새로고침(F5)한 뒤 다시 시작하세요 — 재주입으로는 교체되지 않습니다.`, 'error');
         return;
       }
       broadcastLog(`Content script 이미 로드됨 (site: ${resp.site}, v=${resp.version})`, 'info');

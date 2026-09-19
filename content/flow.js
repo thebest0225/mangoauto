@@ -153,7 +153,7 @@
       return true;
     }
     if (msg.type === 'PING') {
-      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-05-22-flow-submit-v14-cdp-trusted-enter' });
+      sendResponse({ ok: true, site: 'flow', version: 'dbg-2026-09-19-flow-ui-migration' });
       return;
     }
     if (msg.type === 'STOP_GENERATION') {
