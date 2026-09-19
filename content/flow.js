@@ -2542,8 +2542,62 @@
 
     // 모든 strategy 실패
     console.warn(LOG_PREFIX, `[strat] ❌ 모든 strategy 실패. label="${clickedLabel}" — 계속 대기`);
-    popupLog('❌ 모든 전송 전략 실패. CDP attach 로그가 위에 없으면 debugger 권한 미승인(확장 재설치) 또는 DevTools 충돌 의심', 'error');
+    popupLog('❌ 모든 전송 전략 실패. 아래 DOM 후보 목록을 개발자에게 전달하세요.', 'error');
+    // 🔑 DevTools 를 열면 CDP 전송이 막히므로, 진단 정보를 팝업 로그 패널로 직접 뱉는다.
+    //    2026-09 Flow 신 UI 에서 버튼 셀렉터가 전부 빗나가 ⑥ XPath 폴백이 엉뚱한
+    //    32x32 요소를 잡던 건 때문에 추가. 셀렉터를 고치려면 실제 DOM 이 있어야 한다.
+    try { dumpButtonCandidates(); } catch (e) { popupLog(`DOM 덤프 실패: ${e.message}`, 'warn'); }
     await noteStrategyFailure();
+  }
+
+  // ─── DOM 진단 덤프 — 전송 실패 시 팝업 로그로 후보를 뱉는다 (DevTools 불필요) ───
+  function dumpButtonCandidates() {
+    const rect = (el) => {
+      const r = el.getBoundingClientRect();
+      return `${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)}`;
+    };
+    const iconsOf = (el) => Array.from(el.querySelectorAll('i,.material-icons,.material-symbols-outlined,svg'))
+      .map(i => i.tagName === 'svg' ? 'svg' : (i.textContent || '').trim())
+      .filter(Boolean).slice(0, 3).join('/');
+    const desc = (b) => {
+      const al = b.getAttribute('aria-label') || '';
+      const tid = b.getAttribute('data-test-id') || b.getAttribute('data-testid') || '';
+      const txt = (b.textContent || '').trim().slice(0, 18);
+      const dis = (b.disabled === true || b.getAttribute('aria-disabled') === 'true') ? ' DISABLED' : '';
+      return `${rect(b)} icon="${iconsOf(b)}" al="${al}" tid="${tid}" txt="${txt}"${dis}`;
+    };
+
+    const promptEl = document.getElementById(SELECTORS.PROMPT_TEXTAREA_ID) ||
+                     document.querySelector('textarea[id*="PINHOLE" i], textarea, [contenteditable="true"]');
+    popupLog(`── DOM 진단 ── url=${location.pathname}`, 'warn');
+    popupLog(`prompt: ${promptEl ? promptEl.tagName + ' id=' + (promptEl.id || '(없음)') + ' form=' + !!promptEl.closest('form') : '못찾음'}`, 'warn');
+
+    // 프롬프트 조상 8단계 안의 버튼
+    const near = new Set();
+    if (promptEl) {
+      let p = promptEl.parentElement, d = 0;
+      while (p && d < 8) { p.querySelectorAll('button,[role="button"]').forEach(b => near.add(b)); p = p.parentElement; d++; }
+    }
+    const nearArr = Array.from(near).filter(b => { const r = b.getBoundingClientRect(); return r.width > 4 && r.height > 4; });
+    popupLog(`프롬프트 주변 버튼 ${nearArr.length}개:`, 'warn');
+    nearArr.slice(0, 12).forEach((b, i) => popupLog(`  N${i}: ${desc(b)}`, 'warn'));
+
+    // 현재 XPath 가 잡는 것
+    try {
+      const r = document.evaluate(SELECTORS.GENERATE_BUTTON_XPATH, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      popupLog(`현재 XPath 매칭 ${r.snapshotLength}개:`, 'warn');
+      for (let i = 0; i < r.snapshotLength && i < 5; i++) popupLog(`  X${i}: ${desc(r.snapshotItem(i))}`, 'warn');
+    } catch (e) { popupLog(`XPath 에러: ${e.message}`, 'warn'); }
+
+    // 화면 하단 우측(전송 버튼이 보통 있는 자리) 버튼
+    const vh = window.innerHeight, vw = window.innerWidth;
+    const bottomRight = Array.from(document.querySelectorAll('button,[role="button"]')).filter(b => {
+      const r = b.getBoundingClientRect();
+      return r.width > 4 && r.height > 4 && r.top > vh * 0.5 && r.left > vw * 0.3;
+    });
+    popupLog(`하단영역 버튼 ${bottomRight.length}개:`, 'warn');
+    bottomRight.slice(0, 12).forEach((b, i) => popupLog(`  B${i}: ${desc(b)}`, 'warn'));
+    popupLog('── DOM 진단 끝 ──', 'warn');
   }
 
   // ─── Frame Upload (Image-to-Video) — New UI (Mar 2026) ───
