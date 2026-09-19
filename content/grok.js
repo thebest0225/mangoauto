@@ -306,6 +306,10 @@
         grokPopupLog(`Step 3: 첨부 완료 ${imgCount}장 · url=${location.pathname}`, 'info');
         checkStopped();
 
+        // Step 3.5 — post 페이지 컴포저 활성화 (안내 문구가 떠 있으면 눌러서 필드를 띄운다)
+        await activateComposerIfNeeded();
+        checkStopped();
+
         // Step 4: 프롬프트 입력 — 이미지가 여러 장이면 먼저 @참조 로 1장 선택
         if (imgCount > 1) {
           showToast('Step 4: 이미지 여러 장 — @참조로 선택...', 'info');
@@ -1874,6 +1878,57 @@
   // 판정 근거 세 가지 — 하나라도 잡히면 전송된 것으로 본다:
   //   ① 생성 진행 표시(취소 버튼 등)  ② URL 이 바뀜  ③ 컴포저의 프롬프트가 비워짐
   //      (그록은 전송하면 입력창을 비운다 → 글이 그대로면 안 나간 것이다)
+  // ─── post 페이지 컴포저 활성화 (2026-09-19 그록 업데이트) ───
+  // 이미지 첨부 후 /imagine/post/{id} 로 이동하면, 화면에 "Click to select and edit
+  // text segments!" 안내만 뜨고 입력·모드·전송 필드가 안 보이는 경우가 있다.
+  // 그 안내를 한 번 눌러야 컴포저가 나타난다 (운영자 확인).
+  //
+  // ⚠️ 좁게 간다 — 문구가 실제로 있을 때만, 그 요소만 누른다. 누른 뒤 URL 이 바뀌면
+  //    오클릭이므로 즉시 실패로 돌린다. (예전 사고: 넓은 폴백이 사이드바를 눌러 페이지 이동)
+  const _ACTIVATE_HINT = /click to select and edit text segments|텍스트 세그먼트를? 선택/i;
+
+  async function activateComposerIfNeeded() {
+    // 이미 컴포저가 보이면 건드리지 않는다
+    const hasMode = !!(_findModeIconButton('video') || _findModeIconButton('image'));
+    if (hasMode) {
+      grokPopupLog('3.5: 컴포저 이미 활성 — 클릭 불필요', 'info');
+      return true;
+    }
+
+    let target = null;
+    const walker = document.querySelectorAll('div, span, p, button, [role="button"]');
+    for (const el of walker) {
+      if (el.children.length > 2) continue;                 // 잎에 가까운 것만
+      const t = (el.textContent || '').trim();
+      if (!t || t.length > 80) continue;
+      if (!_ACTIVATE_HINT.test(t)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 20 || r.height < 8) continue;
+      target = el;
+      break;
+    }
+
+    if (!target) {
+      grokPopupLog('3.5: 활성화 안내 문구 없음 — 컴포저도 안 보임. 아래 덤프 참조', 'warn');
+      try { dumpComposerButtons(); } catch (_) {}
+      return false;
+    }
+
+    const urlB = location.href;
+    grokPopupLog(`3.5: 활성화 안내 클릭 → ${_btnDesc(target)}`, 'info');
+    MangoDom.simulateClick(target);
+    await delay(800);
+
+    if (location.href !== urlB) {
+      grokPopupLog(`❌ 3.5: 활성화 클릭이 페이지를 이동시킴 (${location.pathname}) — 중단`, 'error');
+      return false;
+    }
+    const ok = !!(_findModeIconButton('video') || _findModeIconButton('image'));
+    grokPopupLog(`3.5: 클릭 후 컴포저 ${ok ? '나타남' : '여전히 안 보임'}`, ok ? 'info' : 'warn');
+    if (!ok) { try { dumpComposerButtons(); } catch (_) {} }
+    return ok;
+  }
+
   // 클릭한 버튼을 로그에 남기기 위한 요약 — '무엇을 눌렀나' 가 진단의 핵심이다
   function _btnDesc(b) {
     if (!b) return '(없음)';
