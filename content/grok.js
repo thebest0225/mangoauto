@@ -3084,7 +3084,23 @@
       // visible 검사 (display:none, hidden 제외)
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
+
+      // 🔑 2026-09-19 — 줌 컨트롤 오탐 제외.
+      //   post 페이지 상단에 "− 100% +" 줌 표시가 있는데 이게 진행률로 잡혔다.
+      //   그 결과 전송도 안 했는데 "이미 생성 진행 중" 으로 판정해 Step 5 를 skip 하고,
+      //   오지 않을 영상을 무한정 기다렸다 (실측 콘솔 로그).
+      const vh = window.innerHeight || 800;
+      if (rect.top < vh * 0.15) continue;                       // 상단 툴바 영역
+      const near = el.parentElement;
+      if (near) {
+        const sibText = (near.textContent || '');
+        // 줌 컨트롤은 +/− 와 붙어 있다
+        if (/[−–—-]\s*\d{1,3}\s*%\s*\+/.test(sibText.replace(/\s+/g, ' '))) continue;
+        if (near.querySelector('[aria-label*="zoom" i], [aria-label*="확대"], [aria-label*="축소"]')) continue;
+      }
+
       // OK — 진행률 표시 element 확정
+      console.log(LOG_PREFIX, `[gen] 진행률 표시 감지: "${text}" @${Math.round(rect.top)}`);
       return true;
     }
 
