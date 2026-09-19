@@ -1146,18 +1146,50 @@
   }
 
   // 열려 있는 팝업/다이얼로그 닫기 (한도 안내 등). 닫은 게 있으면 true.
+  // 🔑 2026-09-19 — 여기가 "메인으로 튕긴다" 의 진범이었다.
+  //   grok 의 /imagine/post/{id} 뷰 자체가 [role="dialog"] 로 렌더된다.
+  //   그래서 이 함수가 ① 그 뷰의 닫기 버튼을 누르고 ② 다이얼로그가 있다는 이유로
+  //   Escape 를 무조건 쏴서 ★작업 페이지를 닫아버렸다★.
+  //   콘솔 순서로 확인: "이미지 모드다" → (이 함수) → popstate → /imagine → 그 다음에야 클릭.
+  //   여태 클릭 탓으로 봤는데 클릭 전에 이미 튕겨 있었다.
+  //
+  //   → 본문(post 뷰)으로 보이는 다이얼로그는 건드리지 않는다. 판별 기준 2가지:
+  //     · 안에 컴포저(에디터/textarea)가 들어 있다
+  //     · 화면의 절반 이상을 차지한다 (안내 팝업은 작다)
+  //   → post 페이지에서는 Escape 를 쏘지 않는다.
   function dismissBlockingDialog() {
+    const urlBefore = location.href;
+    const onPost = /\/imagine\/post\//.test(urlBefore);
+    const vw = window.innerWidth || 1200, vh = window.innerHeight || 800;
     let closed = false;
     const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
     for (const d of dialogs) {
       const r = d.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
+
+      if (d.querySelector('[contenteditable="true"], textarea, .query-bar-editor')) {
+        console.log(LOG_PREFIX, '다이얼로그 안에 컴포저가 있다 — 본문으로 보고 건드리지 않음');
+        continue;
+      }
+      if (r.width * r.height > vw * vh * 0.5) {
+        console.log(LOG_PREFIX, '다이얼로그가 화면 절반 이상 — 본문으로 보고 건드리지 않음');
+        continue;
+      }
+
       const txt = (d.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 120);
       console.warn(LOG_PREFIX, `팝업 감지 → 닫는다: "${txt}"`);
       const closeBtn = d.querySelector('button[aria-label*="닫기"], button[aria-label*="Close" i], button[aria-label*="close" i]');
-      if (closeBtn) { try { closeBtn.click(); closed = true; } catch (_) {} }
+      if (closeBtn) {
+        try { closeBtn.click(); closed = true; } catch (_) {}
+        if (location.href !== urlBefore) {
+          try { grokPopupLog(`❌ 팝업 닫기가 페이지를 이동시킴 (${location.pathname})`, 'error'); } catch (_) {}
+          return closed;
+        }
+      }
     }
-    if (dialogs.length) {
+
+    // Escape 는 post 페이지에서 그 페이지를 닫는다 — 쏘지 않는다.
+    if (!onPost && dialogs.length) {
       document.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
       closed = true;
@@ -1208,8 +1240,13 @@
     console.warn(LOG_PREFIX, `⚠️ 컴포저가 ★이미지 모드★ 다 — 비디오로 되돌린다${notice ? ` (팝업: "${notice}")` : ''}`);
     showToast('이미지 모드로 바뀌어 있음 — 비디오로 되돌리는 중', 'warn');
 
+    const _urlPre = location.href;
     dismissBlockingDialog();
     await delay(400);
+    if (location.href !== _urlPre) {
+      grokPopupLog(`❌ 4.9: 팝업 정리 중 페이지가 이동함 (${location.pathname}) — 전송 중단`, 'error');
+      return false;
+    }
 
     // 1) 입력바의 인라인 '비디오' 버튼
     // 🔑 순서 중요 — aria-label 기반 아이콘 탐색을 ★먼저★ 본다.
