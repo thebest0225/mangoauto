@@ -3299,6 +3299,18 @@
       if (/\d+:\d+/.test(text)) continue;
       // 비디오 컨트롤 안인지 — closest video 또는 video-control 클래스
       if (el.closest('video, [class*="player-control" i], [class*="video-control" i], [class*="volume" i]')) continue;
+
+      // 🔑 2026-09-19 실측 — 사이드바 채팅 제목 "Hail Mary 32% Hail Mary" 를 진행률로 잡았다.
+      //   제목에 % 가 들어간 대화가 하나만 있어도 전 작업이 "이미 생성 중" 으로 막힌다.
+      //   ① 사이드바·내비 안이면 제외  ② 화면 왼쪽 끝(x<280) 이면 제외
+      if (el.closest('[data-variant="sidebar"], aside, nav, header')) continue;
+      const _r0 = el.getBoundingClientRect();
+      if (_r0.left < 280) continue;
+
+      // ③ 진행률 표시는 퍼센트가 ★주인공★ 이다 ("43%", "생성 중 52%").
+      //    퍼센트를 떼고도 글자가 많이 남으면 그건 제목·문장이지 진행률이 아니다.
+      const _rest = text.replace(/\d{1,3}\s*%/g, '').replace(/[\s·,.\-–—|]/g, '');
+      if (_rest.length > 6) continue;
       // visible 검사 (display:none, hidden 제외)
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
@@ -3332,8 +3344,10 @@
       const text = (el.textContent || '').trim();
       if (text.length === 0 || text.length > 60) continue;
       if (!inProgressKeywords.some(kw => text.includes(kw))) continue;
+      if (el.closest('[data-variant="sidebar"], aside, nav, header')) continue;
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
+      if (rect.left < 280) continue;
       _genDetectLog(`②키워드: "${text.slice(0, 40)}" @${Math.round(rect.top)} tag=${el.tagName}`);
       return true;
     }
@@ -3348,8 +3362,18 @@
           // body 어디든 % 진행률 함께 있으면 진행 중 확정
           // ⚠️ 이 분기는 매우 헐렁하다 — '취소' 버튼 하나 + 페이지 어딘가의 NN% 면 참이 된다.
           //    줌 표시(100%)·사용량(76%) 같은 것과 겹치면 바로 오탐이다.
-          const bodyText = (document.body.textContent || '');
-          const m = bodyText.match(/\b\d{1,3}\s*%/);
+          // ⚠️ 예전엔 document.body.textContent 전체를 봤다 → 사이드바 제목의 % 까지 잡혔다.
+          //    본문 영역(사이드바 밖)만 본다.
+          let mainText = '';
+          document.querySelectorAll('main, [role="main"]').forEach(n => { mainText += n.textContent || ''; });
+          if (!mainText) {
+            // main 이 없으면 사이드바를 뺀 나머지를 근사
+            document.querySelectorAll('body > *').forEach(n => {
+              if (n.closest('[data-variant="sidebar"], aside, nav, header')) return;
+              mainText += n.textContent || '';
+            });
+          }
+          const m = mainText.match(/\b\d{1,3}\s*%/);
           if (m) {
             _genDetectLog(`③취소버튼+퍼센트: 버튼@${Math.round(rect.top)} / 본문에서 찾은 값 "${m[0]}" ← 오탐 의심 1순위`);
             return true;
