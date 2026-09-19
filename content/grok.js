@@ -263,7 +263,31 @@
           if (!switched) throw new Error('비디오 모드 전환 실패');
         } else {
           showToast('Step 2: 비디오 설정 자동화 OFF — 현재 설정 그대로 사용', 'info');
+          grokPopupLog('Step 2: 설정 자동화 OFF (길이·해상도·비율은 안 건드림)', 'info');
           reportComposerMode();
+        }
+
+        // Step 2.5 — 🔑 2026-09-19 그록 업데이트 대응.
+        //   이제 ★메인 페이지에서 먼저★ 비디오 모드를 켜야 첨부 이미지가 프레임으로 처리된다.
+        //   (첨부 → /imagine/post/{id} 로 이동한 뒤 Step 4.9 에서 ★한 번 더★ 켠다. 총 2회)
+        //   길이·해상도·비율은 여전히 안 건드린다 — 모드 하나만이다.
+        //   못 찾으면 헤매지 말고 로그만 남기고 진행한다(4.9 가 최종 게이트).
+        {
+          const modeNow = getComposerMode();
+          grokPopupLog(`Step 2.5: 메인 컴포저 모드 = ${modeNow || '판독불가'}`, modeNow === 'video' ? 'info' : 'warn');
+          if (modeNow !== 'video') {
+            const vb = _findModeIconButton('video');
+            if (vb) {
+              MangoDom.simulateClick(vb);
+              await delay(700);
+              const after = getComposerMode();
+              grokPopupLog(`Step 2.5: 비디오 아이콘 클릭 → 모드 = ${after || '판독불가'}`,
+                           after === 'video' ? 'info' : 'warn');
+            } else {
+              grokPopupLog('Step 2.5: ⚠️ 메인 페이지에서 비디오 모드 버튼을 못 찾음 — 아래 덤프 참조', 'warn');
+              try { dumpComposerButtons(); } catch (_) {}
+            }
+          }
         }
         checkStopped();
 
@@ -271,6 +295,7 @@
         // ⚠️ 핵심: 이미지가 1장만 올라가면 @참조 없이 자동으로 시작 프레임 처리됨.
         //    여러 장이면 @ 로 선택해야 전송 활성화 → 그래서 단일 업로드가 관건.
         showToast('Step 3: 이미지 첨부 중...', 'info');
+        grokPopupLog('Step 3: 이미지 첨부 시작', 'info');
         const attached = await attachImage(sourceImageDataUrl);
         if (!attached) throw new Error('이미지 첨부 실패');
         // 업로드 완료 대기 (로딩 스피너 사라질 때까지) — 미완료 시 전송 비활성
@@ -278,6 +303,7 @@
         // 중복 정리 — 2장 이상이면 1장만 남김 (dedupe 는 attachImage 내부에서도 1회 실행됨)
         const imgCount = countAttachedImages();
         showToast(`이미지 첨부 완료! (${imgCount}장)`, 'success');
+        grokPopupLog(`Step 3: 첨부 완료 ${imgCount}장 · url=${location.pathname}`, 'info');
         checkStopped();
 
         // Step 4: 프롬프트 입력 — 이미지가 여러 장이면 먼저 @참조 로 1장 선택
@@ -288,6 +314,7 @@
         }
         if (prompt?.trim()) {
           showToast('Step 4: 비디오 프롬프트 입력...', 'info');
+          grokPopupLog('Step 4: 프롬프트 입력', 'info');
           // @참조 칩이 이미 있으면 그 뒤에 프롬프트 append (전체 selectAll+delete 하면 칩도 지워짐)
           await typePromptAppend(prompt, imgCount > 1);
           await delay(500);
@@ -296,6 +323,7 @@
 
         // Step 4.9: 모드 확인 — 주간 한도 팝업이 뜨면 그록이 비디오 → 이미지로 되돌린다.
         //   그대로 보내면 영상 대신 이미지가 나온다(운영자 보고 2026-08-30).
+        grokPopupLog(`Step 4.9: 전송 전 모드 확인 (현재=${getComposerMode() || '판독불가'})`, 'info');
         if (!(await ensureVideoMode())) {
           const notice = detectLimitNotice();
           throw new Error(
@@ -1183,6 +1211,9 @@
   }
 
   function reportComposerMode() {
+    try {
+      grokPopupLog(`컴포저 모드 판독: ${getComposerMode() || '판독불가'}`, 'info');
+    } catch (_) {}
     try {
       const found = [];
       document.querySelectorAll('button, [role="tab"], [role="radio"]').forEach(b => {
