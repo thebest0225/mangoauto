@@ -346,9 +346,11 @@
         //    → URL 로 판단하면 전송을 통째로 건너뛰고 영영 안 누른다. 실제로 그랬다.
         //    → URL 이 아니라 ★실제로 생성이 돌고 있는가★ 로만 판단한다.
         //       (중복 전송 방지는 tryClickSubmit 안의 30초 lockout 이 이미 담당한다)
+        grokPopupLog('Step 5: 전송 단계 진입', 'info');
         if (isAutoGenerating() || isVideoStillGenerating()) {
           console.warn(LOG_PREFIX, '이미 생성 진행 중 감지 — 전송 skip, 결과 대기로 진행');
           showToast('Step 5: 이미 생성 중 — 전송 skip', 'warn');
+          grokPopupLog(`⚠️ Step 5: '이미 생성 중' 으로 판정해 전송을 건너뜀 (auto=${isAutoGenerating()}, video=${isVideoStillGenerating()}) — 오탐이면 여기가 원인`, 'warn');
           window.__mangoauto_lastGrokSubmitMs = Date.now();
         } else {
           // 🔑 여기까지 오는 동안 페이지가 메인으로 튕겼으면 전송하면 안 된다.
@@ -365,6 +367,7 @@
 
         // Step 6: 결과 페이지 대기
         showToast('Step 6: 결과 페이지 대기...', 'info');
+        grokPopupLog(`Step 6: 결과 대기 시작 · url=${location.pathname}`, 'info');
         await waitForResultPage(timeoutMs);
         await delay(2000);
         checkStopped();
@@ -2072,6 +2075,7 @@
       const left = Math.round((_LOCKOUT_MS - (Date.now() - window.__mangoauto_lastGrokSubmitMs)) / 1000);
       console.warn(LOG_PREFIX, `🔒 Submit lockout — 최근 ${Math.round((Date.now()-window.__mangoauto_lastGrokSubmitMs)/1000)}초 전 submit 있음, ${left}초 더 대기 (중복 차단)`);
       showToast(`전송 잠금: ${left}초 대기 (이전 전송 진행 중)`, 'warn');
+      grokPopupLog(`⚠️ Step 5: 전송 잠금(lockout) — ${left}초 남음. 직전 전송으로부터 30초가 안 지났다`, 'warn');
       return true;  // 이미 진행 중이라는 의미로 success
     }
 
@@ -2087,6 +2091,9 @@
     const _composerSubmit = _findComposerSubmit();
     if (_composerSubmit) {
       grokPopupLog(`Step 5: 컴포저 전송 버튼 확보 → ${_btnDesc(_composerSubmit)}`, 'info');
+    } else {
+      grokPopupLog('⚠️ Step 5: 컴포저 전송 버튼을 못 찾음 → 점수 탐색으로 폴백 (최대 30초 대기). 아래 덤프 참조', 'warn');
+      try { dumpComposerButtons(); } catch (_) {}
     }
     const _ed0 = findEditor();
     const textBefore = _ed0 ? ((_ed0.value !== undefined ? _ed0.value : _ed0.textContent) || '').trim() : '';
@@ -2095,6 +2102,10 @@
     // 컴포저 전송 버튼을 찾았으면 점수 기반 탐색보다 ★그걸 우선★ 쓴다.
     // 점수 탐색은 '에이전트'·'이미지'·'업로드' 를 같은 점수로 뽑아 오클릭을 냈다(실측).
     const btn = _composerSubmit || await waitForSubmitEnabled(30000);
+    if (!btn) {
+      grokPopupLog('❌ Step 5: 전송 버튼을 끝내 찾지 못함 (점수 탐색 30초 타임아웃)', 'error');
+      try { dumpComposerButtons(); } catch (_) {}
+    }
     if (!btn) {
       // 디버그: 전송 버튼 못 찾은 이유 파악.
       // 그록 UI 가 또 바뀌면 여기 로그만 보고 셀렉터를 고칠 수 있어야 한다 —
