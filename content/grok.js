@@ -216,6 +216,8 @@
     //    (flow.js 는 이미 같은 방식으로 꺼둔다.)
     try { window.MangoDialogDismisser?.stop(); } catch (_) {}
     showToast('handleExecutePrompt 시작', 'info');
+    // 프로필마다 확장이 별개라 버전 확인에 계속 헛돌았다 → 매 실행 첫 줄에 박는다
+    try { grokPopupLog(`content script v${chrome.runtime.getManifest().version}`, 'info'); } catch (_) {}
 
     try {
       const { prompt, mediaType, sourceImageDataUrl, settings } = msg;

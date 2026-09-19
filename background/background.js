@@ -1114,7 +1114,12 @@ async function startAutomation(config) {
   const { source, platform, mode, settings, projectId, prompts, images,
           useExistingImages, skipCompleted, contentType, selectedIndices, apiType } = config;
 
-  broadcastLog(`자동화 시작: source=${source}, platform=${platform}, mode=${mode}, contentType=${contentType || 'segments'}`, 'info');
+    // 🔑 크롬 프로필마다 확장이 별개라 "새로고침했나" 로 계속 헛돌았다 (2026-09-19).
+  //    매 실행 첫 줄에 버전을 박아 옛 버전으로 테스트하는 일을 없앤다.
+  try {
+    broadcastLog(`망고오토 v${chrome.runtime.getManifest().version} (이 프로필 기준)`, 'info');
+  } catch (_) {}
+broadcastLog(`자동화 시작: source=${source}, platform=${platform}, mode=${mode}, contentType=${contentType || 'segments'}`, 'info');
 
   automationSettings = settings || {};
   allResults = [];
