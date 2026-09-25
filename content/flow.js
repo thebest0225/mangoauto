@@ -1800,9 +1800,20 @@
     // 설정 패널이 열려있으면 먼저 닫기
     await closeSettingsPanel();
     await delay(300);
+    // 🔑 열린 메뉴(⋮ 애니메이션 등)가 입력창을 가린다 — 먼저 닫는다.
+    if (hasMenuOverlay()) await dismissOpenMenus();
 
     let input = findPromptTextarea();
-    if (!input) throw new Error('Cannot find prompt input');
+    if (!input) {
+      // 한 번 더 정리하고 재시도 — 메뉴가 늦게 닫히는 경우가 있다.
+      await dismissOpenMenus(2000);
+      await delay(500);
+      input = findPromptTextarea();
+    }
+    if (!input) {
+      popupLog(`❌ 프롬프트 입력창을 못 찾음 (열린 메뉴 ${hasMenuOverlay() ? '있음: ' + getVisibleMenuItems().slice(0, 5).join(' | ') : '없음'})`, 'error');
+      throw new Error('Cannot find prompt input');
+    }
 
     // 🛡️ Phantom textarea 방어: 후보가 contenteditable wrapper 인 경우
     //    내부에 [data-slate-node="value"] / [data-slate-editor="true"] 가 있으면 그것으로 내려감.
@@ -3061,6 +3072,8 @@
     const animated = await addImageToPromptViaMenu(newlyUploadedImg);
     if (animated) {
       console.log(LOG_PREFIX, '[frame] ✓ Animate 완료');
+      // 메뉴가 남아 있으면 다음 단계(프롬프트 입력)가 막힌다 — 여기서 정리하고 넘긴다.
+      if (hasMenuOverlay()) await dismissOpenMenus();
       return true;
     }
 
@@ -3316,6 +3329,43 @@
   }
 
   // 메뉴 오버레이가 열려있는지 확인
+  // 열린 메뉴/오버레이를 닫는다 — 안 닫으면 프롬프트 입력창을 가려 "Cannot find prompt input" 이 난다.
+  // 🔑 2026-09-25 실측: Animate(⋮ → 애니메이션) 후 메뉴가 남아 있었고, typePrompt 는
+  //    설정 패널만 닫을 뿐 메뉴는 그대로 둬서 입력창을 못 찾았다.
+  // ⚠️ Escape 는 최후 수단. 페이지를 닫아버리는 사이트가 있어(그록 post 뷰 사고) URL 을 확인한다.
+  async function dismissOpenMenus(maxMs = 3000) {
+    const start = Date.now();
+    let closed = false;
+    while (hasMenuOverlay() && Date.now() - start < maxMs) {
+      const items = getVisibleMenuItems();
+      console.log(LOG_PREFIX, `[menu] 열린 메뉴 닫는 중: ${items.slice(0, 5).join(' | ')}`);
+      // 1) 중립 지점 클릭 — 버튼이 없는 빈 곳
+      const nx = Math.round(window.innerWidth * 0.5);
+      const ny = Math.round(window.innerHeight * 0.32);
+      const el = document.elementFromPoint(nx, ny);
+      const neutral = (el && !el.closest('button,[role="button"],[role="menu"],[role="menuitem"],a')) ? el : document.body;
+      for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        neutral.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, clientX: nx, clientY: ny }));
+      }
+      await delay(400);
+      if (!hasMenuOverlay()) { closed = true; break; }
+
+      // 2) Escape (URL 가드)
+      const u = location.href;
+      document.body.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      await delay(400);
+      if (location.href !== u) {
+        popupLog('⚠️ 메뉴 닫기 중 페이지가 이동함 — 중단', 'warn');
+        return false;
+      }
+      if (!hasMenuOverlay()) { closed = true; break; }
+      await delay(300);
+    }
+    if (closed) popupLog('열린 메뉴를 닫았습니다', 'info');
+    return !hasMenuOverlay();
+  }
+
   function hasMenuOverlay() {
     const overlays = document.querySelectorAll('[role="menu"], [role="listbox"], .cdk-overlay-pane, .mat-mdc-menu-panel, .mdc-menu-surface');
     return [...overlays].some(o => o.children.length > 0 && o.offsetParent !== null);
