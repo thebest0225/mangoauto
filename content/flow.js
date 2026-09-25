@@ -3004,11 +3004,23 @@
     // 업로드 후 새로 추가된 이미지 찾기 (스냅샷 비교)
     let newlyUploadedImg = null;
     if (uploaded) {
+      // 🔑 2026-09-25 — ★가장 큰★ 새 이미지를 고른다.
+      //   실측 진단: 같은 업로드가 세 곳에 렌더된다 —
+      //     448x250(메인 카드) · 50x50(컴포저 칩) · 358x200(갤러리).
+      //   예전엔 forEach 로 덮어써서 ★DOM 순서상 마지막★ 이 잡혔고,
+      //   작은 칩을 잡으면 이미지 카드 메뉴(애니메이션)가 안 열려 Animate 가 실패했다.
+      let _bestArea = 0;
       document.querySelectorAll('img[src]').forEach(img => {
-        if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) {
-          newlyUploadedImg = img;
-        }
+        if (!isGalleryImage(img) || prevGallerySrcs.has(img.src)) return;
+        if (_isAvatarSrc(img.src)) return;
+        const r = img.getBoundingClientRect();
+        const area = (r.width || 0) * (r.height || 0);
+        if (area > _bestArea) { _bestArea = area; newlyUploadedImg = img; }
       });
+      if (newlyUploadedImg) {
+        const _r = newlyUploadedImg.getBoundingClientRect();
+        console.log(LOG_PREFIX, `[frame] 대상 선택: ${Math.round(_r.width)}x${Math.round(_r.height)} (최대 면적)`);
+      }
       if (!newlyUploadedImg) {
         // 🔑 2026-09-25 — 첨부 신호는 왔는데 갤러리에 아직 안 뜬 상태일 수 있다.
         //   실측: 아바타 오탐으로 조기 true → 대상 없음 → Animate 즉시 실패 →
@@ -3018,16 +3030,22 @@
         popupLog('프레임: 갤러리 반영 대기 중...', 'info');
         for (let i = 0; i < 24 && !newlyUploadedImg; i++) {
           await delay(500);
+          let _a = 0;
           document.querySelectorAll('img[src]').forEach(img => {
-            if (newlyUploadedImg) return;
             if (_isAvatarSrc(img.src)) return;
-            if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) newlyUploadedImg = img;
+            if (!isGalleryImage(img) || prevGallerySrcs.has(img.src)) return;
+            const r = img.getBoundingClientRect();
+            const ar = (r.width || 0) * (r.height || 0);
+            if (ar > _a) { _a = ar; newlyUploadedImg = img; }
           });
         }
       }
       if (newlyUploadedImg) {
         console.log(LOG_PREFIX, `[frame] 새로 업로드된 이미지 식별: ${newlyUploadedImg.src.substring(0, 80)}`);
-        popupLog(`프레임: 대상 이미지 확보 (${(newlyUploadedImg.src || '').slice(0, 45)})`, 'info');
+        {
+          const _rr = newlyUploadedImg.getBoundingClientRect();
+          popupLog(`프레임: 대상 이미지 확보 ${Math.round(_rr.width)}x${Math.round(_rr.height)}@${Math.round(_rr.left)},${Math.round(_rr.top)}`, 'info');
+        }
         lastUploadedFrameSrc = newlyUploadedImg.src;
       } else {
         console.warn(LOG_PREFIX, '[frame] 새 이미지 src 변경 감지 실패 → 갤러리 마지막 이미지 사용');
@@ -3047,7 +3065,11 @@
     }
 
     console.error(LOG_PREFIX, '[frame] ✗ Animate 실패');
-    popupLog('❌ 프레임: 애니메이션(영상 전환) 메뉴 실행 실패', 'error');
+    {
+      let _mi = [];
+      try { _mi = getVisibleMenuItems(); } catch (_) {}
+      popupLog(`❌ 프레임: 애니메이션 메뉴 실행 실패 — 열린 메뉴 항목 ${_mi.length}개: ${_mi.join(' | ').slice(0, 220) || '(없음)'}`, 'error');
+    }
     try { dumpFrameUploadState(imgCountBefore, prevGallerySrcs); } catch (_) {}
     // 🔑 서버가 이미지를 거부한 게 아니라 ★메뉴 조작이 실패★ 한 것이다.
     //   같은 코드로 묶으면 background 가 탭을 새로고침해 진행 중이던 업로드까지 날린다.
