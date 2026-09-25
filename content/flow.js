@@ -206,6 +206,8 @@
 
   // ─── Listen for messages from inject.js (MAIN world) ───
   let lastApiResult = null;
+  let lastUploadedFrameSrc = null;   // 방금 업로드한 소스 프레임 — 다운로드 대상에서 제외한다
+  let lastUploadedFrameName = null;
   let lastUpscaledDataUrl = null;  // inject.js가 캡처한 업스케일 이미지 blob
   let lastUpscaledSize = 0;       // 가장 큰 blob만 유지하기 위한 크기 추적
   window.addEventListener('message', (event) => {
@@ -292,8 +294,16 @@
         console.log(LOG_PREFIX, 'Uploading source image...');
         const uploaded = await uploadFrame(sourceImageDataUrl, 'first');
         if (uploaded) {
-          console.log(LOG_PREFIX, 'Frame uploaded');
-          await delay(2000);
+            console.log(LOG_PREFIX, 'Frame uploaded');
+          // 🔑 2026-09-25 — 업로드가 ★끝날 때까지★ 기다린다.
+          //   운영자 보고: 아직 올라가는 중인 이미지를 골라 그대로 영상 생성으로 넘어갔다.
+          //   진행 스피너가 사라질 때까지 최대 8초, 그 뒤 1.5초 안정화.
+          for (let i = 0; i < 16; i++) {
+            if (!_uploadStillInFlight()) break;
+            await delay(500);
+          }
+          await delay(1500);
+          popupLog('프레임: 업로드 완료 대기 끝 — 생성으로 진행', 'info');
         } else {
           // 이미지 없이 생성하면 전혀 다른 결과가 나오므로 에러 처리
           // "image rejected" 키워드 포함 → background에서 재시도 스킵
@@ -2734,11 +2744,43 @@
   // 사용자 확인: Ctrl+C/V 붙여넣기는 동작함 → paste 방식 우선
 
   // 갤러리에 새 이미지 등장 대기 헬퍼
-  async function waitForGalleryImage(countBefore, timeoutMs = 10000, prevSrcs = null) {
+  // 구글 계정 아바타 판별 — 첨부 감지에서 반드시 걸러야 한다.
+  // 실측(2026-09-25): lh3.google.com 32x32 아바타를 첨부 이미지로 오인했다.
+  function _isAvatarSrc(src) {
+    const u = (src || '').toLowerCase();
+    if (!u) return true;
+    if (u.includes('/a/') || u.includes('/a-/')) return true;          // 구글 프로필 경로
+    if (u.includes('lh3.google') && !u.includes('flow-content')) return true;
+    if (u.includes('gravatar') || u.includes('avatar')) return true;
+    return false;
+  }
+
+  // 🔑 우리가 올린 파일명이 화면에 뜨는지로 확인한다 — 가장 확실한 신호.
+  //   Flow 가 첨부 칩에 파일명을 그대로 표시한다 (실측: "frame-1790308220017.png").
+  //   크기·호스트 추측보다 이쪽이 정확하다.
+  function _frameFileNameVisible(fileName) {
+    if (!fileName) return false;
+    const base = fileName.replace(/\.[a-z0-9]+$/i, '');
+    return (document.body.innerText || '').includes(base);
+  }
+
+  // 업로드가 ★끝났는지★ 까지 본다. 진행 중 스피너가 남아 있으면 더 기다린다.
+  function _uploadStillInFlight() {
+    return !!document.querySelector(
+      '[class*="uploading" i], [class*="progress" i], [role="progressbar"], [class*="spinner" i]');
+  }
+
+  async function waitForGalleryImage(countBefore, timeoutMs = 10000, prevSrcs = null, fileName = null) {
     const start = Date.now();
     // 갤러리 이미지가 많으면(교체 상황) 더 오래 대기
     const effectiveTimeout = countBefore >= 5 ? Math.max(timeoutMs, 20000) : timeoutMs;
     while (Date.now() - start < effectiveTimeout) {
+      // 방법 0 (최우선): 우리가 올린 파일명이 화면에 뜬다 = 첨부 확정
+      if (fileName && _frameFileNameVisible(fileName)) {
+        console.log(LOG_PREFIX, `[frame] 파일명 확인: ${fileName}`);
+        popupLog(`프레임: 첨부 확인 (파일명 ${fileName})`, 'info');
+        return true;
+      }
       // 방법 1: 갤러리 이미지 수 증가
       if (countGalleryImages() > countBefore) return true;
       // 방법 2: 새로운 src 등장 (갤러리 수 고정/교체 시)
@@ -2749,17 +2791,18 @@
         });
         if (hasNew) return true;
 
-        // 🔑 2026-09-25 — 방법 2b: ★작은 썸네일 칩★ 도 인정한다.
-        //   프레임→영상의 첨부 이미지는 갤러리(80px+)가 아니라 컴포저 옆
-        //   작은 칩(40px 안팎)으로 붙는다. isGalleryImage 기준으로는 영영 안 잡혀
-        //   업로드에 성공하고도 "서버가 거부" 로 실패 처리됐다.
+        // 🔑 2026-09-25 — 방법 2b: ★작은 썸네일 칩★ 도 인정한다. 단 아바타를 거른다.
+        //   프레임→영상의 첨부 이미지는 갤러리(80px+)가 아니라 컴포저 옆 작은 칩으로 붙는다.
+        //   ⚠️ 처음엔 24px 이상이면 다 인정했더니 ★구글 계정 아바타(32x32, lh3.google.com)★ 를
+        //      잡아 "첨부 확인" 오탐이 났다(실측). 아바타 호스트·경로를 제외한다.
         let chip = null;
         document.querySelectorAll('img[src]').forEach(img => {
           if (chip || prevSrcs.has(img.src)) return;
           const src = img.src || '';
           if (!src || src.startsWith('data:image/svg')) return;
+          if (_isAvatarSrc(src)) return;
           const r = img.getBoundingClientRect();
-          if (r.width >= 24 && r.height >= 24) chip = { img, r, src };
+          if (r.width >= 40 && r.height >= 40) chip = { img, r, src };
         });
         if (chip) {
           let host = ''; try { host = new URL(chip.src, location.href).host; } catch (_) {}
@@ -2864,6 +2907,10 @@
     }
 
     const file = MangoDom.dataUrlToFile(imageDataUrl, `frame-${Date.now()}.png`);
+    // 🔑 다운로드 단계에서 ★이 프레임을 대상으로 잡지 않도록★ 기록해둔다.
+    //   실측(2026-09-25): 업로드한 소스 프레임도 '새 미디어' 라 다운로드 대상으로 뽑혔고,
+    //   그 결과 이미지 메뉴(즐겨찾기/애니메이션/프롬프트에 추가)가 열려 다운로드를 못 찾았다.
+    lastUploadedFrameName = file.name;
     console.log(LOG_PREFIX, `[frame] 업로드 시작: ${file.name}, ${file.size}bytes`);
     let uploaded = false;
     let apiTriggered = false;
@@ -2874,7 +2921,7 @@
       console.log(LOG_PREFIX, '[frame] file input으로 업로드:', fileInput.accept || 'any');
       apiTriggered = true;
       await MangoDom.attachFileToInput(fileInput, file);
-      uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
+      uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs, file.name);
       if (uploaded) {
         console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
         popupLog('프레임: file input 업로드 성공', 'info');
@@ -2903,7 +2950,7 @@
           bubbles: true, cancelable: true, clipboardData: dt
         }));
         console.log(LOG_PREFIX, '[frame] paste 이벤트 발송 → 대기...');
-        uploaded = await waitForGalleryImage(imgCountBefore, 10000, prevGallerySrcs);
+        uploaded = await waitForGalleryImage(imgCountBefore, 10000, prevGallerySrcs, file.name);
         if (uploaded) console.log(LOG_PREFIX, '[frame] ✓ paste 성공');
       } catch (e) {
         console.warn(LOG_PREFIX, '[frame] paste 실패:', e.message);
@@ -2955,6 +3002,7 @@
       });
       if (newlyUploadedImg) {
         console.log(LOG_PREFIX, `[frame] 새로 업로드된 이미지 식별: ${newlyUploadedImg.src.substring(0, 80)}`);
+        lastUploadedFrameSrc = newlyUploadedImg.src;
       } else {
         console.warn(LOG_PREFIX, '[frame] 새 이미지 src 변경 감지 실패 → 갤러리 마지막 이미지 사용');
       }
@@ -4044,7 +4092,19 @@
     // 2순위: 이미지 중 비디오가 아닌 새로 생성된 것 (비디오 <video> 자체를 못 찾을 때)
     if (!target) {
       console.log(LOG_PREFIX, '[download] video 부모도 못 찾음, 이미지로 폴백');
-      const mediaElements = findGeneratedMediaElements();
+      let mediaElements = findGeneratedMediaElements();
+      // 업로드한 소스 프레임은 다운로드 대상이 아니다 — 걸러낸다.
+      const _before = mediaElements.length;
+      mediaElements = mediaElements.filter(el => {
+        const src = el.src || '';
+        if (lastUploadedFrameSrc && src === lastUploadedFrameSrc) return false;
+        if (_isAvatarSrc(src)) return false;
+        return true;
+      });
+      if (_before !== mediaElements.length) {
+        console.log(LOG_PREFIX, `[download] 소스 프레임 제외: ${_before} → ${mediaElements.length}`);
+        popupLog(`다운로드: 업로드한 소스 프레임 제외 (${_before}→${mediaElements.length})`, 'info');
+      }
       target = mediaElements.length > 0 ? mediaElements[mediaElements.length - 1] : null;
     }
 
@@ -4111,6 +4171,15 @@
 
     // "Download" / "다운로드" 메뉴 아이템 찾기
     const downloadItem = findMenuItemByText(['Download', '다운로드', 'download']);
+    if (!downloadItem) {
+      // 🔑 이미지 메뉴(즐겨찾기/애니메이션/프롬프트에 추가)가 열렸다면 ★대상을 잘못 잡은 것★.
+      //   영상 메뉴에는 다운로드가 있다. 어느 메뉴가 열렸는지 남겨야 원인이 보인다.
+      const _items = getVisibleMenuItems();
+      const _looksLikeImageMenu = _items.some(t => /애니메이션|프롬프트에 추가|Animate/i.test(t));
+      if (_looksLikeImageMenu) {
+        popupLog(`❌ 다운로드: ★이미지 메뉴★ 가 열렸다 — 영상이 아니라 이미지를 대상으로 잡았다. 항목: ${_items.join(' | ').slice(0, 200)}`, 'error');
+      }
+    }
     if (!downloadItem) {
       const items = getVisibleMenuItems();
       console.warn(LOG_PREFIX, `[download] 다운로드 메뉴 못찾음. 메뉴: ${items.join(', ')}`);
