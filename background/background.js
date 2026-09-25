@@ -1477,6 +1477,10 @@ async function runSequentialLoop(loopId) {
       //   같이 묶어 탭을 새로고침했더니, 아직 올라가는 중이던 업로드까지 죽였다(운영자 보고).
       //   새로고침 없이 재시도하는 편이 낫다.
       const isAnimateFailed = resp.errorCode === 'ANIMATE_FAILED';
+      // 🔑 2026-09-25 — 다운로드만 실패한 경우. ★영상은 이미 Flow 에 만들어져 있다.★
+      //   재시도하면 프롬프트를 다시 넣고 영상을 또 생성해 크레딧이 이중으로 나간다(운영자 지적).
+      //   재생성하지 않고 그 항목만 실패로 남긴다 — 영상은 Flow 에 남아 있으니 나중에 받으면 된다.
+      const isDownloadFailed = resp.errorCode === 'DOWNLOAD_FAILED';
 
       // 에러 유형 분류 (flow.js에서 전달된 errorCode 활용)
       const isAudioFailed = resp.errorCode === 'AUDIO_FAILED';
@@ -1517,6 +1521,19 @@ async function runSequentialLoop(loopId) {
 
       if (isAnimateFailed) {
         broadcastLog('Animate 메뉴 실패 — 탭 새로고침 없이 재시도 (업로드는 살아 있을 수 있음)', 'warn');
+      }
+      if (isDownloadFailed) {
+        // 재생성 금지. 영상은 이미 Flow 에 있으므로 그 항목만 실패로 남기고 다음으로.
+        broadcastLog('⚠️ 다운로드만 실패 — 영상은 Flow 에 생성돼 있습니다. 재생성하지 않고 다음 항목으로 (크레딧 보호)', 'warn');
+        sm.results.push({
+          success: false, index: sm._resultIndex(), segmentIndex: item.segmentIndex,
+          error: '영상 생성됨 / 다운로드 실패 — Flow 에서 수동 회수 가능'
+        });
+        sm.retryCount = 0;
+        sm.transition(AutoState.COOLDOWN);
+        broadcastState(getExtendedSnapshot());
+        await handleCooldownAndNext();
+        continue;
       }
       // 이미지 업로드 거부 → 재시도 무의미 (같은 이미지로 또 거부됨), 바로 실패 처리 후 다음으로
       // 🔑 에러 직후 DOM/전역 상태가 오염되어 다음 세그먼트에 이전 이미지/영상이 덮어쓰이는 현상 있어서

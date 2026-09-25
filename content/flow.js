@@ -410,7 +410,14 @@
           console.log(LOG_PREFIX, `✓ ${actualQuality} 다운로드 트리거됨 (UI)`);
         } else {
           console.warn(LOG_PREFIX, '⚠ UI 다운로드 실패');
-          if (!videoUrl) throw new Error('비디오 다운로드 실패: URL 없음 + UI 다운로드 실패');
+          if (!videoUrl) {
+            // 🔑 2026-09-25 — ★영상은 이미 만들어졌다★. 여기서 실패했다고 전체를 재시도하면
+            //   프롬프트를 다시 넣고 ★영상을 또 생성★ 해 크레딧이 이중으로 나간다(운영자 지적).
+            //   다운로드 전용 실패로 표시해 background 가 재생성하지 않게 한다.
+            const dlErr = new Error('영상은 생성됨 — 다운로드만 실패 (재생성 안 함)');
+            dlErr.errorCode = 'DOWNLOAD_FAILED';
+            throw dlErr;
+          }
         }
 
         // 1080p: inject.js가 캡처한 HTTP URL 대기 → 직접 전달
@@ -4282,6 +4289,9 @@
       const _looksLikeImageMenu = _items.some(t => /애니메이션|프롬프트에 추가|Animate/i.test(t));
       if (_looksLikeImageMenu) {
         popupLog(`❌ 다운로드: ★이미지 메뉴★ 가 열렸다 — 영상이 아니라 이미지를 대상으로 잡았다. 항목: ${_items.join(' | ').slice(0, 200)}`, 'error');
+      } else {
+        // 어떤 메뉴가 열렸는지(혹은 안 열렸는지) 항상 남긴다 — 이게 없으면 다음 수를 못 둔다.
+        popupLog(`❌ 다운로드: '다운로드' 항목 없음. 열린 메뉴 ${_items.length}개: ${_items.join(' | ').slice(0, 220) || '(메뉴가 안 열림)'}`, 'error');
       }
     }
     if (!downloadItem) {
