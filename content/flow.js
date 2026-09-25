@@ -2748,6 +2748,25 @@
           if (isGalleryImage(img) && !prevSrcs.has(img.src)) hasNew = true;
         });
         if (hasNew) return true;
+
+        // 🔑 2026-09-25 — 방법 2b: ★작은 썸네일 칩★ 도 인정한다.
+        //   프레임→영상의 첨부 이미지는 갤러리(80px+)가 아니라 컴포저 옆
+        //   작은 칩(40px 안팎)으로 붙는다. isGalleryImage 기준으로는 영영 안 잡혀
+        //   업로드에 성공하고도 "서버가 거부" 로 실패 처리됐다.
+        let chip = null;
+        document.querySelectorAll('img[src]').forEach(img => {
+          if (chip || prevSrcs.has(img.src)) return;
+          const src = img.src || '';
+          if (!src || src.startsWith('data:image/svg')) return;
+          const r = img.getBoundingClientRect();
+          if (r.width >= 24 && r.height >= 24) chip = { img, r, src };
+        });
+        if (chip) {
+          let host = ''; try { host = new URL(chip.src, location.href).host; } catch (_) {}
+          console.log(LOG_PREFIX, `[frame] 새 썸네일 감지: ${Math.round(chip.r.width)}x${Math.round(chip.r.height)} host=${host}`);
+          popupLog(`프레임: 첨부 확인 (${Math.round(chip.r.width)}x${Math.round(chip.r.height)}, host=${host})`, 'info');
+          return true;
+        }
       }
       // 방법 3: 로딩 인디케이터 감지 (업로드 중이면 계속 대기)
       const hasLoader = !!document.querySelector('[class*="loading"], [class*="progress"], [class*="spinner"], [role="progressbar"]');
@@ -2769,6 +2788,28 @@
   }
 
   let _lastUploadedSourceKey = null; // 마지막 업로드한 소스 이미지 식별키
+
+  // 프레임 업로드 실패 진단 — 화면의 img 를 ★크기 제한 없이★ 전부 보여준다.
+  // 갤러리 기준(80px)으로 거르면 컴포저 썸네일 칩을 못 본다. 그게 감지 실패의 핵심이었다.
+  function dumpFrameUploadState(countBefore, prevSrcs) {
+    const imgs = Array.from(document.querySelectorAll('img[src]'));
+    popupLog(`── 프레임 진단 ── 업로드 전 갤러리 ${countBefore}개 / 현재 img 총 ${imgs.length}개`, 'warn');
+    const rows = imgs.map(i => {
+      const r = i.getBoundingClientRect();
+      let host = ''; try { host = new URL(i.src, location.href).host; } catch (_) {}
+      const isNew = prevSrcs && !prevSrcs.has(i.src);
+      return { r, host, isNew, src: i.src };
+    }).filter(x => x.r.width > 8 && x.r.height > 8);
+    // 새로 생긴 것 먼저
+    rows.sort((a, b) => (b.isNew ? 1 : 0) - (a.isNew ? 1 : 0));
+    rows.slice(0, 12).forEach((x, i) => {
+      popupLog(`  I${i}${x.isNew ? ' ★새것' : ''}: ${Math.round(x.r.width)}x${Math.round(x.r.height)}` +
+               `@${Math.round(x.r.left)},${Math.round(x.r.top)} host=${x.host} ${x.src.slice(0, 50)}`, 'warn');
+    });
+    const fi = document.querySelectorAll('input[type="file"]');
+    popupLog(`  file input ${fi.length}개` + (fi.length ? ` (accept=${fi[0].accept || 'any'})` : ''), 'warn');
+    popupLog('── 프레임 진단 끝 ──', 'warn');
+  }
 
   async function uploadFrame(imageDataUrl, position = 'first') {
     // 설정 패널이 열려있으면 갤러리 이미지를 가리므로 닫기
@@ -2836,15 +2877,21 @@
       uploaded = await waitForGalleryImage(imgCountBefore, 20000, prevGallerySrcs);
       if (uploaded) {
         console.log(LOG_PREFIX, '[frame] ✓ file input 업로드 성공');
+        popupLog('프레임: file input 업로드 성공', 'info');
       } else {
-        // API는 호출됐으나 갤러리 미등장 → 서버가 이미지 거부 (400 등)
-        console.error(LOG_PREFIX, '[frame] ✗ 서버가 이미지 거부 (API 호출됨, 갤러리 미등장)');
-        return false;
+        // 🔑 2026-09-25 — 예전엔 여기서 바로 return false 했다.
+        //   "API 는 호출됐는데 갤러리에 안 뜸 = 서버 거부" 라는 전제였는데, 실제로는
+        //   ★감지 실패★ 인 경우가 많다. 프레임→영상의 첨부 이미지는 갤러리가 아니라
+        //   컴포저의 작은 썸네일 칩으로 붙어서 isGalleryImage(80px 이상)에 안 걸린다.
+        //   게다가 이 early return 탓에 붙여넣기·드롭 대안이 아예 시도되지 않았다.
+        //   → 포기하지 말고 다음 방법으로 넘어간다.
+        console.warn(LOG_PREFIX, '[frame] file input 후 갤러리 미확인 — 붙여넣기/드롭으로 계속 시도');
+        popupLog('프레임: file input 후 확인 실패 → 붙여넣기/드롭 시도', 'warn');
       }
     }
 
-    // ── 방법 2: ClipboardEvent paste (file input 없을 때만) ──
-    if (!uploaded && !apiTriggered) {
+    // ── 방법 2: ClipboardEvent paste ──
+    if (!uploaded) {
       console.log(LOG_PREFIX, '[frame] 방법2: ClipboardEvent paste');
       try {
         const textarea = findPromptTextarea();
@@ -2864,7 +2911,7 @@
     }
 
     // ── 방법 3: drag-drop (위 방법 모두 실패 시) ──
-    if (!uploaded && !apiTriggered) {
+    if (!uploaded) {
       console.log(LOG_PREFIX, '[frame] 방법3: drag-drop');
       const textarea = findPromptTextarea();
       const targets = [
@@ -2893,6 +2940,8 @@
 
     if (!uploaded) {
       console.error(LOG_PREFIX, '[frame] ✗ 이미지 업로드 실패');
+      popupLog('❌ 프레임 업로드 실패 — 아래 이미지 목록을 개발자에게 전달', 'error');
+      try { dumpFrameUploadState(imgCountBefore, prevGallerySrcs); } catch (e) { popupLog(`덤프 실패: ${e.message}`, 'warn'); }
     }
     await delay(1000);
 
