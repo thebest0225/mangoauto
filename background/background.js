@@ -1473,6 +1473,10 @@ async function runSequentialLoop(loopId) {
       const isImageRejected = resp.error.includes('Image rejected') ||
                               resp.error.includes('이미지 업로드 거부') ||
                               resp.errorCode === 'IMAGE_REJECTED';
+      // 🔑 2026-09-25 — Animate(영상 전환) 메뉴 실패는 ★이미지 거부가 아니다★.
+      //   같이 묶어 탭을 새로고침했더니, 아직 올라가는 중이던 업로드까지 죽였다(운영자 보고).
+      //   새로고침 없이 재시도하는 편이 낫다.
+      const isAnimateFailed = resp.errorCode === 'ANIMATE_FAILED';
 
       // 에러 유형 분류 (flow.js에서 전달된 errorCode 활용)
       const isAudioFailed = resp.errorCode === 'AUDIO_FAILED';
@@ -1511,6 +1515,9 @@ async function runSequentialLoop(loopId) {
         continue;
       }
 
+      if (isAnimateFailed) {
+        broadcastLog('Animate 메뉴 실패 — 탭 새로고침 없이 재시도 (업로드는 살아 있을 수 있음)', 'warn');
+      }
       // 이미지 업로드 거부 → 재시도 무의미 (같은 이미지로 또 거부됨), 바로 실패 처리 후 다음으로
       // 🔑 에러 직후 DOM/전역 상태가 오염되어 다음 세그먼트에 이전 이미지/영상이 덮어쓰이는 현상 있어서
       //    탭을 무조건 새로고침해서 깨끗한 상태로 재시작.

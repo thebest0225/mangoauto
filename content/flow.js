@@ -206,6 +206,7 @@
 
   // ─── Listen for messages from inject.js (MAIN world) ───
   let lastApiResult = null;
+  let _lastFrameFailReason = null;  // 'ANIMATE_FAILED' | null — 오류 코드 구분용
   let lastUploadedFrameSrc = null;   // 방금 업로드한 소스 프레임 — 다운로드 대상에서 제외한다
   let lastUploadedFrameName = null;
   let lastUpscaledDataUrl = null;  // inject.js가 캡처한 업스케일 이미지 blob
@@ -307,7 +308,15 @@
         } else {
           // 이미지 없이 생성하면 전혀 다른 결과가 나오므로 에러 처리
           // "image rejected" 키워드 포함 → background에서 재시도 스킵
-          const err = new Error('Image rejected - 이미지 업로드 거부 (서버 400)');
+          // 사유에 따라 코드를 나눈다. ANIMATE_FAILED 는 이미지가 거부된 게 아니므로
+          // 탭 새로고침 없이 재시도하는 편이 낫다(새로고침이 진행 중 업로드를 죽인다).
+          if (_lastFrameFailReason === 'ANIMATE_FAILED') {
+            _lastFrameFailReason = null;
+            const err2 = new Error('Animate 메뉴 실행 실패 — 이미지는 올라갔을 수 있음');
+            err2.errorCode = 'ANIMATE_FAILED';
+            throw err2;
+          }
+          const err = new Error('Image rejected - 프레임 업로드 확인 실패');
           err.errorCode = 'IMAGE_REJECTED';
           throw err;
         }
@@ -3000,11 +3009,29 @@
           newlyUploadedImg = img;
         }
       });
+      if (!newlyUploadedImg) {
+        // 🔑 2026-09-25 — 첨부 신호는 왔는데 갤러리에 아직 안 뜬 상태일 수 있다.
+        //   실측: 아바타 오탐으로 조기 true → 대상 없음 → Animate 즉시 실패 →
+        //   IMAGE_REJECTED → 탭 새로고침이 ★진행 중이던 업로드를 죽였다★.
+        //   여기서 최대 12초 더 기다리며 진짜 이미지가 뜨는지 본다.
+        console.warn(LOG_PREFIX, '[frame] 대상 이미지 아직 없음 — 최대 12초 추가 대기');
+        popupLog('프레임: 갤러리 반영 대기 중...', 'info');
+        for (let i = 0; i < 24 && !newlyUploadedImg; i++) {
+          await delay(500);
+          document.querySelectorAll('img[src]').forEach(img => {
+            if (newlyUploadedImg) return;
+            if (_isAvatarSrc(img.src)) return;
+            if (isGalleryImage(img) && !prevGallerySrcs.has(img.src)) newlyUploadedImg = img;
+          });
+        }
+      }
       if (newlyUploadedImg) {
         console.log(LOG_PREFIX, `[frame] 새로 업로드된 이미지 식별: ${newlyUploadedImg.src.substring(0, 80)}`);
+        popupLog(`프레임: 대상 이미지 확보 (${(newlyUploadedImg.src || '').slice(0, 45)})`, 'info');
         lastUploadedFrameSrc = newlyUploadedImg.src;
       } else {
         console.warn(LOG_PREFIX, '[frame] 새 이미지 src 변경 감지 실패 → 갤러리 마지막 이미지 사용');
+        popupLog('⚠️ 프레임: 대상 이미지를 끝내 못 찾음 (갤러리 마지막 것으로 진행)', 'warn');
       }
     }
 
@@ -3020,6 +3047,11 @@
     }
 
     console.error(LOG_PREFIX, '[frame] ✗ Animate 실패');
+    popupLog('❌ 프레임: 애니메이션(영상 전환) 메뉴 실행 실패', 'error');
+    try { dumpFrameUploadState(imgCountBefore, prevGallerySrcs); } catch (_) {}
+    // 🔑 서버가 이미지를 거부한 게 아니라 ★메뉴 조작이 실패★ 한 것이다.
+    //   같은 코드로 묶으면 background 가 탭을 새로고침해 진행 중이던 업로드까지 날린다.
+    _lastFrameFailReason = 'ANIMATE_FAILED';
     return false;
   }
 
