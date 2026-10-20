@@ -160,56 +160,156 @@ async function fetchNaverPostList() {
   return { posts: out, tried };
 }
 
+// 대조 대상 모으기 — 자동 대조와 '주소 일괄' 이 같은 데이터를 쓴다.
+// 반환: { posts, free, items, tried, error }
+//   posts : 블로그 최근 발행글 전부
+//   free  : 그중 아직 어느 항목도 쓰지 않는 주소 (중복 배정 방지)
+//   items : 주소가 필요한 항목 — generated 전부 + published 인데 주소가 빈 것
+async function _naverMatchContext() {
+  const ctx = { posts: [], free: [], items: [], tried: '', error: '' };
+  const { posts, tried } = await fetchNaverPostList();
+  ctx.tried = tried.join(' ');
+  ctx.posts = posts;
+  if (!posts.length) {
+    ctx.error = '발행글 목록을 못 읽었습니다 (네이버 로그인 상태를 확인하세요)';
+    return ctx;
+  }
+  const isNaver = (it) => it.target === 'naver' || it.destination_id === 'naver_mango';
+  for (const st of ['generated', 'published']) {
+    const wr = await fetch(`${BW_BASE}/api/work?status=${st}`, { credentials: 'include' });
+    if (!wr.ok) { ctx.error = `블로그라이터 응답 ${wr.status}`; return ctx; }
+    for (const it of ((await wr.json()).items || [])) {
+      if (!isNaver(it)) continue;
+      if (st === 'published' && it.published_url) continue;   // 이미 주소가 있으면 볼 일 없다
+      ctx.items.push({ ...it, _backfill: st === 'published' });
+    }
+  }
+  // 이미 다른 항목이 쓰는 주소는 후보에서 뺀다 (두 초안이 같은 글을 가져가는 사고 방지)
+  const usedLogNo = new Set();
+  try {
+    const wr = await fetch(`${BW_BASE}/api/work?status=published`, { credentials: 'include' });
+    if (wr.ok) for (const it of ((await wr.json()).items || [])) {
+      if (!isNaver(it) || !it.published_url) continue;
+      if (ctx.items.some((x) => x.id === it.id)) continue;
+      const m = String(it.published_url).match(/(\d{6,})\s*$/);
+      if (m) usedLogNo.add(m[1]);
+    }
+  } catch {}
+  ctx.free = posts.filter((p) => !usedLogNo.has(String(p.logNo)));
+  return ctx;
+}
+
+
+// ─── 주소 일괄 저장용 후보 수집 (2026-10-20) ─────────────────────────────────
+// 왜 따로 만들었나 —
+//   자동 대조는 유사도 0.85 이상만 붙인다. 실측: 자동으로 채워진 20건이 ★전부 1.0★ 이었다.
+//   즉 제목을 그대로 두고 발행했을 때만 붙는다. 운영자가 제목을 다듬어 발행하면
+//   점수가 떨어져 영영 안 붙고, 결국 손으로 주소를 넣게 된다 — 실측 '수동 확인' 48건.
+//   그래서 ★점수와 무관하게 후보를 전부 보여주고 한 번에 저장★ 하는 길을 만든다.
+// ⚠️ 0.5 미만도 버리지 않는다. 제목을 많이 고쳤을수록 점수가 낮은데, 그게 바로
+//    사람이 눈으로 골라줘야 하는 경우다. 여기서 잘라내면 만든 의미가 없다.
+async function collectNaverUrlCandidates() {
+  const ctx = await _naverMatchContext();
+  const out = {
+    posts: ctx.posts.length, free: ctx.free.length,
+    tried: ctx.tried, error: ctx.error, items: [],
+    freePosts: ctx.free.map((p) => ({
+      logNo: String(p.logNo), title: p.title,
+      url: `https://blog.naver.com/${NAVER_BLOG_ID}/${p.logNo}`,
+    })),
+  };
+  if (ctx.error) return out;
+
+  // 추천(기본 선택) 은 자동 대조와 같은 1:1 배정 규칙으로 정한다 — 서로 뒤바뀌지 않게.
+  const pairs = [];
+  for (const it of ctx.items) for (const p of ctx.free) {
+    pairs.push({ it, p, sc: _titleSim(it.title, p.title) });
+  }
+  pairs.sort((a, b) => b.sc - a.sc);
+  const takenItem = new Set(), takenPost = new Set(), bestOf = new Map();
+  for (const pr of pairs) {
+    if (takenItem.has(pr.it.id) || takenPost.has(pr.p.logNo)) continue;
+    takenItem.add(pr.it.id); takenPost.add(pr.p.logNo);
+    bestOf.set(pr.it.id, pr);
+  }
+
+  for (const it of ctx.items) {
+    const cands = ctx.free
+      .map((p) => ({
+        logNo: String(p.logNo), title: p.title,
+        url: `https://blog.naver.com/${NAVER_BLOG_ID}/${p.logNo}`,
+        score: Math.round(_titleSim(it.title, p.title) * 100) / 100,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    const rec = bestOf.get(it.id);
+    out.items.push({
+      id: it.id, title: it.title, note: it.note || '',
+      backfill: !!it._backfill,
+      target: it.target || 'naver',
+      destination_id: it.destination_id || 'naver_mango',
+      publish_mode: it.publish_mode || 'scheduled',
+      recommend: rec ? String(rec.p.logNo) : (cands[0] ? cands[0].logNo : ''),
+      recommendScore: rec ? Math.round(rec.sc * 100) / 100 : (cands[0] ? cands[0].score : 0),
+      candidates: cands,
+    });
+  }
+  out.items.sort((a, b) => b.recommendScore - a.recommendScore);
+  return out;
+}
+
+
+// 고른 주소들을 한 번에 저장한다. rows: [{id,title,target,destination_id,publish_mode,url}]
+async function saveNaverUrls(rows) {
+  const res = { ok: 0, fail: 0, errors: [] };
+  for (const r of (rows || [])) {
+    if (!r || !r.id || !r.url) { res.fail++; continue; }
+    try {
+      // ⚠️ upsertWorkItem 의 UPDATE 는 target·destination_id·title 에 COALESCE 를 안 쓴다.
+      //    같이 보내지 않으면 지워진다. (popup 쪽 수동 저장과 같은 이유)
+      const up = await fetch(`${BW_BASE}/api/work`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: r.id, target: r.target || 'naver',
+          destination_id: r.destination_id || 'naver_mango',
+          title: r.title, status: 'published',
+          published_url: r.url,
+          publish_mode: r.publish_mode || 'scheduled',
+          note: `일괄 저장${r.score != null ? ` · 유사도 ${r.score}` : ''}`,
+        }),
+      });
+      if (up.ok) res.ok++; else { res.fail++; res.errors.push(`${r.id}: HTTP ${up.status}`); }
+    } catch (e) {
+      res.fail++; res.errors.push(`${r.id}: ${e && e.message || e}`);
+    }
+  }
+  broadcastLog(`[주소 일괄] ${res.ok}건 저장${res.fail ? ` · 실패 ${res.fail}건` : ''}`,
+               res.fail ? 'warn' : 'info');
+  return res;
+}
+
+
 // 초안 ↔ 발행글 대조. 확실한 것만 자동 처리한다.
 // minScore 0.75 는 '강아지 …' 로 시작하는 제목들을 잘못 붙였다. 0.85 로 올리고
 // 0.5~0.85 는 '애매' 로 남겨 사람이 확인한다(패널에서 주소를 직접 넣을 수 있다).
+// 제목을 고쳐 발행하면 0.85 를 못 넘어 영영 안 붙는다 → 그건 '주소 일괄' 로 처리한다.
 async function matchPublishedNaverPosts({ minScore = 0.85, apply = true } = {}) {
   const report = { posts: 0, drafts: 0, matched: [], unsure: [], tried: '', error: '' };
   try {
-    const { posts, tried } = await fetchNaverPostList();
-    report.tried = tried.join(' ');
-    report.posts = posts.length;
-    if (!posts.length) {
-      report.error = '발행글 목록을 못 읽었습니다 (네이버 로그인 상태를 확인하세요)';
+    // 대상·후보 모으기는 '주소 일괄' 과 공유한다 (_naverMatchContext)
+    const ctx = await _naverMatchContext();
+    report.tried = ctx.tried;
+    report.posts = ctx.posts.length;
+    if (ctx.error) {
+      report.error = ctx.error;
       broadcastLog(`[네이버 대조] ${report.error} — 시도: ${report.tried}`, 'warn');
       return report;
     }
-
-    // 대상 두 종류 —
-    //  ① generated : 아직 발행 표시가 안 된 초안
-    //  ② published 인데 published_url 이 빈 것 : 예약발행으로 '표시만' 해둔 것.
-    //     이게 예약발행 처리의 핵심이다. 사람은 누른 시각만 남기고, 주소는 여기서 채운다.
-    const isNaver = (it) => it.target === 'naver' || it.destination_id === 'naver_mango';
-    const items = [];
-    for (const st of ['generated', 'published']) {
-      const wr = await fetch(`${BW_BASE}/api/work?status=${st}`, { credentials: 'include' });
-      if (!wr.ok) { report.error = `블로그라이터 응답 ${wr.status}`; return report; }
-      for (const it of ((await wr.json()).items || [])) {
-        if (!isNaver(it)) continue;
-        if (st === 'published' && it.published_url) continue;   // 이미 주소가 있으면 볼 일 없다
-        items.push({ ...it, _backfill: st === 'published' });
-      }
-    }
+    const items = ctx.items;
+    const free = ctx.free;
     report.drafts = items.length;
-    report.backfill = items.filter(i => i._backfill).length;
-
-    // ⚠️ 초안마다 독립적으로 최고점을 고르면 두 초안이 같은 글을 가져가거나 서로 뒤바뀐다.
-    //    ('발 씻기' 와 '귀 청소' 처럼 앞머리가 같은 제목에서 실제로 잘못 매칭됐다.)
-    //    그래서 ① 이미 다른 항목이 쓰는 주소는 후보에서 빼고
-    //          ② 모든 (초안×글) 점수를 만들어 높은 순으로 1:1 로만 배정한다.
-    const usedLogNo = new Set();
-    for (const st of ['published']) {
-      try {
-        const wr = await fetch(`${BW_BASE}/api/work?status=${st}`, { credentials: 'include' });
-        if (wr.ok) for (const it of ((await wr.json()).items || [])) {
-          if (!isNaver(it) || !it.published_url) continue;
-          if (items.some((x) => x.id === it.id)) continue;   // 지금 매칭 대상은 제외
-          const m = String(it.published_url).match(/(\d{6,})\s*$/);
-          if (m) usedLogNo.add(m[1]);
-        }
-      } catch {}
-    }
-    const free = posts.filter((p) => !usedLogNo.has(String(p.logNo)));
+    report.backfill = items.filter((i) => i._backfill).length;
     report.postsFree = free.length;
 
     const pairs = [];
@@ -871,6 +971,13 @@ async function handleMessage(msg, sender) {
 
     case 'NAVER_MATCH_PUBLISHED':
       return await matchPublishedNaverPosts({ apply: msg.apply !== false });
+
+    // 주소 일괄 — 후보를 점수 없이 전부 돌려주고(사람이 고른다), 고른 것을 한 번에 저장한다
+    case 'NAVER_URL_CANDIDATES':
+      return await collectNaverUrlCandidates();
+
+    case 'NAVER_SAVE_URLS':
+      return await saveNaverUrls(msg.rows || []);
 
     // 니치 분석 — 사용자 브라우저에서 네이버 블로그 검색 상위 제목을 모아온다
     case 'NAVER_NICHE_SCAN':

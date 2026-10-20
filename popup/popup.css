@@ -1172,3 +1172,27 @@ button.badge.badge-on { cursor: default; }
   word-break: keep-all; line-height: 1.4;
 }
 #blogPanel .blog-url-note.low { color: #ffd27f; }
+
+/* ─── 주소 일괄 저장 (2026-10-20) ───────────────────────────────
+   자동 대조는 제목이 그대로일 때만 붙는다(실측: 자동 성공 20건 전부 유사도 1.0).
+   제목을 다듬어 발행하면 안 붙어서 손으로 48번 넣고 있었다 → 한 화면에서 끝낸다. */
+.blog-batch { border: 1px solid var(--line, #2a2a2a); border-radius: 8px;
+  margin: 6px 0 8px; background: rgba(255,255,255,.02); }
+.blog-batch-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line, #2a2a2a); }
+.blog-batch-info { font-size: 11px; opacity: .8; }
+.blog-batch-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.blog-batch-rows { max-height: 320px; overflow-y: auto; }
+.bbrow { display: grid; grid-template-columns: 18px 1fr; gap: 6px;
+  padding: 7px 8px; border-bottom: 1px solid rgba(255,255,255,.05); }
+.bbrow:last-child { border-bottom: 0; }
+.bbrow input[type="checkbox"] { margin-top: 3px; }
+.bbrow-title { font-size: 11.5px; font-weight: 600; line-height: 1.35;
+  word-break: keep-all; }
+.bbrow-note { font-size: 10px; opacity: .6; margin-top: 1px; }
+.bbrow select { width: 100%; margin-top: 4px; font-size: 11px; padding: 3px 4px;
+  background: rgba(0,0,0,.25); color: inherit;
+  border: 1px solid var(--line, #2a2a2a); border-radius: 5px; }
+/* 유사도가 낮으면 눈에 띄게 — 사람이 꼭 확인해야 하는 줄이다 */
+.bbrow.low .bbrow-title::after { content: ' 확인필요'; font-size: 9.5px;
+  color: #e9a23b; font-weight: 500; }

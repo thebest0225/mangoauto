@@ -3315,6 +3315,121 @@ function bindBlogEvents() {
     for (const m of r.unsure) blogLog(`  ? ${m.draftTitle.slice(0, 26)} ~ ${m.postTitle.slice(0, 26)} (유사도 ${m.score})`, 'warn');
     if (r.matched.length) await loadBlogDrafts();
   });
+  // ─── 주소 일괄 저장 (2026-10-20) ──────────────────────────────────────────
+  // 왜 만들었나 — 자동 대조는 유사도 0.85 이상만 붙인다. 실측으로 자동 성공한 20건이
+  //   ★전부 1.0★ 이었다. 즉 제목을 그대로 두고 발행했을 때만 붙는다. 제목을 다듬어
+  //   발행하면 영영 안 붙어서 손으로 넣게 되고, 실제로 '수동 확인' 이 48건 쌓였다.
+  //   그래서 후보를 점수와 무관하게 전부 보여주고 한 번에 저장한다.
+  let blogBatch = [];   // [{id,title,...,candidates,recommend}]
+
+  function renderBlogBatch() {
+    const box = $('#blogBatchRows');
+    if (!box) return;
+    if (!blogBatch.length) {
+      box.innerHTML = '<div class="bbrow"><div class="bbrow-title">주소가 필요한 글이 없습니다</div></div>';
+      return;
+    }
+    box.innerHTML = '';
+    for (const it of blogBatch) {
+      const row = document.createElement('div');
+      row.className = 'bbrow' + (it.recommendScore < 0.85 ? ' low' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      // 애매한 줄도 기본 선택해 둔다 — 어차피 사람이 보고 고르라고 만든 화면이다.
+      // 대신 'low' 로 표시해서 그냥 저장 누르기 전에 눈이 가게 한다.
+      cb.checked = !!it.recommend;
+      cb.dataset.id = it.id;
+      const right = document.createElement('div');
+      const t = document.createElement('div');
+      t.className = 'bbrow-title';
+      t.textContent = it.title || '(제목 없음)';
+      const n = document.createElement('div');
+      n.className = 'bbrow-note';
+      n.textContent = (it.backfill ? '주소 대기' : '발행 표시 안 됨')
+        + (it.note ? ` · ${String(it.note).slice(0, 30)}` : '');
+      const sel = document.createElement('select');
+      sel.dataset.id = it.id;
+      const none = document.createElement('option');
+      none.value = ''; none.textContent = '— 건너뜀 —';
+      sel.appendChild(none);
+      for (const c of (it.candidates || [])) {
+        const o = document.createElement('option');
+        o.value = c.logNo;
+        o.textContent = `${Math.round(c.score * 100)}%  ${c.title}`;
+        if (c.logNo === it.recommend) o.selected = true;
+        sel.appendChild(o);
+      }
+      if (!it.recommend) none.selected = true;
+      sel.addEventListener('change', () => { cb.checked = !!sel.value; });
+      right.appendChild(t); right.appendChild(n); right.appendChild(sel);
+      row.appendChild(cb); row.appendChild(right);
+      box.appendChild(row);
+    }
+  }
+
+  async function openBlogBatch() {
+    const panel = $('#blogBatchPanel');
+    if (!panel) return;
+    panel.style.display = '';
+    $('#blogBatchInfo').textContent = '네이버 발행글을 읽는 중…';
+    $('#blogBatchRows').innerHTML = '';
+    const r = await sendBg({ type: 'NAVER_URL_CANDIDATES' });
+    if (!r) { $('#blogBatchInfo').textContent = '실패 (응답 없음)'; return; }
+    if (r.error) {
+      $('#blogBatchInfo').textContent = `실패 — ${r.error}`;
+      blogLog(`주소 일괄 — ${r.error} (시도: ${r.tried || '-'})`, 'error');
+      return;
+    }
+    blogBatch = r.items || [];
+    const low = blogBatch.filter((x) => x.recommendScore < 0.85).length;
+    $('#blogBatchInfo').textContent =
+      `발행글 ${r.posts}건(미사용 ${r.free}) · 주소 필요 ${blogBatch.length}건`
+      + (low ? ` · 확인필요 ${low}건` : '');
+    renderBlogBatch();
+  }
+
+  $('#blogBatchUrl')?.addEventListener('click', openBlogBatch);
+  $('#blogBatchClose')?.addEventListener('click', () => {
+    $('#blogBatchPanel').style.display = 'none';
+  });
+  $('#blogBatchAll')?.addEventListener('click', () => {
+    $$('#blogBatchRows input[type="checkbox"]').forEach((c) => {
+      const sel = $(`#blogBatchRows select[data-id="${c.dataset.id}"]`);
+      c.checked = !!(sel && sel.value);
+    });
+  });
+  $('#blogBatchNone')?.addEventListener('click', () => {
+    $$('#blogBatchRows input[type="checkbox"]').forEach((c) => { c.checked = false; });
+  });
+  $('#blogBatchSave')?.addEventListener('click', async () => {
+    const rows = [];
+    for (const cb of $$('#blogBatchRows input[type="checkbox"]')) {
+      if (!cb.checked) continue;
+      const id = cb.dataset.id;
+      const sel = $(`#blogBatchRows select[data-id="${id}"]`);
+      if (!sel || !sel.value) continue;
+      const it = blogBatch.find((x) => String(x.id) === String(id));
+      const c = it && (it.candidates || []).find((x) => x.logNo === sel.value);
+      if (!it || !c) continue;
+      rows.push({
+        id: it.id, title: it.title, target: it.target,
+        destination_id: it.destination_id, publish_mode: it.publish_mode,
+        url: c.url, score: c.score,
+      });
+    }
+    if (!rows.length) { blogLog('고른 주소가 없습니다', 'warn'); return; }
+    $('#blogBatchSave').disabled = true;
+    $('#blogBatchInfo').textContent = `${rows.length}건 저장 중…`;
+    const res = await sendBg({ type: 'NAVER_SAVE_URLS', rows });
+    $('#blogBatchSave').disabled = false;
+    if (!res) { blogLog('저장 실패 (응답 없음)', 'error'); return; }
+    blogLog(`주소 ${res.ok}건 저장${res.fail ? ` · 실패 ${res.fail}건` : ''}`,
+            res.fail ? 'warn' : 'ok');
+    for (const e of (res.errors || [])) blogLog(`  ${e}`, 'error');
+    await loadBlogDrafts();
+    if (res.ok) await openBlogBatch();   // 남은 것만 다시 보여준다
+  });
+
   $$('.btab').forEach(t => t.addEventListener('click', () => {
     $$('.btab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
