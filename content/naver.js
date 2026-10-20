@@ -793,6 +793,15 @@
               if (para && para.getClientRects().length) break;
               para = null;
             }
+            // ★2026-10-20★ 표가 본문 마지막이면 '다음 문단' 이 없어 여기서 실패했고,
+            //   표에 못 들어간 줄이 조용히 사라졌다(로그: '자리를 못 찾았습니다').
+            //   그럴 땐 문서 맨 끝 문단에라도 붙인다. 위치가 조금 아쉬운 게
+            //   자료가 없어지는 것보다 낫다.
+            if (!para) {
+              const all = Array.from(document.querySelectorAll('.se-text-paragraph, [class*="paragraph"]'))
+                .filter((p) => p.getClientRects().length && !p.closest('[class*="se-table"], table'));
+              para = all[all.length - 1] || null;
+            }
             if (!para) { sendResponse({ ok: false, error: '표 다음 문단 없음' }); return; }
             para.scrollIntoView({ block: 'center', behavior: 'instant' });
             await sleep(180);
@@ -888,6 +897,23 @@
 
           case 'NAVER_OGLINK_COUNT': {
             sendResponse({ ok: true, count: document.querySelectorAll('[class*="oglink"], [class*="se-oglink"]').length });
+            return;
+          }
+
+          case 'NAVER_TABLE_SIZE': {
+            // 표 크기만 가볍게 잰다. ★추가 버튼에 기대지 않는다★ —
+            // NAVER_TABLE_ADD 는 표 안에 커서가 있어야 버튼이 보이는데, 추가 버튼을
+            // 한 번 누르면 컨트롤이 꺼진다. 그걸로 크기를 재다가 '안 늘어납니다' 로
+            // 잘못 판정해 3×3 에서 멈추고 있었다 (2026-10-20).
+            const tabs = document.querySelectorAll('[class*="se-table"], table');
+            const t = tabs[tabs.length - 1];
+            if (!t) { sendResponse({ ok: false, error: '표를 못 찾음' }); return; }
+            const trs = t.querySelectorAll('tr');
+            sendResponse({
+              ok: true,
+              rows: trs.length,
+              cols: trs[0] ? trs[0].querySelectorAll('td,th').length : 0,
+            });
             return;
           }
 

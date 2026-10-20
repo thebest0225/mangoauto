@@ -2677,8 +2677,22 @@ async function insertTables(tabId, frameId, tables) {
 
       // ④ 필요한 만큼 행·열을 늘린다.
       //    버튼 글자에 인덱스가 들어 있어("2행 다음에 행 추가") 마지막 것을 누르면 된다.
+      // ★2026-10-20 수정 — 크기는 표에서 직접 잰다★
+      //   전에는 NAVER_TABLE_ADD 가 돌려주는 rows/cols 로 늘었는지 확인했다. 그런데 그 응답은
+      //   '추가 버튼이 보일 때' 만 온다. 바로 아래 주석대로 버튼을 누르면 컨트롤이 꺼지므로
+      //   확인용 호출이 거의 항상 실패했고, 그러면 now = have 가 되어 ★실제로는 늘었는데도★
+      //   '안 늘어납니다' 로 판정하고 멈췄다. 그래서 표가 늘 3×3 이었다.
+      //   이제 버튼은 좌표를 얻는 데만 쓰고, 크기는 NAVER_TABLE_SIZE 로 잰다.
+      const tableSize = async (axis) => {
+        const sz = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_SIZE' });
+        if (!sz.ok) return null;
+        return axis === 'row' ? sz.rows : sz.cols;
+      };
       for (const [axis, need, label] of [['col', cols, '열'], ['row', rows, '행']]) {
         for (let guard = 0; guard < 12; guard++) {
+          const have = await tableSize(axis);
+          if (have == null) { blogLog(`  표 크기를 못 쟀습니다`, 'warn'); break; }
+          if (have >= need) break;
           // ⚠️ 추가 버튼을 한 번 누르면 표 컨트롤이 꺼져 다음 버튼을 못 찾는다
           //    (3행 → 4행 에서 멈췄다). 매번 셀을 다시 클릭해 컨트롤을 켠다.
           const fc = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
@@ -2692,14 +2706,10 @@ async function insertTables(tabId, frameId, tables) {
             blogLog(`  ${label} 추가 버튼을 못 찾음 — ${st.error}`, 'warn');
             break;
           }
-          const have = axis === 'row' ? st.rows : st.cols;
-          if (have >= need) break;
           await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
-          await new Promise(r => setTimeout(r, 380));
-          // 실제로 늘었는지 확인 — 안 늘면 더 눌러도 소용없다
-          const chk = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
-          const now = chk.ok ? (axis === 'row' ? chk.rows : chk.cols) : have;
-          if (now <= have) {
+          await new Promise(r => setTimeout(r, 420));
+          const now = await tableSize(axis);
+          if (now == null || now <= have) {
             blogLog(`  ${label}이 ${have}에서 안 늘어납니다 — 남은 줄은 표 아래로 보냅니다`, 'warn');
             break;
           }
@@ -2736,12 +2746,26 @@ async function insertTables(tabId, frameId, tables) {
 
       // ⑥ 칸마다 실제로 들어갔는지 센다
       const vfy = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_TEXT' });
-      const want = t.rows.flat().filter(Boolean).length;
+      // ★2026-10-20 수정★ — 전에는 '원하던 표 전체'(예: 6×4) 기준으로 셌다.
+      //   표가 3×3 으로 줄면 9칸을 다 채워도 24×0.8=20 에 못 미쳐 '입력 미흡 · 0개 삽입' 이
+      //   됐다. 로그에 '9/9 칸' 과 '미흡' 이 같이 찍힌 게 이것이다.
+      //   실제로 들어갈 수 있었던 칸 기준으로 센다. 못 들어간 칸은 아래에서 따로 알린다.
+      const fitR = Math.min(rows, cells.rows), fitC = Math.min(cols, cells.cols);
+      let want = 0;
+      for (let r = 0; r < fitR; r++) for (let c = 0; c < fitC; c++) if (t.rows[r][c]) want++;
       if (vfy.ok && vfy.filled >= Math.ceil(want * 0.8)) {
         done++;
-        blogLog(`  ${t.marker} 완료 — ${vfy.filled}/${vfy.total} 칸 채움`);
+        const shrunk = (cells.rows < rows || cells.cols < cols);
+        blogLog(`  ${t.marker} 완료 — ${vfy.filled}/${vfy.total} 칸 채움`
+                + (shrunk ? ` (표가 ${cells.rows}×${cells.cols} 로 줄어 일부는 표 밖으로)` : ''),
+                shrunk ? 'warn' : 'info');
       } else {
         blogLog(`  ${t.marker} 입력 미흡 (${vfy.filled ?? '?'}/${vfy.total ?? '?'} 칸)`, 'warn');
+      }
+      // 열이 모자라면 그 열 내용은 표 어디에도 안 들어간다 — 조용히 사라지지 않게 알린다
+      if (cells.cols < cols) {
+        blogLog(`  ${t.marker} 열이 ${cells.cols}개뿐이라 ${cols - cells.cols}개 열이 빠졌습니다`
+                + ` (빠진 항목: ${t.rows[0].slice(cells.cols).filter(Boolean).join(', ')})`, 'warn');
       }
 
       // ⑦ 그래도 행이 모자라면 남은 줄을 표 아래 불릿으로 (자료 유실 방지)
