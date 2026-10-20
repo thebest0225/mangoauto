@@ -165,7 +165,12 @@ async function fetchNaverPostList() {
 //   posts : 블로그 최근 발행글 전부
 //   free  : 그중 아직 어느 항목도 쓰지 않는 주소 (중복 배정 방지)
 //   items : 주소가 필요한 항목 — generated 전부 + published 인데 주소가 빈 것
-async function _naverMatchContext() {
+async function _naverMatchContext({ onlyBackfill = false } = {}) {
+  // onlyBackfill: published 인데 주소만 빈 것만 모은다.
+  //   ★2026-10-20 사고★ — '주소 일괄' 이 generated(아직 발행 안 한 초안)까지 끌어와
+  //   한 번의 저장으로 29건을 전부 발행 처리했다. 유사도 0.03~0.09 짜리 엉뚱한 주소가 붙었고
+  //   미발행 초안이 목록에서 통째로 사라졌다.
+  //   주소를 채우는 화면은 ★이미 발행한 글★ 만 다뤄야 한다. 발행 여부 판단은 사람이 한다.
   const ctx = { posts: [], free: [], items: [], tried: '', error: '' };
   const { posts, tried } = await fetchNaverPostList();
   ctx.tried = tried.join(' ');
@@ -175,7 +180,7 @@ async function _naverMatchContext() {
     return ctx;
   }
   const isNaver = (it) => it.target === 'naver' || it.destination_id === 'naver_mango';
-  for (const st of ['generated', 'published']) {
+  for (const st of (onlyBackfill ? ['published'] : ['generated', 'published'])) {
     const wr = await fetch(`${BW_BASE}/api/work?status=${st}`, { credentials: 'include' });
     if (!wr.ok) { ctx.error = `블로그라이터 응답 ${wr.status}`; return ctx; }
     for (const it of ((await wr.json()).items || [])) {
@@ -209,7 +214,7 @@ async function _naverMatchContext() {
 // ⚠️ 0.5 미만도 버리지 않는다. 제목을 많이 고쳤을수록 점수가 낮은데, 그게 바로
 //    사람이 눈으로 골라줘야 하는 경우다. 여기서 잘라내면 만든 의미가 없다.
 async function collectNaverUrlCandidates() {
-  const ctx = await _naverMatchContext();
+  const ctx = await _naverMatchContext({ onlyBackfill: true });
   const out = {
     posts: ctx.posts.length, free: ctx.free.length,
     tried: ctx.tried, error: ctx.error, items: [],
@@ -261,9 +266,22 @@ async function collectNaverUrlCandidates() {
 
 // 고른 주소들을 한 번에 저장한다. rows: [{id,title,target,destination_id,publish_mode,url}]
 async function saveNaverUrls(rows) {
-  const res = { ok: 0, fail: 0, errors: [] };
+  const res = { ok: 0, fail: 0, skipped: 0, errors: [] };
+  // ★2026-10-20★ 이 함수는 '주소만 채우는' 일을 한다. 발행 여부를 바꾸지 않는다.
+  //   화면에서 뭘 보내든 published 가 아닌 항목은 여기서 막는다 (이중 안전장치).
+  let live = [];
+  try {
+    const wr = await fetch(`${BW_BASE}/api/work?status=published`, { credentials: 'include' });
+    if (wr.ok) live = ((await wr.json()).items || []);
+  } catch {}
+  const publishedIds = new Set(live.map((x) => String(x.id)));
   for (const r of (rows || [])) {
     if (!r || !r.id || !r.url) { res.fail++; continue; }
+    if (!publishedIds.has(String(r.id))) {
+      res.skipped++;
+      res.errors.push(`${r.title || r.id}: 발행 표시가 안 된 글이라 건너뜀`);
+      continue;
+    }
     try {
       // ⚠️ upsertWorkItem 의 UPDATE 는 target·destination_id·title 에 COALESCE 를 안 쓴다.
       //    같이 보내지 않으면 지워진다. (popup 쪽 수동 저장과 같은 이유)
@@ -284,8 +302,10 @@ async function saveNaverUrls(rows) {
       res.fail++; res.errors.push(`${r.id}: ${e && e.message || e}`);
     }
   }
-  broadcastLog(`[주소 일괄] ${res.ok}건 저장${res.fail ? ` · 실패 ${res.fail}건` : ''}`,
-               res.fail ? 'warn' : 'info');
+  broadcastLog(`[주소 일괄] ${res.ok}건 저장`
+               + (res.fail ? ` · 실패 ${res.fail}건` : '')
+               + (res.skipped ? ` · 건너뜀 ${res.skipped}건(발행 표시 안 됨)` : ''),
+               (res.fail || res.skipped) ? 'warn' : 'info');
   return res;
 }
 

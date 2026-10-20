@@ -3335,9 +3335,10 @@ function bindBlogEvents() {
       row.className = 'bbrow' + (it.recommendScore < 0.85 ? ' low' : '');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      // 애매한 줄도 기본 선택해 둔다 — 어차피 사람이 보고 고르라고 만든 화면이다.
-      // 대신 'low' 로 표시해서 그냥 저장 누르기 전에 눈이 가게 한다.
-      cb.checked = !!it.recommend;
+      // ★2026-10-20 사고★ — 점수와 무관하게 전부 기본 선택해 뒀더니, 저장 한 번에
+      //   29건이 유사도 0.03~0.09 짜리 엉뚱한 주소로 저장됐다.
+      //   ★확실한 것만 기본 선택한다.★ 애매한 줄은 사람이 직접 골라야 체크된다.
+      cb.checked = !!it.recommend && it.recommendScore >= 0.85;
       cb.dataset.id = it.id;
       const right = document.createElement('div');
       const t = document.createElement('div');
@@ -3384,7 +3385,7 @@ function bindBlogEvents() {
     const low = blogBatch.filter((x) => x.recommendScore < 0.85).length;
     $('#blogBatchInfo').textContent =
       `발행글 ${r.posts}건(미사용 ${r.free}) · 주소 필요 ${blogBatch.length}건`
-      + (low ? ` · 확인필요 ${low}건` : '');
+      + (low ? ` · 확인필요 ${low}건(기본 해제)` : '');
     renderBlogBatch();
   }
 
@@ -3418,13 +3419,26 @@ function bindBlogEvents() {
       });
     }
     if (!rows.length) { blogLog('고른 주소가 없습니다', 'warn'); return; }
+    // 낮은 점수를 섞어 저장할 때는 한 번 묻는다. 제목이 많이 달라 사람이 확인한 경우도
+    // 있지만, 그냥 저장을 눌러 엉뚱한 주소가 박히는 사고가 한 번 났다.
+    const low = rows.filter((r) => (r.score ?? 0) < 0.5);
+    if (low.length) {
+      const ok = confirm(
+        `제목이 많이 다른 글이 ${low.length}건 있습니다.\n\n`
+        + low.slice(0, 5).map((r) => `· ${String(r.title).slice(0, 28)}`).join('\n')
+        + (low.length > 5 ? `\n… 외 ${low.length - 5}건` : '')
+        + `\n\n정말 이 주소로 저장할까요?`);
+      if (!ok) return;
+    }
     $('#blogBatchSave').disabled = true;
     $('#blogBatchInfo').textContent = `${rows.length}건 저장 중…`;
     const res = await sendBg({ type: 'NAVER_SAVE_URLS', rows });
     $('#blogBatchSave').disabled = false;
     if (!res) { blogLog('저장 실패 (응답 없음)', 'error'); return; }
-    blogLog(`주소 ${res.ok}건 저장${res.fail ? ` · 실패 ${res.fail}건` : ''}`,
-            res.fail ? 'warn' : 'ok');
+    blogLog(`주소 ${res.ok}건 저장`
+            + (res.fail ? ` · 실패 ${res.fail}건` : '')
+            + (res.skipped ? ` · 건너뜀 ${res.skipped}건(발행 표시 안 됨)` : ''),
+            (res.fail || res.skipped) ? 'warn' : 'ok');
     for (const e of (res.errors || [])) blogLog(`  ${e}`, 'error');
     await loadBlogDrafts();
     if (res.ok) await openBlogBatch();   // 남은 것만 다시 보여준다
