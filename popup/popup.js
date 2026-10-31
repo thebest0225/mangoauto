@@ -1973,6 +1973,11 @@ async function pickBlogDraft(id) {
     if ($('#blogPubUrl')) $('#blogPubUrl').value = guess || '';
     renderBlogList();
     blogLog(`선택: ${blogPicked.title}`);
+    // 운영자용 메모는 본문에서 빠졌다는 걸 알려준다 — 조용히 지우면 그게 더 무섭다
+    if (p.notes) {
+      const n = p.notes.split('\n').filter(l => l.trim()).length;
+      blogLog(`운영자 메모 ${n}줄은 본문에서 제외했습니다 (참고한 출처 · 다듬을 때 주의할 점)`);
+    }
     if (p.charCount > 2600) blogLog(`본문이 ${p.charCount}자입니다. 네이버 권장은 1,500~2,500자 — 길면 줄이세요.`, 'warn');
     if (!p.photos?.length && !p.images.length) blogLog('사진 자리가 없습니다. 망고 사진함에서 2~4장 골라 직접 넣으세요.', 'warn');
   } catch (e) {
@@ -2004,6 +2009,25 @@ function naverizeDraft(md) {
   // 앞 공백을 허용한다 — 루틴이 들여쓰면 못 잘라내고 썸네일 프롬프트가 본문에 섞인다
   const ti = src.search(/^[ \t]*##\s*썸네일 프롬프트/m);
   if (ti >= 0) { thumb = src.slice(ti).replace(/^[ \t]*##\s*썸네일 프롬프트\s*/m, '').trim(); src = src.slice(0, ti); }
+
+  // 1-1) ★운영자용 메모 블록도 본문이 아니다 (2026-10-31)★
+  //   🪤 루틴 프롬프트(p_bw.txt)가 "맨 끝에 ① 참고한 출처 ② 다듬을 때 주의할 점" 을
+  //      요구한다. 그건 ★운영자가 다듬을 때 보라고★ 만든 메모인데, 확장이 본문을
+  //      통째로 타이핑하면서 ★네이버 글에 그대로 찍혔다.★
+  //      "망고는 실내견이라 마당 월동 경험이 없어요. 경험으로 바꿔 쓰지 마세요" 가
+  //      독자에게 노출됐다(운영자 화면 확인). 출처 목록·세션 고지도 같이 나갔다.
+  //   ⚠️ 제목만 보고 자르지 않는다 — ## 가 없는 옛 초안도 있어서 ★둘 다★ 본다.
+  //      잘라낸 메모는 버리지 않고 notes 로 넘겨 운영자가 볼 수 있게 둔다.
+  let notes = '';
+  //   ⚠️ 여기에 \b 를 쓰면 안 된다 — JS 의 \w 는 ASCII 라서 한글 뒤 \b 가 성립하지 않는다.
+  //      '점\b' 로 썼다가 13건 중 10건을 못 걸렀다(2026-10-31 시험에서 잡음).
+  //   ⚠️ 제목 모양이 ★세 가지★ 다 — 맨 텍스트 · `**굵게**` · `[대괄호]` · `## 헤딩`.
+  //      실측 13건에서 셋이 다 나왔다. 하나만 잡으면 나머지가 새어 나간다.
+  const NOTE_HEAD = /^[ \t]*(?:##\s*|\*\*\s*|\[\s*)?(참고한 출처|다듬을 때 주의할 점|확인이 필요한 점|작성 메모)[^\n]*$/m;
+  const nm = NOTE_HEAD.exec(src);
+  if (nm) { notes = src.slice(nm.index).trim(); src = src.slice(0, nm.index); }
+  // 세션 고지 한 줄짜리도 본문에서 걷는다 (메모 블록 위에 떨어져 있는 경우가 있다)
+  src = src.replace(/^[ \t]*※\s*웹\s*검색[^\n]*\n?/gm, '');
 
   // 2) 맨 위 메타 줄 — 전부 걷어낸다
   //
@@ -2156,6 +2180,7 @@ function naverizeDraft(md) {
     quotes,
     meta,
     thumbPrompt: thumb,
+    notes,                // 운영자용 메모 — 본문에 넣지 않는다
     tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
     tagLine,
     charCount: body.replace(/\s/g, '').length,
