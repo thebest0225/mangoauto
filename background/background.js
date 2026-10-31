@@ -995,6 +995,24 @@ async function handleMessage(msg, sender) {
         return { ok: false, error: String(e && e.message || e) };
       }
 
+    // ★2026-10-31★ 전체 선택 — 가운데 정렬은 본문을 통째로 선택한 뒤 툴바를 눌러야 한다.
+    //   ⚠️ Range 로 만든 선택은 네이버 에디터가 무시한다(볼드에서 이미 물렸다).
+    //      그래서 여기도 ★진짜 키 입력★ 으로 보낸다. 포커스가 본문에 있어야 본문만 잡힌다.
+    case 'NAVER_CDP_SELECTALL':
+      try {
+        if (!msg.tabId) return { ok: false, error: 'tabId 없음' };
+        await ensureDebuggerAttached(msg.tabId);
+        const t = { tabId: msg.tabId };
+        const A = { windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, code: 'KeyA', key: 'a', modifiers: 2 };
+        await chrome.debugger.sendCommand(t, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...A });
+        await _delay(_rand(20, 45));
+        await chrome.debugger.sendCommand(t, 'Input.dispatchKeyEvent', { type: 'keyUp', ...A });
+        await _delay(_rand(25, 55));
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+
     case 'NAVER_MATCH_PUBLISHED':
       return await matchPublishedNaverPosts({ apply: msg.apply !== false });
 

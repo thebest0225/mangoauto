@@ -2044,6 +2044,7 @@ function naverizeDraft(md) {
   const bolds = [];   // 소제목 — 붙여넣기 후에 '굵게'를 따로 적용할 대상
   const tables = [];  // 표 — 본문에는 자리표시만 넣고, 나중에 진짜 네이버 표로 만든다
   const links = [];   // 맨 URL 줄 — 나중에 링크 카드로 바꾼다
+  const quotes = [];  // '> ' 줄 — 나중에 툴바 '인용구' 로 바꾼다 (2026-10-31)
 
   const pushText = (t) => text.push(t);
 
@@ -2056,6 +2057,20 @@ function naverizeDraft(md) {
       html.push('<hr>');
       pushText('———');
       continue;
+    }
+
+    // ★2026-10-31★ 인용구 — '> ' 로 시작하는 문단을 네이버 인용구 블록으로 만든다.
+    //   모바일에서 핵심 한 줄이 눈에 걸리게 하는 장치다. 평문으로 넣고 나중에
+    //   그 줄을 선택해 툴바 '인용구' 를 누른다(소제목 굵게와 같은 방식).
+    //   ⚠️ '>' 는 본문에 쓰이지 않는 글자라 다른 표식과 충돌하지 않는다.
+    if (lines.every(l => /^>\s?/.test(l))) {
+      const qs = lines.map(l => l.replace(/^>\s?/, '').trim()).filter(Boolean);
+      if (qs.length) {
+        quotes.push(...qs);
+        html.push(`<blockquote>${qs.map(ESC).join('<br>')}</blockquote>`);
+        qs.forEach(pushText);
+        continue;
+      }
     }
 
     // 사진 슬롯 — [사진1 · walk+summer] (+ 다음 줄에 캡션: ...)
@@ -2138,6 +2153,7 @@ function naverizeDraft(md) {
     bolds,
     tables,
     links,
+    quotes,
     meta,
     thumbPrompt: thumb,
     tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
@@ -2954,6 +2970,33 @@ async function fillNaver() {
       }
     }
 
+    // ②½ 인용구 — '> ' 줄을 네이버 인용구 블록으로 (2026-10-31)
+    //    ⚠️ ★표보다 먼저 한다.★ 표 삽입이 문단을 지우고 새로 만들어서 그 뒤에는
+    //       줄을 좌표로 못 찾는다(사진·링크도 같은 이유로 뒤에 있다).
+    if (body.ok && p.quotes?.length) {
+      const qbtn = await sendFrame(tabId, body.frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'quotation' });
+      if (!qbtn.ok) {
+        blogLog(`인용구 버튼을 못 찾음 — ${qbtn.error}. 평문으로 남겨둡니다`, 'warn');
+      } else {
+        const before = (await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' })).count || 0;
+        let done = 0;
+        for (const line of p.quotes) {
+          const sel = await sendFrame(tabId, body.frameId, { type: 'NAVER_SELECT_LINE', text: line });
+          if (!sel.ok || !sel.drag) { blogLog(`  인용구 줄을 못 찾음 (${line.slice(0, 18)})`, 'warn'); continue; }
+          await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
+          await new Promise(r => setTimeout(r, 140));
+          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: qbtn.x, y: qbtn.y });
+          await new Promise(r => setTimeout(r, 420));
+          done++;
+        }
+        const after = (await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' })).count || 0;
+        // ★시도 횟수가 아니라 실제로 늘어난 블록 수로 센다.★ 표 삽입에서 이미 물린 함정이다
+        //   (추가 버튼 응답을 믿었다가 '안 늘어납니다' 로 오판했다 — v2.7.2).
+        blogLog(`인용구 ${after - before}/${p.quotes.length}개 적용` + (done !== after - before ? ` (시도 ${done}회)` : ''),
+                after > before ? 'info' : 'warn');
+      }
+    }
+
     // ③ 표 — 자리표시를 진짜 네이버 표로 바꾼다
     if (body.ok && p.tables?.length) {
       blogLog(`표 ${p.tables.length}개 삽입 시도`);
@@ -2984,6 +3027,39 @@ async function fillNaver() {
         blogLog(`툴바 보완 ${n}/${p.links.length}개`, n ? 'info' : 'warn');
       } else if (auto < p.links.length) {
         blogLog(`카드가 안 된 주소는 글자로 남아 있습니다 — 그 줄 끝에서 Enter 를 한 번 치면 카드가 됩니다`, 'warn');
+      }
+    }
+
+    // ⑤½ 가운데 정렬 — 본문 전체에 한 번 (2026-10-31)
+    //
+    //  왜 줄마다 표식을 안 두나 — 네이버 블로거들이 쓰는 건 '이 줄만 가운데' 가 아니라
+    //  ★본문 전체 가운데 정렬★ 이다. 그래서 초안 표식이 아니라 ★설정★ 으로 둔다.
+    //  플레이북에 표식을 추가하지 않은 이유가 이것이다.
+    //
+    //  ⚠️ ★맨 마지막에 한다.★ 정렬은 줄 높이와 좌표를 전부 바꾼다. 앞에서 하면 그 뒤의
+    //     소제목·표·사진 좌표가 다 밀린다(표 셀 좌표에서 이미 물린 함정과 같은 구조).
+    //  ⚠️ ★정렬 버튼 선택자를 확정하지 못했다.★ 서버에서 네이버 에디터를 열 수 없어서
+    //     확인할 방법이 없었다. 못 찾으면 후보 목록을 로그에 찍는다 — 한 번 돌려보면
+    //     이름이 나오고, 그걸 NAVER_ALIGN_BTN 의 CAND 맨 앞에 넣으면 끝난다.
+    if (body.ok && $('#blogAlignCenter')?.checked) {
+      const ab = await sendFrame(tabId, body.frameId, { type: 'NAVER_ALIGN_BTN', which: 'center' });
+      if (!ab.ok) {
+        blogLog(`가운데 정렬 버튼을 못 찾음 — ${ab.error} (툴바 버튼 ${ab.toolbarButtons ?? '?'}개)`, 'warn');
+        if (ab.candidates?.length) {
+          blogLog(`정렬처럼 보이는 버튼 ${ab.candidates.length}개 — 콘솔에서 확인하세요`, 'warn');
+          console.log('[MangoAuto] 정렬 버튼 후보', ab.candidates);
+        } else {
+          blogLog('정렬 후보가 하나도 없습니다 — 툴바 진단을 눌러 구조를 뽑아주세요', 'warn');
+        }
+      } else {
+        // 본문에 포커스를 되돌린 뒤 전체 선택 → 정렬 버튼
+        await sendFrame(tabId, body.frameId, { type: 'NAVER_FOCUS' });
+        await new Promise(r => setTimeout(r, 180));
+        await sendBg({ type: 'NAVER_CDP_SELECTALL', tabId });
+        await new Promise(r => setTimeout(r, 200));
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: ab.x, y: ab.y });
+        await new Promise(r => setTimeout(r, 450));
+        blogLog(`가운데 정렬 적용 (버튼: ${ab.matched}${ab.aria ? ' / ' + ab.aria : ''})`);
       }
     }
 
@@ -3248,6 +3324,14 @@ async function diagnoseNaver() {
       const tb = await sendFrame(tabId, bodyPick.frameId, { type: 'NAVER_TOOLBAR' });
       console.log('[MangoAuto] 툴바 구조', tb);
       blogLog(`툴바 버튼 ${tb.buttons?.length ?? 0}개 · 폰트크기 컨트롤 ${tb.fontSize?.length ?? 0}개 (콘솔 참고)`);
+      // ★2026-10-31★ 정렬 버튼 선택자가 미확정이라 진단에서 바로 보이게 찍는다.
+      //   여기 나오는 aria/class 를 naver.js NAVER_ALIGN_BTN 의 CAND 맨 앞에 넣으면 확정된다.
+      if (tb.align?.length) {
+        blogLog(`★정렬 후보 ${tb.align.length}개 — ${tb.align.slice(0, 4).map(a => a.aria || a.cls.slice(0, 24)).join(' / ')}`);
+        console.log('[MangoAuto] 정렬 버튼 후보', tb.align);
+      } else {
+        blogLog('정렬 후보가 0개입니다 — 가운데 정렬은 네이버에서 직접 눌러주세요', 'warn');
+      }
       const so2 = extra.styleOptions || null;
       dump.push({ fileInput: fi, toolbar: tb, tablePicker: extra.tablePicker || null,
                   tableUI: extra.tableUI || null, styleOptions: so2 });

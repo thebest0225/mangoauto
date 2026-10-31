@@ -591,6 +591,10 @@
               // 폰트 크기 후보 — select / 드롭다운 버튼 / 목록
               fontSize: grab('[class*="font-size"], [class*="fontSize"], select[class*="size"]'),
               options: grab('[class*="font-size"] li, [class*="fontSize"] li, [class*="size"] [role="option"]'),
+              // ★2026-10-31★ 정렬 후보 — 선택자를 확정하지 못해서 진단에 실어 보낸다.
+              //   이 출력에서 가운데 정렬 버튼의 aria/class 를 확인해 NAVER_ALIGN_BTN 의
+              //   CAND 맨 앞에 넣으면 끝난다.
+              align: grab('[class*="align"], [class*="justify"], [aria-label*="정렬"], [title*="정렬"]'),
             });
             return;
           }
@@ -633,6 +637,67 @@
                   x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
                 };
               }),
+            });
+            return;
+          }
+
+          // ★2026-10-31★ 인용구 블록 개수 — 삽입 성공 검증용 (구분선 세는 것과 같은 방식)
+          case 'NAVER_QUOTES': {
+            sendResponse({
+              ok: true,
+              count: document.querySelectorAll(
+                '.se-component.se-quotation, [class*="se-quotation"], blockquote').length,
+            });
+            return;
+          }
+
+          // ★2026-10-31★ 정렬 버튼 찾기 — ★선택자를 확정하지 못했다★
+          //   서버에서 네이버 에디터를 열 수 없어(로그인 필요 + robots.txt) 정렬 버튼의
+          //   aria-label/class 를 확인할 방법이 없었다. image·horizontal-line·quotation·table
+          //   은 전부 운영자 브라우저에서 진단을 돌려 알아낸 이름이다.
+          //   → 그래서 후보를 넓게 훑어 ★무엇이 있는지 돌려준다.★ 한 번 돌려보면 확정된다.
+          //   찾으면 x,y 까지 같이 줘서 바로 쓸 수 있게 한다.
+          case 'NAVER_ALIGN_BTN': {
+            const vis = (el) => el.getClientRects().length > 0 && el.offsetWidth > 0;
+            const pool = Array.from(document.querySelectorAll('[class*="toolbar"] button')).filter(vis);
+            const want = String(msg.which || 'center');
+            // 네이버가 쓸 법한 이름 후보. 앞쪽이 더 그럴듯한 순서다.
+            const CAND = want === 'center'
+              ? ['align-center', 'alignCenter', 'text-align-center', 'se-align-center', '가운데', 'center']
+              : ['align-left', 'alignLeft', 'text-align-left', 'se-align-left', '왼쪽', 'left'];
+            const score = (el) => {
+              const aria = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+              const cls = String(el.className || '');
+              const name = el.getAttribute('data-name') || '';
+              return CAND.findIndex((c) => aria === c || aria.includes(c) || cls.includes(c) || name.includes(c));
+            };
+            let best = null, bestIdx = 99;
+            for (const el of pool) {
+              const i = score(el);
+              if (i >= 0 && i < bestIdx) { best = el; bestIdx = i; }
+            }
+            // 못 찾았으면 ★정렬처럼 보이는 버튼 전부★ 를 돌려준다. 이게 진단 자료다.
+            if (!best) {
+              const maybe = pool.filter((el) =>
+                /align|정렬|justify/i.test((el.getAttribute('aria-label') || '') + ' ' +
+                                           String(el.className || '') + ' ' +
+                                           (el.getAttribute('title') || '')))
+                .slice(0, 12).map((el) => {
+                  const v = viewportRect(el);
+                  return { aria: el.getAttribute('aria-label') || el.getAttribute('title') || '',
+                           cls: String(el.className || '').slice(0, 70),
+                           x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2) };
+                });
+              sendResponse({ ok: false, error: `'${want}' 정렬 버튼을 못 찾음`, candidates: maybe,
+                             toolbarButtons: pool.length });
+              return;
+            }
+            const v = viewportRect(best);
+            sendResponse({
+              ok: true, matched: CAND[bestIdx],
+              aria: best.getAttribute('aria-label') || best.getAttribute('title') || '',
+              cls: String(best.className || '').slice(0, 70),
+              x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
             });
             return;
           }
