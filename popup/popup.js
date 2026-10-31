@@ -2979,21 +2979,41 @@ async function fillNaver() {
         blogLog(`인용구 버튼을 못 찾음 — ${qbtn.error}. 평문으로 남겨둡니다`, 'warn');
       } else {
         const before = (await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' })).count || 0;
-        let done = 0;
+        let typed = 0;
         for (const line of p.quotes) {
           const sel = await sendFrame(tabId, body.frameId, { type: 'NAVER_SELECT_LINE', text: line });
           if (!sel.ok || !sel.drag) { blogLog(`  인용구 줄을 못 찾음 (${line.slice(0, 18)})`, 'warn'); continue; }
           await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...sel.drag });
           await new Promise(r => setTimeout(r, 140));
           await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: qbtn.x, y: qbtn.y });
-          await new Promise(r => setTimeout(r, 420));
-          done++;
+          await new Promise(r => setTimeout(r, 480));
+
+          // 🪤 ★2026-10-31 — 여기가 비어 있었다.★ 네이버 인용구 버튼은 선택 영역을
+          //    '감싸는' 게 아니라 ★지우고 빈 블록을 끼워 넣는다.★ 그래서 버튼만 누르면
+          //    원래 문장이 통째로 사라지고 "내용을 입력하세요." 만 남았다(운영자 확인).
+          //    → 버튼을 누른 뒤 ★캐럿이 들어간 빈 블록에 글자를 다시 쳐 넣는다.★
+          //    ⚠️ 개수가 늘었다고 성공이 아니다. 내용이 들었는지로 센다(아래 검증).
+          await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: line });
+          await new Promise(r => setTimeout(r, 260));
+
+          // 바로 확인 — 안 들어갔으면 한 번 더 (포커스가 늦게 잡히는 경우가 있다)
+          const chk = await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' });
+          const head = line.slice(0, 10).replace(/\s+/g, ' ');
+          if (!(chk.texts || []).some(t => t.includes(head))) {
+            await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: line });
+            await new Promise(r => setTimeout(r, 260));
+          }
+          const chk2 = await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' });
+          if ((chk2.texts || []).some(t => t.includes(head))) typed++;
+          else blogLog(`  인용구에 글자가 안 들어감 (${line.slice(0, 18)}) — 직접 넣어주세요`, 'warn');
         }
-        const after = (await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' })).count || 0;
-        // ★시도 횟수가 아니라 실제로 늘어난 블록 수로 센다.★ 표 삽입에서 이미 물린 함정이다
-        //   (추가 버튼 응답을 믿었다가 '안 늘어납니다' 로 오판했다 — v2.7.2).
-        blogLog(`인용구 ${after - before}/${p.quotes.length}개 적용` + (done !== after - before ? ` (시도 ${done}회)` : ''),
-                after > before ? 'info' : 'warn');
+        const fin = await sendFrame(tabId, body.frameId, { type: 'NAVER_QUOTES' });
+        const after = fin.count || 0;
+        // ★시도 횟수가 아니라 ★내용이 든 블록 수★ 로 센다. 표에서 이미 물린 함정인데
+        //   (버튼 응답을 믿었다가 오판 — v2.7.2), 인용구에서는 ★개수만 믿었다가★ 또 물렸다.
+        blogLog(`인용구 ${typed}/${p.quotes.length}개 적용 (블록 ${after - before}개 생성)`,
+                typed === p.quotes.length ? 'info' : 'warn');
+        if (fin.empty) blogLog(`⚠️ 빈 인용구 ${fin.empty}개가 남아 있습니다 — 발행 전에 지우거나 채워주세요`, 'warn');
       }
     }
 

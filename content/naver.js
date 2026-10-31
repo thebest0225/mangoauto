@@ -641,12 +641,20 @@
             return;
           }
 
-          // ★2026-10-31★ 인용구 블록 개수 — 삽입 성공 검증용 (구분선 세는 것과 같은 방식)
+          // ★2026-10-31★ 인용구 블록 — 개수 + ★안에 든 글자★
+          //   🪤 개수만 세다가 물렸다. 블록은 생겼는데 ★안이 비어 있었다.★
+          //      네이버 인용구 버튼은 선택 영역을 '감싸는' 게 아니라 ★지우고 빈 블록을
+          //      끼워 넣는다.★ 그래서 버튼만 누르면 글자가 통째로 사라진다.
+          //      개수가 늘었다고 성공이 아니다 — ★내용이 들었는지까지 봐야 한다.★
           case 'NAVER_QUOTES': {
+            const nodes = Array.from(document.querySelectorAll(
+              '.se-component.se-quotation, [class*="se-quotation"], blockquote'));
+            const texts = nodes.map((n) => (n.innerText || '').replace(/\s+/g, ' ').trim());
             sendResponse({
               ok: true,
-              count: document.querySelectorAll(
-                '.se-component.se-quotation, [class*="se-quotation"], blockquote').length,
+              count: nodes.length,
+              texts,
+              empty: texts.filter((t) => !t || t === '내용을 입력하세요.').length,
             });
             return;
           }
