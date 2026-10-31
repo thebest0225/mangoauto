@@ -797,16 +797,30 @@
             //   표에 못 들어간 줄이 조용히 사라졌다(로그: '자리를 못 찾았습니다').
             //   그럴 땐 문서 맨 끝 문단에라도 붙인다. 위치가 조금 아쉬운 게
             //   자료가 없어지는 것보다 낫다.
+            //
+            // ★2026-10-31 — 그 폴백이 ★해시태그 줄을 깨뜨렸다★★
+            //   실측 사고: 표 마지막 행이 불릿으로 밀려났는데 '맨 끝 문단' 이 ★해시태그 줄★
+            //   이었다. 거기에 붙으면서 "#강" + 불릿 + "아지입냄새" 가 됐다.
+            //   원인 둘 — ① 맨 끝 문단이 해시태그 줄인데 걸러내지 않았다
+            //            ② x 를 문단 왼쪽+12px 로 찍어 ★단어 중간★ 에 커서가 갔다.
+            //   그래서 ① 해시태그 줄(#으로 시작)과 캡션 줄은 폴백 대상에서 뺀다
+            //          ② 좌표는 왼쪽 끝(+2)으로 찍고, 호출자가 End→Enter 로 ★새 줄★ 을
+            //             만든 뒤 쓴다. 기존 줄 안에는 절대 끼워 넣지 않는다.
+            //   ⚠️ 근본 원인은 표가 필요한 행수까지 안 늘어나는 것이다. 이 폴백은 안전망이다.
             if (!para) {
               const all = Array.from(document.querySelectorAll('.se-text-paragraph, [class*="paragraph"]'))
-                .filter((p) => p.getClientRects().length && !p.closest('[class*="se-table"], table'));
+                .filter((p) => p.getClientRects().length && !p.closest('[class*="se-table"], table'))
+                // 해시태그 줄에 붙으면 태그가 깨진다. 캡션도 사진에 딸린 줄이라 건들지 않는다.
+                .filter((p) => !/^\s*#/.test(p.innerText || '') && !/^\s*캡션\s*:/.test(p.innerText || ''));
               para = all[all.length - 1] || null;
             }
             if (!para) { sendResponse({ ok: false, error: '표 다음 문단 없음' }); return; }
             para.scrollIntoView({ block: 'center', behavior: 'instant' });
             await sleep(180);
             const v = viewportRect(para);
-            sendResponse({ ok: true, x: Math.round(v.x + 12), y: Math.round(v.y + v.h / 2) });
+            // 단어 중간에 커서가 가지 않도록 왼쪽 끝을 찍는다. 줄 만들기는 호출자가 한다.
+            sendResponse({ ok: true, x: Math.round(v.x + 2), y: Math.round(v.y + v.h / 2),
+                           sample: (para.innerText || '').slice(0, 24) });
             return;
           }
 

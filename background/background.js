@@ -914,6 +914,12 @@ async function handleMessage(msg, sender) {
           Delete:    { windowsVirtualKeyCode: 46, code: 'Delete',    key: 'Delete' },
           Escape:    { windowsVirtualKeyCode: 27, code: 'Escape',    key: 'Escape' },
           Tab:       { windowsVirtualKeyCode: 9,  code: 'Tab',       key: 'Tab', text: '\t' },
+          // ★2026-10-31 추가★ — 표에 안 들어간 줄을 '기존 줄 가운데' 가 아니라
+          //   줄 끝으로 가서(End) 새 줄을 만들어(Enter) 쓰기 위해 필요하다.
+          //   없던 키를 보내면 '모르는 키' 로 조용히 실패하고, 그러면 또 줄 중간에 박힌다.
+          End:       { windowsVirtualKeyCode: 35, code: 'End',       key: 'End' },
+          Home:      { windowsVirtualKeyCode: 36, code: 'Home',      key: 'Home' },
+          Enter:     { windowsVirtualKeyCode: 13, code: 'Enter',     key: 'Enter', text: '\r' },
         };
         const k = MAP[msg.key];
         if (!k) return { ok: false, error: '모르는 키: ' + msg.key };

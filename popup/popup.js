@@ -2775,9 +2775,17 @@ async function insertTables(tabId, frameId, tables) {
         if (left.length) {
           const at = await sendFrame(tabId, frameId, { type: 'NAVER_AFTER_TABLE' });
           if (at.ok) {
-            blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래 불릿으로`, 'warn');
+            blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래 불릿으로`
+                    + (at.sample ? ` (기준 줄: "${at.sample}")` : ''), 'warn');
             await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: at.x, y: at.y });
             await new Promise(x => setTimeout(x, 250));
+            // ★2026-10-31★ 여기서 바로 쓰면 ★기존 줄 가운데에 박힌다.★
+            //   실측 사고: 해시태그 줄에 들어가 "#강" + 불릿 + "아지입냄새" 가 됐다.
+            //   End 로 줄 끝에 가고 Enter 로 새 줄을 만든 뒤에 쓴다. 한 글자도 안 섞인다.
+            await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'End' });
+            await new Promise(x => setTimeout(x, 120));
+            await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Enter' });
+            await new Promise(x => setTimeout(x, 200));
             const lines = left.map(r => '· ' + r[0] + ' — ' + r.slice(1)
               .map((v, i) => (head[i + 1] ? head[i + 1] + ': ' : '') + v).filter(Boolean).join(' / '));
             await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: lines.join('\n') });
