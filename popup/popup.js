@@ -1978,6 +1978,9 @@ async function pickBlogDraft(id) {
       const n = p.notes.split('\n').filter(l => l.trim()).length;
       blogLog(`운영자 메모 ${n}줄은 본문에서 제외했습니다 (참고한 출처 · 다듬을 때 주의할 점)`);
     }
+    // 🪤 2026-11-01 — 이 줄이 뜨면 초안의 순서가 계약서와 다르다는 뜻이다.
+    //    확장이 되돌려 놨지만, 루틴이 왜 그렇게 썼는지는 따로 봐야 한다.
+    if (p.tagsRescued) blogLog('해시태그 줄이 메모 뒤에 있어서 본문 끝으로 되돌렸습니다 (초안 순서가 계약서와 다릅니다)', 'warn');
     if (p.charCount > 2600) blogLog(`본문이 ${p.charCount}자입니다. 네이버 권장은 1,500~2,500자 — 길면 줄이세요.`, 'warn');
     if (!p.photos?.length && !p.images.length) blogLog('사진 자리가 없습니다. 망고 사진함에서 2~4장 골라 직접 넣으세요.', 'warn');
   } catch (e) {
@@ -2019,6 +2022,7 @@ function naverizeDraft(md) {
   //   ⚠️ 제목만 보고 자르지 않는다 — ## 가 없는 옛 초안도 있어서 ★둘 다★ 본다.
   //      잘라낸 메모는 버리지 않고 notes 로 넘겨 운영자가 볼 수 있게 둔다.
   let notes = '';
+  let tagsRescued = false;   // 메모 뒤에 있던 해시태그를 본문으로 되돌렸는지
   //   ⚠️ 여기에 \b 를 쓰면 안 된다 — JS 의 \w 는 ASCII 라서 한글 뒤 \b 가 성립하지 않는다.
   //      '점\b' 로 썼다가 13건 중 10건을 못 걸렀다(2026-10-31 시험에서 잡음).
   //   ⚠️ 제목 모양이 ★세 가지★ 다 — 맨 텍스트 · `**굵게**` · `[대괄호]` · `## 헤딩`.
@@ -2026,6 +2030,20 @@ function naverizeDraft(md) {
   const NOTE_HEAD = /^[ \t]*(?:##\s*|\*\*\s*|\[\s*)?(참고한 출처|다듬을 때 주의할 점|확인이 필요한 점|작성 메모)[^\n]*$/m;
   const nm = NOTE_HEAD.exec(src);
   if (nm) { notes = src.slice(nm.index).trim(); src = src.slice(0, nm.index); }
+  // 🪤 2026-11-01 — ★해시태그 줄이 메모 ★뒤에★ 오는 초안이 있다.★ 그러면 위 한 줄이
+  //    해시태그까지 통째로 들어내서 ★태그 없는 글이 조용히 올라간다.★
+  //    실측: 미발행 15건 중 3건이 그 순서였다(전주·소음공포증·일광욕).
+  //    계약서는 '해시태그 뒤에 메모' 라고 정해 뒀지만 ★순서는 매번 지켜지지 않는다.★
+  //    그래서 순서를 믿지 않고, 잘라낸 메모 안에서 태그 줄을 되찾아 본문에 붙인다.
+  if (notes) {
+    const TAG_LINE = /^[ \t]*#[^\s#]+(?:[ \t]+#[^\s#]+)+[ \t]*$/m;
+    const tm = TAG_LINE.exec(notes);
+    if (tm && !TAG_LINE.test(src)) {
+      src = src.replace(/\s*$/, '') + '\n\n' + tm[0].trim() + '\n';
+      notes = (notes.slice(0, tm.index) + notes.slice(tm.index + tm[0].length)).trim();
+      tagsRescued = true;
+    }
+  }
   // 세션 고지 한 줄짜리도 본문에서 걷는다 (메모 블록 위에 떨어져 있는 경우가 있다)
   src = src.replace(/^[ \t]*※\s*웹\s*검색[^\n]*\n?/gm, '');
 
@@ -2181,6 +2199,7 @@ function naverizeDraft(md) {
     meta,
     thumbPrompt: thumb,
     notes,                // 운영자용 메모 — 본문에 넣지 않는다
+    tagsRescued,          // 해시태그가 메모 뒤에 있어서 되돌렸다(조용히 넘기면 안 된다)
     tags: tagLine ? tagLine.split(/\s+/).map(t => t.replace(/^#/, '')) : [],
     tagLine,
     charCount: body.replace(/\s/g, '').length,
