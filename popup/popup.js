@@ -2693,13 +2693,50 @@ async function attachSlotPhotos(tabId, frameId, photos) {
 //
 // 순서: 자리표시 줄 선택 → 지우기 → 표 버튼 → 크기 피커에서 R×C 클릭 → 첫 셀 클릭 →
 //       셀마다 insertText + Tab. 어느 단계든 실패하면 평문 표로 되돌린다(내용 안 잃음).
+// ★2026-11-04 (v2.7.8)★ 표에 못 들어간 행을 둘 자리를 ★본문을 칠 때 미리★ 만든다.
+//
+//   운영자 보고: "표 칸을 못 늘리면 그 아래 들어가야 할 내용이 글 제일 마지막에 붙는다."
+//   전에는 표를 다 만든 뒤 NAVER_AFTER_TABLE 로 DOM 을 걸어 '표 다음 문단' 을 찾았는데,
+//   컴포넌트를 부분일치('[class*="se-component"]')로 찾다가 안쪽 층에서 멈춰
+//   다음 문단을 한 번도 못 찾았다 → 매번 '문서 맨 끝' 폴백. (10-20 의 '표가 본문 마지막이라서'
+//   라는 진단은 틀렸다. 최근 초안 20건의 표는 전부 글 중간에 있다.)
+//
+//   이제 '[표N]' 바로 다음 줄에 '[표N 남은 줄]' 을 같이 쳐 두고, 남은 행이 생기면 그 줄을
+//   선택해 덮어쓴다. 사진·표 자리표시와 같은 '줄 선택 → 덮어쓰기' 경로라 이미 검증돼 있다.
+//   남은 행이 없으면 그 줄을 지운다. 중간에 멈추면 이 줄이 화면에 남는데,
+//   그건 일부러다 — 조용히 사라지는 것보다 눈에 띄는 게 낫다.
+const restMarkerOf = (t) => `[표${t.n} 남은 줄]`;
+function withRestMarkers(text, tables) {
+  if (!tables?.length) return text;
+  const byMarker = new Map(tables.map(t => [t.marker, restMarkerOf(t)]));
+  return text.split('\n').map(l => byMarker.has(l.trim()) ? l + '\n' + byMarker.get(l.trim()) : l).join('\n');
+}
+
 async function insertTables(tabId, frameId, tables) {
   if (!tables?.length) return 0;
   const btn = await sendFrame(tabId, frameId, { type: 'NAVER_TOOLBAR_BTN', name: 'table' });
   if (!btn.ok) blogLog(`표 버튼을 못 찾음 — ${btn.error}. 평문으로 넣습니다`, 'warn');
 
+  // '[표N 남은 줄]' 을 지운다. 글자를 지운 뒤 같은 글 상자의 빈 줄이 뒤에 있을 때만 Delete 로
+  // 끌어올린다 — 안 그러면 빈 줄이 하나 더 남는다. 다음이 표·사진·카드면 Delete 를 안 누른다
+  // (컴포넌트를 건드릴 수 있다). 빈 줄 하나 남는 게 컴포넌트가 지워지는 것보다 낫다.
+  const clearRest = async (t) => {
+    const s = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: restMarkerOf(t) });
+    if (!s.ok || !s.drag) return;   // 못 찾으면 이미 없는 것 (또는 본문 입력이 중간에 끊긴 것)
+    await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...s.drag });
+    await new Promise(r => setTimeout(r, 120));
+    await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Backspace' });
+    await new Promise(r => setTimeout(r, 150));
+    if (s.nextEmpty) {
+      await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Delete' });
+      await new Promise(r => setTimeout(r, 150));
+    }
+  };
+
   let done = 0;
   for (const t of tables) {
+    // 이 표의 남은 행을 '[표N 남은 줄]' 자리에 썼으면 true. 아니면 루프 끝에서 그 줄을 지운다.
+    let restUsed = false;
     const rows = t.rows.length, cols = t.rows[0].length;
     const fallback = async (why) => {
       blogLog(`  ${t.marker} 표 만들기 실패(${why}) → 평문으로 넣습니다`, 'warn');
@@ -2763,12 +2800,22 @@ async function insertTables(tabId, frameId, tables) {
           const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
           if (!st.ok) {
             console.log('[MangoAuto] 표 추가 버튼 없음', st);
-            blogLog(`  ${label} 추가 버튼을 못 찾음 — ${st.error}`, 'warn');
+            // 덤프를 로그에도 찍는다 — 행이 안 늘어나는 근본 원인을 서버에서 볼 수 없어서,
+            // 운영자가 이 줄을 복사해 주면 버튼 이름이 바뀌었는지 바로 안다.
+            blogLog(`  ${label} 추가 버튼을 못 찾음 — ${st.error}`
+                    + (st.dump?.length ? ` · 후보: ${JSON.stringify(st.dump)}` : ' · 후보 0개'), 'warn');
             break;
           }
           await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
-          await new Promise(r => setTimeout(r, 420));
-          const now = await tableSize(axis);
+          // ★2026-11-04★ 420ms 한 번만 재고 '안 늘어납니다' 로 끊었다. 에디터가 늦게
+          //   그리면 실제로는 늘었는데 멈춘다(v2.7.2 와 같은 '확인이 너무 이르다' 계열).
+          //   최대 약 1.6초까지 나눠서 다시 잰다.
+          let now = null;
+          for (let w = 0; w < 4; w++) {
+            await new Promise(r => setTimeout(r, 400));
+            now = await tableSize(axis);
+            if (now != null && now > have) break;
+          }
           if (now == null || now <= have) {
             blogLog(`  ${label}이 ${have}에서 안 늘어납니다 — 남은 줄은 표 아래로 보냅니다`, 'warn');
             break;
@@ -2833,30 +2880,30 @@ async function insertTables(tabId, frameId, tables) {
         const head = t.rows[0];
         const left = t.rows.slice(cells.rows).filter(r => r.some(Boolean));
         if (left.length) {
-          const at = await sendFrame(tabId, frameId, { type: 'NAVER_AFTER_TABLE' });
-          if (at.ok) {
-            blogLog(`  표에 안 들어간 ${left.length}줄은 표 아래 불릿으로`
-                    + (at.sample ? ` (기준 줄: "${at.sample}")` : ''), 'warn');
-            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: at.x, y: at.y });
-            await new Promise(x => setTimeout(x, 250));
-            // ★2026-10-31★ 여기서 바로 쓰면 ★기존 줄 가운데에 박힌다.★
-            //   실측 사고: 해시태그 줄에 들어가 "#강" + 불릿 + "아지입냄새" 가 됐다.
-            //   End 로 줄 끝에 가고 Enter 로 새 줄을 만든 뒤에 쓴다. 한 글자도 안 섞인다.
-            await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'End' });
+          // ★2026-11-04★ 표 바로 아래 '[표N 남은 줄]' 을 덮어쓴다 (withRestMarkers 주석 참고).
+          //   전에는 NAVER_AFTER_TABLE 이 매번 '문서 맨 끝' 으로 빠져서 이 줄들이 해시태그
+          //   바로 위, 글 마지막에 붙었다(10-31 해시태그 깨짐 사고도 같은 뿌리).
+          const lines = left.map(r => '· ' + r[0] + ' — ' + r.slice(1)
+            .map((v, i) => (head[i + 1] ? head[i + 1] + ': ' : '') + v).filter(Boolean).join(' / '));
+          const s = await sendFrame(tabId, frameId, { type: 'NAVER_SELECT_LINE', text: restMarkerOf(t) });
+          if (s.ok && s.drag) {
+            await sendBg({ type: 'NAVER_CDP_SELECT', tabId, ...s.drag });
             await new Promise(x => setTimeout(x, 120));
-            await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Enter' });
-            await new Promise(x => setTimeout(x, 200));
-            const lines = left.map(r => '· ' + r[0] + ' — ' + r.slice(1)
-              .map((v, i) => (head[i + 1] ? head[i + 1] + ': ' : '') + v).filter(Boolean).join(' / '));
             await sendBg({ type: 'NAVER_CDP_TEXT', tabId, text: lines.join('\n') });
+            restUsed = true;
+            blogLog(`  표에 안 들어간 ${left.length}줄은 표 바로 아래 불릿으로 넣었습니다`, 'warn');
           } else {
-            blogLog(`  표에 안 들어간 ${left.length}줄 — 자리를 못 찾았습니다`, 'error');
-            console.log('[MangoAuto] 표에 못 넣은 줄', left);
+            // 맨 끝에 아무렇게나 붙이지 않는다. 자리를 못 찾았으면 사람이 넣게 알린다.
+            blogLog(`  표에 안 들어간 ${left.length}줄 — 자리(${restMarkerOf(t)})를 못 찾았습니다. 직접 넣어주세요: `
+                    + lines.join('  '), 'error');
           }
         }
       }
     } catch (e) {
       await fallback(e.message);
+    } finally {
+      // continue 로 빠져나간 경우(평문 폴백·셀 좌표 실패 등)도 여기를 지난다.
+      if (!restUsed) await clearRest(t);
     }
   }
   return done;
@@ -2953,7 +3000,9 @@ async function fillNaver() {
     const keep = $('#blogKeepFormat').checked;
 
     // ① 본문 — 분량이 많아 시간이 걸린다
-    const body = await typeIntoArea(tabId, '본문', p.text);
+    //   표 자리표시 바로 아래에 '[표N 남은 줄]' 한 줄을 같이 친다(insertTables 의 ⑦ 참고).
+    //   p.text 자체에는 넣지 않는다 — '본문 복사' 버튼이 그대로 클립보드로 보내기 때문이다.
+    const body = await typeIntoArea(tabId, '본문', withRestMarkers(p.text, p.tables));
     naverFrameId = body.frameId != null ? body.frameId : naverFrameId;
 
     // ② 소제목 굵게 — 넣은 뒤 그 줄을 선택해 실제 편집 명령으로 적용한다

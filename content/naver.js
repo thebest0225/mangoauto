@@ -548,8 +548,25 @@
               const dx = off.x - base.left, dy = off.y - base.top;   // 프레임 오프셋
               const first = rects[0], last = rects[rects.length - 1];
 
+              // ★2026-11-04★ 이 줄을 지운 뒤 Delete 로 '다음 빈 줄' 을 끌어올려도 되는지.
+              //   같은 글 컴포넌트 안의 빈 문단일 때만 true. 다음이 표·사진·링크카드면
+              //   Delete 가 그 컴포넌트를 건드릴 수 있어서 안 누른다.
+              //   ⚠️ '[class*="se-component"]' 로 찾으면 안 된다 — se-component-content 도
+              //      걸려서 엉뚱한 층을 컴포넌트로 본다(NAVER_AFTER_TABLE 이 그렇게 틀렸다).
+              const compOf = (el) => { while (el && !(el.classList && el.classList.contains('se-component'))) el = el.parentElement; return el; };
+              const paraOf = (el) => el && el.closest && el.closest('.se-text-paragraph, p');
+              const myPara = paraOf(pe);
+              let nextEmpty = false;
+              if (myPara) {
+                const all = Array.from(editorRoot().querySelectorAll('.se-text-paragraph, p'))
+                  .filter((p) => !p.closest('table'));
+                const nx = all[all.indexOf(myPara) + 1];
+                nextEmpty = !!(nx && compOf(nx) && compOf(nx) === compOf(myPara) && !(nx.innerText || '').trim());
+              }
+
               sendResponse({
                 ok: true,
+                nextEmpty,
                 alreadyBold: !!(pe && pe.closest('b,strong')),
                 x: Math.round(off.x + 12), y: Math.round(off.y + off.h / 2),
                 drag: (first && last) ? {
@@ -851,6 +868,14 @@
           }
 
           case 'NAVER_AFTER_TABLE': {
+            // ★2026-11-04 — 더 이상 호출하지 않는다 (v2.7.8). 남은 행은 '[표N 남은 줄]' 자리표시로 간다.★
+            //   운영자 보고: "표에 못 들어간 줄이 글 맨 마지막에 대충 붙는다."
+            //   원인 — 아래 t.closest('[class*="se-component"]') 가 부분일치라
+            //   표 컴포넌트가 아니라 그 안쪽 'se-component-content' 에서 멈춘다. 그 층에는
+            //   다음 형제가 없어서 '다음 문단' 을 한 번도 못 찾았고, 매번 '문서 맨 끝' 폴백으로 갔다.
+            //   10-20 에 '표가 본문 마지막일 때' 라고 적은 진단은 틀렸다 — 표는 늘 글 중간이었다.
+            //   DOM 을 걸어 자리를 찾는 방식 자체를 버렸다. 서버에서 에디터 구조를 확인할 수 없어서
+            //   클래스 이름 추측이 또 틀릴 수 있기 때문이다.
             // 표 '바로 다음' 문단 좌표. 폴백 글자가 셀 안으로 들어가는 걸 막는다.
             const tabs = document.querySelectorAll('[class*="se-table"], table');
             const t = tabs[tabs.length - 1];
