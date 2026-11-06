@@ -117,6 +117,28 @@
     return { x, y, w: r.width, h: r.height };
   }
 
+  // ─── 마지막 표 (진짜 <table> 만) ───
+  // 🪤 2026-11-06 — 전에는 매번 `querySelectorAll('[class*="se-table"], table')` 의
+  //    ★맨 끝★ 을 표로 썼다. 그런데 이 선택자는 SmartEditor 의 래퍼까지 같이 잡는다
+  //    (se-component se-table · se-table-container · se-table-content …).
+  //    맨 끝이 <tr> 없는 래퍼로 걸리면 rows=0·cols=0 이 되어, 호출부는 '행이 0에서
+  //    안 늘어납니다' 로 판정하고 멈추거나 엉뚱한 칸에 글을 썼다.
+  //    → <tr> 을 실제로 가진 것 중 마지막만 쓴다.
+  function lastTable() {
+    const all = Array.from(document.querySelectorAll('table, [class*="se-table"]'))
+      .filter((el) => el.querySelector('tr'));
+    // 중첩된 래퍼가 함께 걸리면 가장 안쪽(= 진짜 table)을 고른다
+    const inner = all.filter((el) => !all.some((o) => o !== el && el.contains(o)));
+    return inner[inner.length - 1] || all[all.length - 1] || null;
+  }
+
+  // 표 개수 — 래퍼를 세면 표 하나에 3~4 가 잡혀 '삽입됐는지' 판정이 틀어진다
+  function tableCount() {
+    const all = Array.from(document.querySelectorAll('table, [class*="se-table"]'))
+      .filter((el) => el.querySelector('tr'));
+    return all.filter((el) => !all.some((o) => o !== el && el.contains(o))).length;
+  }
+
   // ─── 편집 문서 전체 컨테이너 ───
   // ⚠️ 굵게가 0개였던 이유. findBody() 는 '첫 문단' 하나를 가리키는데(입력 후 15자),
   //    타이핑한 189줄은 그 문단의 형제로 쌓인다. 첫 문단 안에서만 소제목을 찾으니
@@ -803,8 +825,7 @@
               return;
             }
             const v = viewportRect(best);
-            const t = document.querySelectorAll('[class*="se-table-content"], table');
-            const tt = t[t.length - 1];
+            const tt = lastTable();
             sendResponse({
               ok: true, lastIndex: bestIdx,
               x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
@@ -816,8 +837,7 @@
 
           case 'NAVER_TABLE_ADDROW': {
             // 표 행이 부족할 때. 마지막 셀에 커서를 놓고 Tab 을 치면 네이버가 행을 추가한다.
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '표 없음' }); return; }
             const cells = t.querySelectorAll('td,th');
             const last = cells[cells.length - 1];
@@ -877,8 +897,7 @@
             //   DOM 을 걸어 자리를 찾는 방식 자체를 버렸다. 서버에서 에디터 구조를 확인할 수 없어서
             //   클래스 이름 추측이 또 틀릴 수 있기 때문이다.
             // 표 '바로 다음' 문단 좌표. 폴백 글자가 셀 안으로 들어가는 걸 막는다.
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '표 없음' }); return; }
             // 표를 담은 컴포넌트의 다음 형제에서 문단을 찾는다
             let node = t.closest('[class*="se-component"]') || t;
@@ -937,8 +956,7 @@
                 w: Math.round(v.w), h: Math.round(v.h),
               };
             });
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             sendResponse({
               ok: true,
               tableCount: tabs.length,
@@ -954,14 +972,13 @@
           }
 
           case 'NAVER_TABLE_COUNT': {
-            sendResponse({ ok: true, count: document.querySelectorAll('[class*="se-table"], table').length });
+            sendResponse({ ok: true, count: tableCount() });
             return;
           }
 
           case 'NAVER_TABLE_FIRST_CELL': {
             // 방금 삽입된 표의 첫 셀 좌표. 여기 클릭하고 Tab 으로 칸을 옮겨가며 채운다.
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '삽입된 표를 못 찾음' }); return; }
             t.scrollIntoView({ block: 'center', behavior: 'instant' });
             await sleep(200);
@@ -1017,8 +1034,7 @@
             // NAVER_TABLE_ADD 는 표 안에 커서가 있어야 버튼이 보이는데, 추가 버튼을
             // 한 번 누르면 컨트롤이 꺼진다. 그걸로 크기를 재다가 '안 늘어납니다' 로
             // 잘못 판정해 3×3 에서 멈추고 있었다 (2026-10-20).
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '표를 못 찾음' }); return; }
             const trs = t.querySelectorAll('tr');
             sendResponse({
@@ -1032,8 +1048,7 @@
           case 'NAVER_TABLE_CELLS': {
             // 표의 모든 셀 좌표. Tab 으로 칸을 옮기는 게 안 먹혀서(첫 셀에 전부 들어갔다)
             // 셀마다 직접 클릭해 넣는다.
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '표를 못 찾음' }); return; }
             t.scrollIntoView({ block: 'center', behavior: 'instant' });
             await sleep(250);
@@ -1053,8 +1068,7 @@
             //    줄바꿈으로 행 높이가 커져서 아래 행들의 좌표가 전부 밀린다.
             //    (8행 표에서 2~4행 내용이 1행 셀에 다 들어갔다.)
             //    그래서 쓰기 직전에 그 셀 하나만 다시 재고, 화면 밖이면 스크롤한다.
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '표를 못 찾음' }); return; }
             const tr = t.querySelectorAll('tr')[msg.r];
             if (!tr) { sendResponse({ ok: false, error: `${msg.r}행이 없음` }); return; }
@@ -1076,8 +1090,7 @@
 
           case 'NAVER_TABLE_TEXT': {
             // 표에 들어간 내용 검증용 — 셀별 글자수
-            const tabs = document.querySelectorAll('[class*="se-table"], table');
-            const t = tabs[tabs.length - 1];
+            const t = lastTable();
             if (!t) { sendResponse({ ok: false, error: '표 없음' }); return; }
             const cells = Array.from(t.querySelectorAll('td,th')).map((td) => (td.innerText || '').trim());
             sendResponse({ ok: true, cells, filled: cells.filter(Boolean).length, total: cells.length });

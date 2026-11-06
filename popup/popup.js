@@ -2146,7 +2146,10 @@ function naverizeDraft(md) {
         //   표 만들기가 실패하면 이 자리표시를 평문 표로 되돌린다(내용은 안 잃는다).
         const n = tables.length + 1;
         const marker = `[표${n}]`;
-        tables.push({ n, marker, rows: [head, ...rows], plain: [head, ...rows].map(r => r.join(' | ')).join('\n') });
+        // ★네이버 표는 3열이 천장이다★ — html 쪽(워드프레스 등)은 원래 열 수 그대로 두고,
+        //   네이버로 보낼 것만 접는다. foldTo3Cols 주석에 왜 그런지 적어 뒀다.
+        const nrows = foldTo3Cols([head, ...rows]);
+        tables.push({ n, marker, rows: nrows, plain: nrows.map(r => r.join(' | ')).join('\n') });
         pushText(marker);
         continue;
       }
@@ -2705,6 +2708,25 @@ async function attachSlotPhotos(tabId, frameId, photos) {
 //   선택해 덮어쓴다. 사진·표 자리표시와 같은 '줄 선택 → 덮어쓰기' 경로라 이미 검증돼 있다.
 //   남은 행이 없으면 그 줄을 지운다. 중간에 멈추면 이 줄이 화면에 남는데,
 //   그건 일부러다 — 조용히 사라지는 것보다 눈에 띄는 게 낫다.
+// ─── 표를 3열로 접는다 ───
+//
+// 🪤 2026-11-05~06 — 네이버 자동 채우기의 표 천장은 ★3열★ 이다. 표 버튼은 3×3 을 바로
+//    넣고, 열을 늘리려면 se-cell-add-button 을 눌러야 하는데 그 클릭이 먹지 않는다.
+//    (사람이 에디터에서 직접 누르면 늘어난다 — 안 되는 건 자동 클릭 쪽이다.)
+//    전에는 4번째 열이 ★통째로 사라졌다.★ 코퍼스 실측: 표 37개 중 21개(57%)가 4열이었고,
+//    사라진 열은 거의 전부 '병원 연락 · 요금 · 횟수 · 멈출 신호' 처럼 독자가 찾아온 값이었다.
+//    제일 중요한 값을 맨 오른쪽에 두는 습관 때문에 하필 그게 날아갔다.
+//    게다가 본문이 그 칸을 가리키면("표에서 '오래 가면' 이 몇 시간이냐")
+//    화면엔 ★가리킬 대상이 없는 문장★ 만 남았다. 운영자가 바로 알아챘다.
+//
+// → 지우지 않는다. 3번째 열에 ' · ' 로 접어 넣는다. 정보는 한 글자도 안 버린다.
+//   머리글도 같이 접어서("집에서 할 일 · 병원 연락") 무슨 값인지 알 수 있게 둔다.
+function foldTo3Cols(rows) {
+  if (!rows.length || rows[0].length <= 3) return rows;
+  const cell = (r) => r.slice(2).map(v => String(v ?? '').trim()).filter(Boolean).join(' · ');
+  return rows.map(r => [String(r[0] ?? '').trim(), String(r[1] ?? '').trim(), cell(r)]);
+}
+
 const restMarkerOf = (t) => `[표${t.n} 남은 줄]`;
 function withRestMarkers(text, tables) {
   if (!tables?.length) return text;
@@ -2798,7 +2820,26 @@ async function insertTables(tabId, frameId, tables) {
             await new Promise(r => setTimeout(r, 280));
           }
           const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
-          if (!st.ok) {
+          let clicked = false;
+          if (st.ok) {
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
+            clicked = true;
+          } else if (axis === 'row') {
+            // ★2026-11-06 — 두 번째 길★
+            //   행은 '마지막 칸에 커서를 두고 Tab' 으로도 늘어난다. NAVER_TABLE_ADDROW 는
+            //   2026-08 에 만들어 두고 ★호출부가 0개★ 였다 — 추가 버튼 하나에만 걸려 있었고,
+            //   그게 안 먹히면 그냥 멈췄다. 그래서 5행 표가 3행으로 들어가 두 줄이 표 밖으로
+            //   밀려났다(운영자 화면에서 확인). 이제 버튼이 안 되면 Tab 으로 간다.
+            const lr = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
+            if (lr.ok) {
+              await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: lr.x, y: lr.y });
+              await new Promise(r => setTimeout(r, 250));
+              await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
+              blogLog(`  행 추가 버튼이 없어 마지막 칸에서 Tab 으로 늘립니다`);
+              clicked = true;
+            }
+          }
+          if (!clicked) {
             console.log('[MangoAuto] 표 추가 버튼 없음', st);
             // 덤프를 로그에도 찍는다 — 행이 안 늘어나는 근본 원인을 서버에서 볼 수 없어서,
             // 운영자가 이 줄을 복사해 주면 버튼 이름이 바뀌었는지 바로 안다.
@@ -2806,7 +2847,6 @@ async function insertTables(tabId, frameId, tables) {
                     + (st.dump?.length ? ` · 후보: ${JSON.stringify(st.dump)}` : ' · 후보 0개'), 'warn');
             break;
           }
-          await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
           // ★2026-11-04★ 420ms 한 번만 재고 '안 늘어납니다' 로 끊었다. 에디터가 늦게
           //   그리면 실제로는 늘었는데 멈춘다(v2.7.2 와 같은 '확인이 너무 이르다' 계열).
           //   최대 약 1.6초까지 나눠서 다시 잰다.
