@@ -824,11 +824,32 @@
                                  vis: b.getClientRects().length > 0 })) });
               return;
             }
-            const v = viewportRect(best);
+            // ★2026-11-06 — 버튼을 ★화면 안으로★ 끌어온 뒤 좌표를 잰다.
+            //   🪤 `getClientRects().length > 0` 은 '화면 밖으로 스크롤된' 요소도 참이다.
+            //      그래서 보이지도 않는 버튼의 좌표를 넘겨주고 CDP 가 허공을 클릭했다.
+            //      게다가 좌표계가 둘이다 — scrollIntoView 는 ★편집 iframe 안쪽★ 을 기준으로
+            //      가운데를 맞추는데, CDP 클릭은 ★최상위 창★ 좌표를 쓴다. iframe 이 창보다
+            //      길면 안쪽에선 가운데인 버튼이 바깥에선 창 밖이다.
+            //      실제 증상: 같은 글에서 표1 은 3→4행 한 번만 늘고, 아래쪽 표2 는 아예 안 늘었다
+            //      (운영자 화면, 11-06). 아래로 갈수록 어긋나는 게 이 가설과 맞는다.
+            //   → 최상위 창 기준으로 재서 밖이면 최상위 창을 스크롤하고 다시 잰다.
+            best.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(140);
+            let topW = 0, topH = 0;
+            try { topW = window.top.innerWidth; topH = window.top.innerHeight; } catch (_) {}
+            let v = viewportRect(best);
+            let cy = v.y + v.h / 2;
+            if (topH && (cy < 8 || cy > topH - 8)) {
+              try { window.top.scrollBy(0, Math.round(cy - topH / 2)); } catch (_) {}
+              await sleep(160);
+              v = viewportRect(best);
+              cy = v.y + v.h / 2;
+            }
+            const inView = !topH || (cy >= 0 && cy <= topH && v.x >= 0 && (!topW || v.x <= topW));
             const tt = lastTable();
             sendResponse({
-              ok: true, lastIndex: bestIdx,
-              x: Math.round(v.x + v.w / 2), y: Math.round(v.y + v.h / 2),
+              ok: true, lastIndex: bestIdx, inView, topH,
+              x: Math.round(v.x + v.w / 2), y: Math.round(cy),
               rows: tt ? tt.querySelectorAll('tr').length : 0,
               cols: tt && tt.querySelector('tr') ? tt.querySelector('tr').querySelectorAll('td,th').length : 0,
             });

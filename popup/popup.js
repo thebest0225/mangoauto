@@ -2807,11 +2807,42 @@ async function insertTables(tabId, frameId, tables) {
         if (!sz.ok) return null;
         return axis === 'row' ? sz.rows : sz.cols;
       };
+      // ★2026-11-06 전면 수정 — 길을 두 개 두고, ★늘었는지로★ 판정한다★
+      //   🪤 전에는 '추가 버튼을 못 찾았을 때' 만 Tab 으로 넘어갔다. 그런데 실제 실패는
+      //      ★버튼은 찾아서 눌렀는데 표가 안 늘어나는★ 모양이었다(운영자 화면 11-06:
+      //      표1 은 3→4행 한 번만, 표2 는 아예 0). 그래서 폴백이 한 번도 안 탔다.
+      //   → 판정 기준을 '버튼을 찾았나' 에서 ★'크기가 늘었나'★ 로 바꾼다.
+      //      한 번 늘릴 때마다 ① 추가 버튼 ② 마지막 칸에서 Tab 을 차례로 시도하고,
+      //      둘 다 안 늘면 그때 포기한다.
+      const grew = async (axis, have) => {         // 최대 약 1.6초까지 나눠서 다시 잰다
+        for (let w = 0; w < 4; w++) {              // (에디터가 늦게 그리면 늘었는데도 멈췄다)
+          await new Promise(r => setTimeout(r, 400));
+          const n = await tableSize(axis);
+          if (n != null && n > have) return n;
+        }
+        return null;
+      };
+      // 길 ② — 마지막 칸에 커서를 두고 Tab. 좌표를 재기 전에 그 칸을 화면 가운데로
+      //   끌어오므로(NAVER_TABLE_ADDROW) 추가 버튼보다 좌표가 어긋날 일이 적다.
+      //   ⚠️ 2026-08 에 만들어 두고 ★호출부가 0개★ 였다. 만든 것과 연결한 것은 다르다.
+      const tabAddRow = async () => {
+        const lr = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
+        if (!lr.ok) return false;
+        await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: lr.x, y: lr.y });
+        await new Promise(r => setTimeout(r, 300));
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'End' });   // 칸 끝으로
+        await new Promise(r => setTimeout(r, 120));
+        await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
+        return true;
+      };
+
       for (const [axis, need, label] of [['col', cols, '열'], ['row', rows, '행']]) {
         for (let guard = 0; guard < 12; guard++) {
           const have = await tableSize(axis);
           if (have == null) { blogLog(`  표 크기를 못 쟀습니다`, 'warn'); break; }
           if (have >= need) break;
+
+          // ── 길 ① 추가 버튼
           // ⚠️ 추가 버튼을 한 번 누르면 표 컨트롤이 꺼져 다음 버튼을 못 찾는다
           //    (3행 → 4행 에서 멈췄다). 매번 셀을 다시 클릭해 컨트롤을 켠다.
           const fc = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
@@ -2820,47 +2851,38 @@ async function insertTables(tabId, frameId, tables) {
             await new Promise(r => setTimeout(r, 280));
           }
           const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
-          let clicked = false;
+          let now = null, how = '';
           if (st.ok) {
-            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
-            clicked = true;
-          } else if (axis === 'row') {
-            // ★2026-11-06 — 두 번째 길★
-            //   행은 '마지막 칸에 커서를 두고 Tab' 으로도 늘어난다. NAVER_TABLE_ADDROW 는
-            //   2026-08 에 만들어 두고 ★호출부가 0개★ 였다 — 추가 버튼 하나에만 걸려 있었고,
-            //   그게 안 먹히면 그냥 멈췄다. 그래서 5행 표가 3행으로 들어가 두 줄이 표 밖으로
-            //   밀려났다(운영자 화면에서 확인). 이제 버튼이 안 되면 Tab 으로 간다.
-            const lr = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADDROW' });
-            if (lr.ok) {
-              await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: lr.x, y: lr.y });
-              await new Promise(r => setTimeout(r, 250));
-              await sendBg({ type: 'NAVER_CDP_KEY', tabId, key: 'Tab' });
-              blogLog(`  행 추가 버튼이 없어 마지막 칸에서 Tab 으로 늘립니다`);
-              clicked = true;
+            // inView 가 false 면 버튼이 최상위 창 밖이라 클릭이 허공으로 간다.
+            // 좌표를 믿을 수 없으니 누르지 않고 바로 길 ② 로 간다.
+            if (st.inView === false) {
+              blogLog(`  ${label} 추가 버튼이 화면 밖입니다 (y=${st.y}, 창 높이 ${st.topH}) — 다른 길로 갑니다`, 'warn');
+            } else {
+              await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
+              now = await grew(axis, have);
+              if (now != null) how = '버튼';
             }
-          }
-          if (!clicked) {
+          } else {
             console.log('[MangoAuto] 표 추가 버튼 없음', st);
             // 덤프를 로그에도 찍는다 — 행이 안 늘어나는 근본 원인을 서버에서 볼 수 없어서,
             // 운영자가 이 줄을 복사해 주면 버튼 이름이 바뀌었는지 바로 안다.
             blogLog(`  ${label} 추가 버튼을 못 찾음 — ${st.error}`
                     + (st.dump?.length ? ` · 후보: ${JSON.stringify(st.dump)}` : ' · 후보 0개'), 'warn');
+          }
+
+          // ── 길 ② 마지막 칸에서 Tab (행만)
+          if (now == null && axis === 'row' && await tabAddRow()) {
+            now = await grew(axis, have);
+            if (now != null) how = 'Tab';
+          }
+
+          if (now == null) {
+            blogLog(`  ${label}이 ${have}에서 안 늘어납니다 (${need}행 필요`
+                    + `${st.ok ? ` · 버튼 "${st.lastIndex}${label} 다음에" 눌렀고 화면안=${st.inView}` : ' · 버튼 없음'}`
+                    + `${axis === 'row' ? ' · Tab 도 실패' : ''}) — 남은 줄은 표 아래로 보냅니다`, 'warn');
             break;
           }
-          // ★2026-11-04★ 420ms 한 번만 재고 '안 늘어납니다' 로 끊었다. 에디터가 늦게
-          //   그리면 실제로는 늘었는데 멈춘다(v2.7.2 와 같은 '확인이 너무 이르다' 계열).
-          //   최대 약 1.6초까지 나눠서 다시 잰다.
-          let now = null;
-          for (let w = 0; w < 4; w++) {
-            await new Promise(r => setTimeout(r, 400));
-            now = await tableSize(axis);
-            if (now != null && now > have) break;
-          }
-          if (now == null || now <= have) {
-            blogLog(`  ${label}이 ${have}에서 안 늘어납니다 — 남은 줄은 표 아래로 보냅니다`, 'warn');
-            break;
-          }
-          blogLog(`  ${label} ${have} → ${now}`);
+          blogLog(`  ${label} ${have} → ${now} (${how})`);
         }
       }
 
