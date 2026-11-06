@@ -2,3 +2,6 @@ node_modules/
 .DS_Store
 *.log
 .claude/
+
+# 작업 중 만든 백업 — git 이력이 곧 백업이다
+*.bak-*
