@@ -814,19 +814,23 @@
             //   대신 표 안에 커서가 있으면 se-cell-add-button 이 나타난다 —
             //   "2행 다음에 행 추가" / "2열 다음에 열 추가" 처럼 글자에 인덱스가 들어 있다.
             //   마지막 인덱스 버튼을 눌러 행·열을 늘린다.
-            // ★2026-11-07 — 버튼을 ★지금 늘리려는 표의 것만★ 고른다★
-            //   🪤 운영자 화면(11-07): 같은 글에서 표1 은 3→5 행으로 늘었는데 표2 는 3행 그대로.
-            //      원인은 여기였다. 후보를 ★문서 전체★ 에서 찾아 ★인덱스가 가장 큰 것★ 을 눌렀다.
-            //      표1 이 5행이 되고 나면 "5행 다음에 행 추가"(표1 것)가 표2 의 "3행 다음에"(3)를
-            //      이긴다 → 표2 를 늘리려는 클릭이 ★표1 자리로★ 갔다.
-            //      게다가 hover 로 나타나는 컨트롤은 보통 display:none 이 아니라 opacity:0 이라
-            //      getClientRects() 로는 걸러지지 않는다. 꺼진 표의 버튼까지 후보가 됐고,
-            //      CDP 는 투명한 버튼을 눌러 아무 일도 안 일어났다
-            //      — ★표1 도 5행에서 더 안 늘어난 것★ 이 '실제로 눌린 게 없다' 는 증거다.
-            //      그래서 '첫 표만 되고 나머지는 전부 실패' 라는 모양이 나왔다.
-            //   → ① 진짜 보이는지(크기·visibility·opacity)를 보고
-            //      ② 후보 중 ★이 표에 가장 가까운 것★ 만 쓴다(다른 표가 더 가까우면 버린다).
-            const vis = (el) => {
+            // ★2026-11-07 — 버튼을 ★지금 늘리려는 표의 것만★ 고른다 (v2.8.2 로 두 번 고쳤다)★
+            //   왜: 같은 글에서 표1 은 3→5 행으로 늘고 표2 는 3행 그대로였다. 후보를 ★문서 전체★
+            //   에서 찾아 ★인덱스가 가장 큰 것★ 을 눌렀기 때문이다. 표1 이 5행이 되면
+            //   "5행 다음에 행 추가"(표1 것)가 표2 의 "3행 다음에"(3)를 이긴다.
+            //
+            //   🪤 ★v2.8.1 에서 그걸 고치려다 표1 까지 망가뜨렸다★ (운영자 화면 11-07:
+            //      전에 5행까지 늘던 표1 이 3행에서 멈췄다). 내가 넣은 두 가지가 범인이었다 —
+            //      ① vis() 를 opacity·visibility 까지 보게 ★엄격하게★ 바꿨다. 그런데 hover 로
+            //         나타나는 컨트롤은 opacity:0 인 채로도 눌린다. 보이지 않는다고 거른 버튼이
+            //         ★원래 잘 눌리던 그 버튼★ 이었다.
+            //      ② '가까운 것만' 을 ★글자를 맞춰 보기 전에★ 걸렀다. 근처에 열 추가 버튼만
+            //         남으면 pool 은 비어 있지 않으니 폴백도 안 타고, 행 버튼은 영영 못 찾는다.
+            //   → 순서를 뒤집는다. ★글자로 먼저 고르고★, 그중 이 표에 가까운 게 있으면 그걸 쓰고
+            //     없으면 ★전부를 쓴다★(= 최악이어도 v2.8.0 과 같게 동작한다).
+            //     가시성은 옛 기준(getClientRects)으로 돌리고, 엄격 기준은 ★진단용으로만★ 센다.
+            const vis = (el) => el.getClientRects().length > 0;
+            const reallyVisible = (el) => {            // 진단 전용 — 거르는 데 쓰지 말 것
               const r = el.getBoundingClientRect();
               if (r.width < 1 || r.height < 1) return false;
               const st = getComputedStyle(el);
@@ -846,31 +850,34 @@
             const target = lastTable();
             const trect = target ? target.getBoundingClientRect() : null;
             const others = target ? allTables().filter((o) => o !== target) : [];
-            const mine = (el) => {
-              if (!trect) return true;
-              const d = distTo(trect, el);
-              if (d > 120) return false;                       // 표에서 너무 멀면 남의 것
-              return others.every((o) => distTo(o.getBoundingClientRect(), el) > d);
-            };
-            const cands = Array.from(
+            const all = Array.from(
               document.querySelectorAll('button.se-cell-add-button, button[class*="cell-add"]')
             ).filter(vis);
-            let pool = cands.filter(mine);
-            const scoped = pool.length > 0;
-            if (!scoped) pool = cands;   // 가려내지 못하면 옛 방식으로라도 시도한다
-            let best = null, bestIdx = -1;
-            for (const b of pool) {
+            // ① 글자가 맞는 것만 추린다
+            const hits = [];
+            for (const b of all) {
               const m = re.exec((b.textContent || '').trim());
               if (!m) continue;
-              const i = +m[1];
-              if (i > bestIdx) { bestIdx = i; best = b; }
+              const d = trect ? distTo(trect, b) : 0;
+              const dOther = others.length
+                ? Math.min(...others.map((o) => distTo(o.getBoundingClientRect(), b)))
+                : Infinity;
+              hits.push({ el: b, idx: +m[1], d, dOther });
             }
+            // ② 그중 이 표 것이 있으면 그걸로, 없으면 전부로 (폴백이 항상 살아 있어야 한다)
+            let pool = hits.filter((h) => h.d <= 120 && h.d < h.dOther);
+            const scoped = pool.length > 0;
+            if (!scoped) pool = hits;
+            let best = null, bestIdx = -1;
+            for (const h of pool) if (h.idx > bestIdx) { bestIdx = h.idx; best = h.el; }
+            const dim = all.filter((b) => !reallyVisible(b)).length;   // opacity:0 등
             if (!best) {
               sendResponse({ ok: false, error: `${axis} 추가 버튼 없음 (표 안에 커서가 있어야 나타납니다)`,
-                cands: cands.length, pool: pool.length, scoped, tables: allTables().length,
-                dump: Array.from(document.querySelectorAll('button[class*="cell-add"]')).slice(0, 6)
-                  .map((b) => ({ cls: String(b.className || '').slice(0, 40), txt: (b.textContent || '').trim().slice(0, 20),
-                                 vis: vis(b), d: trect ? Math.round(distTo(trect, b)) : -1 })) });
+                cands: all.length, hits: hits.length, pool: pool.length, scoped, dim,
+                tables: allTables().length,
+                dump: all.slice(0, 8).map((b) => ({
+                  txt: (b.textContent || '').trim().slice(0, 20),
+                  d: trect ? Math.round(distTo(trect, b)) : -1, dim: !reallyVisible(b) })) });
               return;
             }
             // ★2026-11-06 — 버튼을 ★화면 안으로★ 끌어온 뒤 좌표를 잰다.
@@ -898,7 +905,8 @@
             const tt = lastTable();
             sendResponse({
               ok: true, lastIndex: bestIdx, inView, topH,
-              cands: cands.length, pool: pool.length, scoped, tables: allTables().length,
+              cands: all.length, hits: hits.length, pool: pool.length, scoped, dim,
+              tables: allTables().length,
               x: Math.round(v.x + v.w / 2), y: Math.round(cy),
               rows: tt ? tt.querySelectorAll('tr').length : 0,
               cols: tt && tt.querySelector('tr') ? tt.querySelector('tr').querySelectorAll('td,th').length : 0,

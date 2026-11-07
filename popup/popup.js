@@ -2882,7 +2882,8 @@ async function insertTables(tabId, frameId, tables) {
             //   scoped=false 면 이 표의 버튼을 못 가려냈다는 뜻 — 그때는 또 남의 것을 누른 것이다.
             blogLog(`  ${label}이 ${have}에서 안 늘어납니다 (${need}${label} 필요`
                     + `${st.ok ? ` · 버튼 "${st.lastIndex}${label} 다음에" 눌렀고 화면안=${st.inView}`
-                               + ` · 후보 ${st.cands}개 중 이 표 것 ${st.pool}개(가려냄=${st.scoped}) · 표 ${st.tables}개`
+                               + ` · 버튼 ${st.cands}개(글자 맞음 ${st.hits} · 이 표 것 ${st.pool} · 가려냄=${st.scoped}`
+                               + ` · 투명 ${st.dim}) · 표 ${st.tables}개`
                               : ' · 버튼 없음'}`
                     + `${axis === 'row' ? ' · Tab 도 실패' : ''}) — 남은 줄은 표 아래로 보냅니다`, 'warn');
             break;
