@@ -132,6 +132,13 @@
     return inner[inner.length - 1] || all[all.length - 1] || null;
   }
 
+  // 문서 안의 모든 표(가장 안쪽 <table> 기준). 버튼이 '어느 표 것인가' 를 가릴 때 쓴다.
+  function allTables() {
+    const all = Array.from(document.querySelectorAll('table, [class*="se-table"]'))
+      .filter((el) => el.querySelector('tr'));
+    return all.filter((el) => !all.some((o) => o !== el && el.contains(o)));
+  }
+
   // 표 개수 — 래퍼를 세면 표 하나에 3~4 가 잡혀 '삽입됐는지' 판정이 틀어진다
   function tableCount() {
     const all = Array.from(document.querySelectorAll('table, [class*="se-table"]'))
@@ -807,11 +814,52 @@
             //   대신 표 안에 커서가 있으면 se-cell-add-button 이 나타난다 —
             //   "2행 다음에 행 추가" / "2열 다음에 열 추가" 처럼 글자에 인덱스가 들어 있다.
             //   마지막 인덱스 버튼을 눌러 행·열을 늘린다.
-            const vis = (el) => el.getClientRects().length > 0;
+            // ★2026-11-07 — 버튼을 ★지금 늘리려는 표의 것만★ 고른다★
+            //   🪤 운영자 화면(11-07): 같은 글에서 표1 은 3→5 행으로 늘었는데 표2 는 3행 그대로.
+            //      원인은 여기였다. 후보를 ★문서 전체★ 에서 찾아 ★인덱스가 가장 큰 것★ 을 눌렀다.
+            //      표1 이 5행이 되고 나면 "5행 다음에 행 추가"(표1 것)가 표2 의 "3행 다음에"(3)를
+            //      이긴다 → 표2 를 늘리려는 클릭이 ★표1 자리로★ 갔다.
+            //      게다가 hover 로 나타나는 컨트롤은 보통 display:none 이 아니라 opacity:0 이라
+            //      getClientRects() 로는 걸러지지 않는다. 꺼진 표의 버튼까지 후보가 됐고,
+            //      CDP 는 투명한 버튼을 눌러 아무 일도 안 일어났다
+            //      — ★표1 도 5행에서 더 안 늘어난 것★ 이 '실제로 눌린 게 없다' 는 증거다.
+            //      그래서 '첫 표만 되고 나머지는 전부 실패' 라는 모양이 나왔다.
+            //   → ① 진짜 보이는지(크기·visibility·opacity)를 보고
+            //      ② 후보 중 ★이 표에 가장 가까운 것★ 만 쓴다(다른 표가 더 가까우면 버린다).
+            const vis = (el) => {
+              const r = el.getBoundingClientRect();
+              if (r.width < 1 || r.height < 1) return false;
+              const st = getComputedStyle(el);
+              return st.visibility !== 'hidden' && st.display !== 'none'
+                  && parseFloat(st.opacity || '1') > 0.05;
+            };
+            // 점과 사각형 사이 거리 (안에 있으면 0)
+            const distTo = (rect, el) => {
+              const r = el.getBoundingClientRect();
+              const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+              const dx = Math.max(rect.left - cx, 0, cx - rect.right);
+              const dy = Math.max(rect.top - cy, 0, cy - rect.bottom);
+              return Math.hypot(dx, dy);
+            };
             const axis = msg.axis === 'col' ? '열' : '행';
             const re = new RegExp(`(\\d+)${axis} 다음에 ${axis} 추가`);
+            const target = lastTable();
+            const trect = target ? target.getBoundingClientRect() : null;
+            const others = target ? allTables().filter((o) => o !== target) : [];
+            const mine = (el) => {
+              if (!trect) return true;
+              const d = distTo(trect, el);
+              if (d > 120) return false;                       // 표에서 너무 멀면 남의 것
+              return others.every((o) => distTo(o.getBoundingClientRect(), el) > d);
+            };
+            const cands = Array.from(
+              document.querySelectorAll('button.se-cell-add-button, button[class*="cell-add"]')
+            ).filter(vis);
+            let pool = cands.filter(mine);
+            const scoped = pool.length > 0;
+            if (!scoped) pool = cands;   // 가려내지 못하면 옛 방식으로라도 시도한다
             let best = null, bestIdx = -1;
-            for (const b of Array.from(document.querySelectorAll('button.se-cell-add-button, button[class*="cell-add"]')).filter(vis)) {
+            for (const b of pool) {
               const m = re.exec((b.textContent || '').trim());
               if (!m) continue;
               const i = +m[1];
@@ -819,9 +867,10 @@
             }
             if (!best) {
               sendResponse({ ok: false, error: `${axis} 추가 버튼 없음 (표 안에 커서가 있어야 나타납니다)`,
+                cands: cands.length, pool: pool.length, scoped, tables: allTables().length,
                 dump: Array.from(document.querySelectorAll('button[class*="cell-add"]')).slice(0, 6)
                   .map((b) => ({ cls: String(b.className || '').slice(0, 40), txt: (b.textContent || '').trim().slice(0, 20),
-                                 vis: b.getClientRects().length > 0 })) });
+                                 vis: vis(b), d: trect ? Math.round(distTo(trect, b)) : -1 })) });
               return;
             }
             // ★2026-11-06 — 버튼을 ★화면 안으로★ 끌어온 뒤 좌표를 잰다.
@@ -849,6 +898,7 @@
             const tt = lastTable();
             sendResponse({
               ok: true, lastIndex: bestIdx, inView, topH,
+              cands: cands.length, pool: pool.length, scoped, tables: allTables().length,
               x: Math.round(v.x + v.w / 2), y: Math.round(cy),
               rows: tt ? tt.querySelectorAll('tr').length : 0,
               cols: tt && tt.querySelector('tr') ? tt.querySelector('tr').querySelectorAll('td,th').length : 0,
