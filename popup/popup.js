@@ -2850,19 +2850,27 @@ async function insertTables(tabId, frameId, tables) {
             await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: fc.x, y: fc.y });
             await new Promise(r => setTimeout(r, 280));
           }
-          const st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis });
-          let now = null, how = '';
-          if (st.ok) {
-            // inView 가 false 면 버튼이 최상위 창 밖이라 클릭이 허공으로 간다.
-            // 좌표를 믿을 수 없으니 누르지 않고 바로 길 ② 로 간다.
-            if (st.inView === false) {
-              blogLog(`  ${label} 추가 버튼이 화면 밖입니다 (y=${st.y}, 창 높이 ${st.topH}) — 다른 길로 갑니다`, 'warn');
-            } else {
-              await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
-              now = await grew(axis, have);
-              if (now != null) how = '버튼';
+          // ★2026-11-07 — 후보를 ★차례로★ 눌러 본다 (한 버튼에 전부 걸지 않는다)★
+          //   어느 인덱스를 눌러도 행은 하나 는다. 그러니 맞히려 애쓸 게 아니라
+          //   늘어날 때까지 다음 후보로 넘어가면 된다. 최대 4개까지.
+          let st = null, now = null, how = '';
+          for (let k = 0; k < 4; k++) {
+            st = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_ADD', axis, skip: k });
+            if (!st.ok) break;
+            // inView 가 false 면 버튼이 최상위 창 밖이라 클릭이 허공으로 간다 — 다음 후보로.
+            if (st.inView === false) continue;
+            await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: st.x, y: st.y });
+            now = await grew(axis, have);
+            if (now != null) { how = `버튼 ${k + 1}번째("${st.lastIndex}${label} 다음에")`; break; }
+            if (k + 1 >= (st.total || 1)) break;         // 후보를 다 썼다
+            // 버튼을 누르면 표 컨트롤이 꺼진다. 다음 후보를 보려면 셀을 다시 클릭해 켠다.
+            const again = await sendFrame(tabId, frameId, { type: 'NAVER_TABLE_FIRST_CELL' });
+            if (again.ok) {
+              await sendBg({ type: 'DEBUGGER_TRUSTED_CLICK', tabId, x: again.x, y: again.y });
+              await new Promise(r => setTimeout(r, 280));
             }
-          } else {
+          }
+          if (!st.ok) {
             console.log('[MangoAuto] 표 추가 버튼 없음', st);
             // 덤프를 로그에도 찍는다 — 행이 안 늘어나는 근본 원인을 서버에서 볼 수 없어서,
             // 운영자가 이 줄을 복사해 주면 버튼 이름이 바뀌었는지 바로 안다.
@@ -2877,19 +2885,18 @@ async function insertTables(tabId, frameId, tables) {
           }
 
           if (now == null) {
-            // ★2026-11-07★ 어느 표의 버튼을 눌렀는지까지 남긴다. '첫 표만 되고 나머지는 실패' 의
-            //   범인이 ★문서 전체에서 인덱스 최대 버튼★ 을 고른 것이었다(naver.js 주석 참고).
-            //   scoped=false 면 이 표의 버튼을 못 가려냈다는 뜻 — 그때는 또 남의 것을 누른 것이다.
+            // ★2026-11-07★ 후보를 전부 눌러보고도 안 늘었을 때만 여기 온다.
+            //   '투명' 이 0 이 아니면 opacity:0 버튼이 섞인 것이고, '글자 맞음' 이 0 이면
+            //   버튼 이름이 바뀐 것이다. 둘 다 아니면 클릭 좌표 문제다.
             blogLog(`  ${label}이 ${have}에서 안 늘어납니다 (${need}${label} 필요`
-                    + `${st.ok ? ` · 버튼 "${st.lastIndex}${label} 다음에" 눌렀고 화면안=${st.inView}`
-                               + ` · 버튼 ${st.cands}개(글자 맞음 ${st.hits} · 이 표 것 ${st.pool} · 가려냄=${st.scoped}`
-                               + ` · 투명 ${st.dim}) · 표 ${st.tables}개`
-                              : ' · 버튼 없음'}`
+                    + ` · 후보 ${st.total ?? '?'}개를 차례로 눌렀고 전부 실패`
+                    + ` · 버튼 ${st.cands ?? '?'}개(글자 맞음 ${st.hits ?? '?'} · 투명 ${st.dim ?? '?'})`
+                    + ` · 표 ${st.tables ?? '?'}개 · 마지막 화면안=${st.inView}`
                     + `${axis === 'row' ? ' · Tab 도 실패' : ''}) — 남은 줄은 표 아래로 보냅니다`, 'warn');
             break;
           }
           blogLog(`  ${label} ${have} → ${now} (${how}`
-                  + (st.ok && st.scoped === false ? ' · ⚠️ 이 표의 버튼을 못 가려냄' : '') + ')');
+                  + (st && st.mine === false ? ' · ⚠️ 이 표 것이 아닌 버튼이었습니다' : '') + ')');
         }
       }
 

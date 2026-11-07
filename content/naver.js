@@ -864,22 +864,36 @@
                 : Infinity;
               hits.push({ el: b, idx: +m[1], d, dOther });
             }
-            // ② 그중 이 표 것이 있으면 그걸로, 없으면 전부로 (폴백이 항상 살아 있어야 한다)
-            let pool = hits.filter((h) => h.d <= 120 && h.d < h.dOther);
-            const scoped = pool.length > 0;
-            if (!scoped) pool = hits;
-            let best = null, bestIdx = -1;
-            for (const h of pool) if (h.idx > bestIdx) { bestIdx = h.idx; best = h.el; }
+            // ② ★하나를 고르지 않는다 — 순서만 매기고, 호출부가 차례로 눌러 본다★
+            //   🪤 2026-11-07 — 세 번 고쳤는데 세 번 다 '어느 버튼이 맞나' 를 맞히려 했다.
+            //      v2.8.0 은 표1 만 되고, v2.8.1 은 둘 다 안 되고, v2.8.2 는 표2 만 됐다.
+            //      ★되는 표가 판마다 바뀐다★ = 한 버튼에 전부를 건 설계가 틀린 것이다.
+            //      어느 인덱스를 눌러도 표는 늘어난다("1행 다음에" 도 행이 하나 는다).
+            //   → 후보를 ★이 표 것 먼저, 인덱스 큰 것 먼저★ 로 줄 세우고 `skip` 으로 하나씩
+            //     꺼내 준다. 호출부는 늘어날 때까지 다음 후보로 넘어간다. 맞힐 필요가 없어진다.
+            let ordered = hits
+              .map((h) => ({ ...h, mine: h.d <= 120 && h.d < h.dOther }))
+              .sort((a, b) => (b.mine - a.mine) || (b.idx - a.idx) || (a.d - b.d));
+            // ⚠️ 이 표 것이 하나라도 있으면 ★남의 표 버튼은 아예 후보에서 뺀다.★
+            //    안 그러면 후보가 떨어졌을 때 이미 다 채운 윗 표에 빈 행이 생긴다
+            //    (늘어난 건 윗 표인데 grew() 는 이 표를 재니 실패로 보고 다음 후보로 넘어간다
+            //     — 빈 행만 쌓인다). 가려내지 못했을 때만 전부를 쓴다.
+            if (ordered.some((h) => h.mine)) ordered = ordered.filter((h) => h.mine);
             const dim = all.filter((b) => !reallyVisible(b)).length;   // opacity:0 등
-            if (!best) {
-              sendResponse({ ok: false, error: `${axis} 추가 버튼 없음 (표 안에 커서가 있어야 나타납니다)`,
-                cands: all.length, hits: hits.length, pool: pool.length, scoped, dim,
+            const skip = Math.max(0, msg.skip | 0);
+            const chosen = ordered[skip];
+            if (!chosen) {
+              sendResponse({ ok: false,
+                error: skip ? `${axis} 추가 버튼 후보를 다 눌러봤습니다 (${ordered.length}개)`
+                            : `${axis} 추가 버튼 없음 (표 안에 커서가 있어야 나타납니다)`,
+                cands: all.length, hits: hits.length, total: ordered.length, skip, dim,
                 tables: allTables().length,
                 dump: all.slice(0, 8).map((b) => ({
                   txt: (b.textContent || '').trim().slice(0, 20),
                   d: trect ? Math.round(distTo(trect, b)) : -1, dim: !reallyVisible(b) })) });
               return;
             }
+            const best = chosen.el, bestIdx = chosen.idx;
             // ★2026-11-06 — 버튼을 ★화면 안으로★ 끌어온 뒤 좌표를 잰다.
             //   🪤 `getClientRects().length > 0` 은 '화면 밖으로 스크롤된' 요소도 참이다.
             //      그래서 보이지도 않는 버튼의 좌표를 넘겨주고 CDP 가 허공을 클릭했다.
@@ -905,8 +919,8 @@
             const tt = lastTable();
             sendResponse({
               ok: true, lastIndex: bestIdx, inView, topH,
-              cands: all.length, hits: hits.length, pool: pool.length, scoped, dim,
-              tables: allTables().length,
+              cands: all.length, hits: hits.length, total: ordered.length, skip,
+              mine: chosen.mine, dim, tables: allTables().length,
               x: Math.round(v.x + v.w / 2), y: Math.round(cy),
               rows: tt ? tt.querySelectorAll('tr').length : 0,
               cols: tt && tt.querySelector('tr') ? tt.querySelector('tr').querySelectorAll('td,th').length : 0,
